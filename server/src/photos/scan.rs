@@ -106,6 +106,13 @@ pub async fn scan_and_register(
             Err(_) => continue,
         };
 
+        // Candidates registered in THIS directory + the `.json` sidecars beside
+        // them, so Google Takeout metadata (capture date, GPS, album) can be
+        // paired below. A streaming walk can't look ahead to a sidecar that
+        // sorts after its media file, so we resolve once the dir is fully read.
+        let dir_start = candidates.len();
+        let mut json_names: Vec<String> = Vec::new();
+
         while let Ok(Some(entry)) = entries.next_entry().await {
             let name = entry.file_name().to_string_lossy().to_string();
             if name.starts_with('.') {
@@ -115,6 +122,8 @@ pub async fn scan_and_register(
             if let Ok(ft) = entry.file_type().await {
                 if ft.is_dir() {
                     queue.push(entry.path());
+                } else if ft.is_file() && name.to_lowercase().ends_with(".json") {
+                    json_names.push(name);
                 } else if ft.is_file() && is_media_file(&name) {
                     let abs_path = entry.path();
                     let rel_path = abs_path
@@ -156,8 +165,20 @@ pub async fn scan_and_register(
                         media_type,
                         size,
                         modified,
+                        sidecar_abs: None,
+                        album_name: None,
                     });
                 }
+            }
+        }
+
+        // Pair each of this dir's media files with its Takeout sidecar + album.
+        if !json_names.is_empty() {
+            let ctx = crate::import::sidecar::TakeoutDirContext::new(json_names, &dir);
+            let album = ctx.album_name().map(|s| s.to_string());
+            for cand in &mut candidates[dir_start..] {
+                cand.sidecar_abs = ctx.resolve_sidecar(&cand.name).map(|j| dir.join(j));
+                cand.album_name = album.clone();
             }
         }
     }

@@ -11,6 +11,9 @@
 //! Both endpoints are admin-only. The scan path is validated against path
 //! traversal via `sanitize::validate_relative_path()`.
 
+use std::collections::HashMap;
+use std::path::PathBuf;
+
 use axum::extract::{Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
@@ -27,7 +30,7 @@ use crate::photos::utils::compute_photo_hash_streaming;
 use crate::setup::admin::require_admin;
 use crate::state::AppState;
 
-use super::google_photos;
+use super::{google_photos, sidecar};
 
 // ── Scan Google Photos Takeout directory ─────────────────────────────────────
 
@@ -202,8 +205,12 @@ pub async fn import_takeout(
     // Lock-free read via ArcSwap.
     let storage_root = (**state.storage_root.load()).clone();
 
-    // Collect all files
-    let mut media_files: Vec<std::path::PathBuf> = Vec::new();
+    // Collect all media files, plus a per-directory index of `.json` sidecars so
+    // each file resolves its Takeout metadata via the shared resolver
+    // (crate::import::sidecar) — the single source of truth also used by the
+    // filesystem-scan import path.
+    let mut media_files: Vec<PathBuf> = Vec::new();
+    let mut dir_json: HashMap<PathBuf, Vec<String>> = HashMap::new();
     let mut queue = vec![canonical.clone()];
 
     while let Some(dir) = queue.pop() {
@@ -220,12 +227,23 @@ pub async fn import_takeout(
             if let Ok(ft) = entry.file_type().await {
                 if ft.is_dir() {
                     queue.push(entry.path());
+                } else if ft.is_file() && name.to_lowercase().ends_with(".json") {
+                    dir_json.entry(dir.clone()).or_default().push(name);
                 } else if ft.is_file() && is_media_file(&name) {
                     media_files.push(entry.path());
                 }
             }
         }
     }
+
+    // Build the per-directory Takeout contexts once, up front.
+    let contexts: HashMap<PathBuf, sidecar::TakeoutDirContext> = dir_json
+        .into_iter()
+        .map(|(dir, names)| {
+            let ctx = sidecar::TakeoutDirContext::new(names, &dir);
+            (dir, ctx)
+        })
+        .collect();
 
     let mut photos_imported = 0usize;
     let mut metadata_imported = 0usize;
@@ -237,6 +255,15 @@ pub async fn import_takeout(
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
+
+        // Resolve the Takeout sidecar once (handles supplemental/legacy/truncated
+        // /duplicate-counter/-edited naming) and reuse it for both the taken_at
+        // pre-read and the metadata insert below.
+        let sidecar_path: Option<PathBuf> = media_path
+            .parent()
+            .and_then(|d| contexts.get(d))
+            .and_then(|ctx| ctx.resolve_sidecar(&filename))
+            .map(|j| media_path.with_file_name(j));
 
         let mime = crate::media::mime_from_extension(&filename).to_string();
         let media_type = if mime.starts_with("video/") {
@@ -304,18 +331,25 @@ pub async fn import_takeout(
             let mut latitude: Option<f64> = None;
             let mut longitude: Option<f64> = None;
 
-            // Check for sidecar and extract taken_at / geo if present
-            let supplemental_path =
-                media_path.with_file_name(format!("{filename}.supplemental-metadata.json"));
-            if let Ok(sidecar_bytes) = tokio::fs::read(&supplemental_path).await {
-                if let Ok(gp) = google_photos::parse_sidecar(&sidecar_bytes) {
-                    let record =
-                        google_photos::normalise(&gp, String::new(), String::new(), None, None);
-                    if record.taken_at.is_some() {
-                        taken_at = record.taken_at.clone();
+            // Check for sidecar and extract taken_at / geo if present.
+            if let Some(ref sp) = sidecar_path {
+                if let Ok(sidecar_bytes) = tokio::fs::read(sp).await {
+                    if let Ok(gp) = google_photos::parse_sidecar(&sidecar_bytes) {
+                        if sidecar::is_photo_sidecar(&gp) {
+                            let record = google_photos::normalise(
+                                &gp,
+                                String::new(),
+                                String::new(),
+                                None,
+                                None,
+                            );
+                            if record.taken_at.is_some() {
+                                taken_at = record.taken_at.clone();
+                            }
+                            latitude = record.latitude;
+                            longitude = record.longitude;
+                        }
                     }
-                    latitude = record.latitude;
-                    longitude = record.longitude;
                 }
             }
 
@@ -381,7 +415,7 @@ pub async fn import_takeout(
         // the parent folder name. Runs for both freshly-imported and
         // already-existing (deduped) photos so a re-import backfills albums.
         // Idempotent via the (photo_id, album_name) primary key.
-        if let Some(album_name) = derive_takeout_album(media_path) {
+        if let Some(album_name) = media_path.parent().and_then(sidecar::derive_album_from_dir) {
             let now = Utc::now().to_rfc3339();
             match sqlx::query(
                 "INSERT OR IGNORE INTO photo_source_albums \
@@ -409,31 +443,29 @@ pub async fn import_takeout(
             }
         }
 
-        // Look for Google Photos sidecar: filename.supplemental-metadata.json
-        let supplemental_path =
-            media_path.with_file_name(format!("{filename}.supplemental-metadata.json"));
+        // Store the paired Google Photos sidecar's metadata, if any.
+        if let Some(ref sp) = sidecar_path {
+            if let Ok(sidecar_bytes) = tokio::fs::read(sp).await {
+                match google_photos::parse_sidecar(&sidecar_bytes) {
+                    Ok(gp_meta) => {
+                        let meta_id = Uuid::new_v4().to_string();
+                        let record = google_photos::normalise(
+                            &gp_meta,
+                            meta_id.clone(),
+                            auth.user_id.clone(),
+                            Some(photo_id.clone()),
+                            None,
+                        );
 
-        if let Ok(sidecar_bytes) = tokio::fs::read(&supplemental_path).await {
-            match google_photos::parse_sidecar(&sidecar_bytes) {
-                Ok(gp_meta) => {
-                    let meta_id = Uuid::new_v4().to_string();
-                    let record = google_photos::normalise(
-                        &gp_meta,
-                        meta_id.clone(),
-                        auth.user_id.clone(),
-                        Some(photo_id.clone()),
-                        None,
-                    );
+                        let storage_path = blob_storage::write_metadata(
+                            &storage_root,
+                            &auth.user_id,
+                            &meta_id,
+                            &sidecar_bytes,
+                        )
+                        .await?;
 
-                    let storage_path = blob_storage::write_metadata(
-                        &storage_root,
-                        &auth.user_id,
-                        &meta_id,
-                        &sidecar_bytes,
-                    )
-                    .await?;
-
-                    let insert_result = sqlx::query(
+                        let insert_result = sqlx::query(
                         "INSERT INTO photo_metadata \
                          (id, user_id, photo_id, blob_id, source, title, description, taken_at, \
                           created_at_src, latitude, longitude, altitude, image_views, original_url, \
@@ -459,15 +491,17 @@ pub async fn import_takeout(
                     .execute(&state.pool)
                     .await;
 
-                    match insert_result {
-                        Ok(_) => metadata_imported += 1,
-                        Err(e) => {
-                            errors.push(format!("Metadata DB insert failed for {filename}: {e}"));
+                        match insert_result {
+                            Ok(_) => metadata_imported += 1,
+                            Err(e) => {
+                                errors
+                                    .push(format!("Metadata DB insert failed for {filename}: {e}"));
+                            }
                         }
                     }
-                }
-                Err(e) => {
-                    errors.push(format!("Failed to parse sidecar for {filename}: {e}"));
+                    Err(e) => {
+                        errors.push(format!("Failed to parse sidecar for {filename}: {e}"));
+                    }
                 }
             }
         }
@@ -558,42 +592,9 @@ pub async fn list_source_albums(
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-
-/// Derive the Takeout album name from a media file's immediate parent folder.
-///
-/// Google Takeout puts each photo under its album folder. This mirrors the
-/// web allowlist ([`web/src/utils/takeoutAlbums.ts`]): it skips Google's
-/// non-album "Photos from YYYY" date folders and the `Takeout` / `Google Photos`
-/// container folders. Returns `None` when the parent is a date/container folder
-/// (i.e. the photo has no meaningful album membership).
-fn derive_takeout_album(media_path: &std::path::Path) -> Option<String> {
-    let folder = media_path
-        .parent()?
-        .file_name()?
-        .to_string_lossy()
-        .to_string();
-    if is_non_album_folder(&folder) {
-        None
-    } else {
-        Some(folder)
-    }
-}
-
-/// Matches Google's non-album container/date folders (case-insensitive, mirrors
-/// `DATE_FOLDER_RE` + `NON_ALBUM_FOLDERS` in takeoutAlbums.ts).
-fn is_non_album_folder(folder: &str) -> bool {
-    let lower = folder.trim().to_lowercase();
-    if lower.is_empty() {
-        return true;
-    }
-    // "Photos from 2023", "Photos from 1998", …
-    if let Some(rest) = lower.strip_prefix("photos from ") {
-        if rest.len() >= 4 && rest.as_bytes()[..4].iter().all(|b| b.is_ascii_digit()) {
-            return true;
-        }
-    }
-    matches!(lower.as_str(), "takeout" | "google photos" | "google fotos")
-}
+//
+// Album-name derivation and the definitive per-file sidecar resolver live in
+// [`crate::import::sidecar`], shared with the filesystem-scan import path.
 
 /// Heuristic: is this filename a Google Photos sidecar JSON?
 /// Google Takeout uses patterns like:
@@ -615,58 +616,14 @@ fn is_google_photos_json(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     #[test]
-    fn album_folder_becomes_album_name() {
-        assert_eq!(
-            derive_takeout_album(Path::new("/t/Takeout/Google Photos/Summer 2023/IMG_1.jpg")),
-            Some("Summer 2023".to_string())
-        );
-        assert_eq!(
-            derive_takeout_album(Path::new("/t/Google Photos/Trip to Rome/a.jpg")),
-            Some("Trip to Rome".to_string())
-        );
-    }
-
-    #[test]
-    fn date_folders_are_not_albums() {
-        assert_eq!(
-            derive_takeout_album(Path::new("/t/Google Photos/Photos from 2023/IMG_2.jpg")),
-            None
-        );
-        assert_eq!(
-            derive_takeout_album(Path::new("/t/Google Photos/Photos from 1998/x.png")),
-            None
-        );
-    }
-
-    #[test]
-    fn container_folders_are_not_albums() {
-        // Directly under the container folders → no album.
-        assert_eq!(
-            derive_takeout_album(Path::new("/t/Takeout/loose.jpg")),
-            None
-        );
-        assert_eq!(
-            derive_takeout_album(Path::new("/t/Google Photos/loose.jpg")),
-            None
-        );
-        // Localised container name (Google Fotos).
-        assert_eq!(
-            derive_takeout_album(Path::new("/t/Google Fotos/loose.jpg")),
-            None
-        );
-    }
-
-    #[test]
-    fn non_album_predicate_is_case_insensitive() {
-        assert!(is_non_album_folder("TAKEOUT"));
-        assert!(is_non_album_folder("Google Photos"));
-        assert!(is_non_album_folder("photos from 2020"));
-        assert!(is_non_album_folder(""));
-        assert!(!is_non_album_folder("Vacation"));
-        // "Photos from Grandma" is a real album — only YYYY date folders skip.
-        assert!(!is_non_album_folder("Photos from Grandma"));
+    fn google_photos_json_recognises_sidecar_names() {
+        assert!(is_google_photos_json(
+            "IMG_1.jpg.supplemental-metadata.json"
+        ));
+        assert!(is_google_photos_json("IMG_1.jpg.json"));
+        assert!(!is_google_photos_json("metadata.json"));
+        assert!(!is_google_photos_json("notes.txt"));
     }
 }

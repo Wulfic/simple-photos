@@ -41,6 +41,9 @@ export const useAuthStore = create<AuthState>((set) => ({
     localStorage.removeItem("sp_access_token");
     localStorage.removeItem("sp_refresh_token");
     localStorage.removeItem("sp_username");
+    // Drop the persisted smart-album count summary (see usePhotoSummary) so the
+    // next account on this browser never flashes the previous user's counts.
+    localStorage.removeItem("sp_photo_summary_v1");
     // Drop the secure-album unlock token so a re-login must re-unlock.
     clearGalleryToken();
     // Always wipe the in-memory + sessionStorage AES key on logout. Doing it

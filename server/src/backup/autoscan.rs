@@ -381,22 +381,33 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
     let mut queue = vec![storage_root.to_path_buf()];
 
     while let Some(dir) = queue.pop() {
-        // Google Photos Takeout dedup (#19): a first, names-only pass over this
-        // directory lets us spot "-edited" pairs before registering — a single
-        // streaming walk can't look ahead to a sibling that sorts later. Keeps
-        // the edited copy, drops the unedited original — the same rule the
-        // upload + ingest paths use.
-        let shadowed_originals = {
-            let mut names_in_dir: Vec<String> = Vec::new();
+        // Google Photos Takeout: a first, names-only pass over this directory
+        // serves two look-aheads a single streaming walk can't do —
+        //   (1) "-edited" dedup (#19): spot the edited/original pair before
+        //       registering, keep the edited copy, drop the unedited original;
+        //   (2) sidecar + album pairing: index this folder's `.json` sidecars so
+        //       each media file can resolve its Takeout metadata (capture date,
+        //       GPS, album) below.
+        let (shadowed_originals, takeout_ctx) = {
+            let mut media_names: Vec<String> = Vec::new();
+            let mut json_names: Vec<String> = Vec::new();
             if let Ok(mut probe) = tokio::fs::read_dir(&dir).await {
                 while let Ok(Some(e)) = probe.next_entry().await {
                     let n = e.file_name().to_string_lossy().to_string();
-                    if !n.starts_with('.') && is_media_file(&n) {
-                        names_in_dir.push(n);
+                    if n.starts_with('.') {
+                        continue;
+                    }
+                    if is_media_file(&n) {
+                        media_names.push(n);
+                    } else if n.to_lowercase().ends_with(".json") {
+                        json_names.push(n);
                     }
                 }
             }
-            crate::media::edited_shadowed_originals(names_in_dir.iter().map(|s| s.as_str()))
+            let shadowed =
+                crate::media::edited_shadowed_originals(media_names.iter().map(|s| s.as_str()));
+            let ctx = crate::import::sidecar::TakeoutDirContext::new(json_names, &dir);
+            (shadowed, ctx)
         };
 
         let mut entries = match tokio::fs::read_dir(&dir).await {
@@ -471,6 +482,9 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
                 continue;
             }
 
+            let sidecar_abs = takeout_ctx.resolve_sidecar(&name).map(|j| dir.join(j));
+            let album_name = takeout_ctx.album_name().map(|s| s.to_string());
+
             candidates.push(NativeCandidate {
                 abs_path,
                 rel_path,
@@ -479,6 +493,8 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
                 media_type,
                 size,
                 modified,
+                sidecar_abs,
+                album_name,
             });
         }
     }

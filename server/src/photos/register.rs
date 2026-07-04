@@ -20,13 +20,15 @@ use std::sync::Arc;
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
+use crate::import::models::GooglePhotosMetadata;
+use crate::import::{google_photos, sidecar};
 use crate::photos::metadata::{
     apply_aspect_subtype_fallback_with, extract_media_metadata_async, extract_xmp_subtype_async,
     PanoSensitivity,
 };
 use crate::photos::motion::extract_and_store_motion_video;
 use crate::photos::thumbnail::generate_thumbnail_file;
-use crate::photos::utils::{compute_photo_hash_streaming, normalize_iso_timestamp, utc_now_iso};
+use crate::photos::utils::{compute_photo_hash_streaming, resolve_taken_at, utc_now_iso};
 
 /// An unregistered native media file discovered on disk during the walk phase.
 ///
@@ -46,8 +48,17 @@ pub(crate) struct NativeCandidate {
     /// File size in bytes.
     pub size: i64,
     /// File mtime as a normalized ISO string, used as the `taken_at` fallback
-    /// when EXIF carries no capture date.
+    /// when neither EXIF nor a Google Takeout sidecar carries a capture date.
     pub modified: Option<String>,
+    /// Absolute path to this file's Google Takeout JSON sidecar, if the walk
+    /// found one (see [`crate::import::sidecar`]). The sidecar is the authoritative
+    /// source of `taken_at`/GPS for Takeout exports, which frequently strip both
+    /// from the JPEG itself.
+    pub sidecar_abs: Option<PathBuf>,
+    /// Takeout album name derived from the parent folder, when this file lives in
+    /// a genuine Takeout album directory. Recorded in `photo_source_albums` so
+    /// clients can rebuild albums deterministically.
+    pub album_name: Option<String>,
 }
 
 /// Read-only context shared across every file in one registration pass.
@@ -100,9 +111,52 @@ pub(crate) async fn register_native_file(
         Default::default()
     };
 
-    let final_taken_at = exif_taken
-        .map(|t| normalize_iso_timestamp(&t))
-        .or_else(|| cand.modified.clone());
+    // Google Takeout sidecar (when the walk paired one): the exported JPEG often
+    // has its capture date and GPS stripped, so the sidecar is the ONLY place the
+    // true values survive. Parse it up front so `photoTakenTime` can beat the file
+    // mtime — which for an unzipped Takeout is the extraction date, not capture.
+    let mut sidecar_taken: Option<String> = None;
+    let mut sidecar_lat: Option<f64> = None;
+    let mut sidecar_lon: Option<f64> = None;
+    let mut sidecar_meta: Option<GooglePhotosMetadata> = None;
+    if let Some(ref sc_path) = cand.sidecar_abs {
+        match tokio::fs::read(sc_path).await {
+            Ok(bytes) => match google_photos::parse_sidecar(&bytes) {
+                Ok(meta) if sidecar::is_photo_sidecar(&meta) => {
+                    let rec =
+                        google_photos::normalise(&meta, String::new(), String::new(), None, None);
+                    sidecar_taken = rec.taken_at;
+                    sidecar_lat = rec.latitude;
+                    sidecar_lon = rec.longitude;
+                    sidecar_meta = Some(meta);
+                }
+                Ok(_) => tracing::debug!(
+                    file = %cand.rel_path,
+                    "Paired .json is not a photo sidecar; ignoring"
+                ),
+                Err(e) => tracing::warn!(
+                    file = %cand.rel_path, error = %e,
+                    "Failed to parse Takeout sidecar"
+                ),
+            },
+            Err(e) => tracing::warn!(
+                file = %cand.rel_path, sidecar = ?sc_path, error = %e,
+                "Failed to read Takeout sidecar"
+            ),
+        }
+    }
+
+    // Capture date priority: zoned EXIF > sidecar epoch > assume-UTC EXIF > mtime.
+    let final_taken_at = resolve_taken_at(
+        exif_taken.as_deref(),
+        exif_taken_offset.is_some(),
+        sidecar_taken.as_deref(),
+        cand.modified.as_deref(),
+    );
+    // GPS: prefer embedded EXIF; fall back to the sidecar (Google frequently
+    // strips GPS from the file and keeps it only in the JSON).
+    let final_lat = exif_lat.or(sidecar_lat);
+    let final_lon = exif_lon.or(sidecar_lon);
 
     // Content hash for dedup (streaming — never loads the whole file into RAM).
     let photo_hash = compute_photo_hash_streaming(&cand.abs_path).await;
@@ -136,8 +190,8 @@ pub(crate) async fn register_native_file(
     .bind(img_w)
     .bind(img_h)
     .bind(&final_taken_at)
-    .bind(exif_lat)
-    .bind(exif_lon)
+    .bind(final_lat)
+    .bind(final_lon)
     .bind(&cam_model)
     .bind(&thumb_rel)
     .bind(&now)
@@ -158,6 +212,69 @@ pub(crate) async fn register_native_file(
             return false;
         }
         Ok(_) => {}
+    }
+
+    // Record Takeout album membership captured from the folder (idempotent via
+    // the (photo_id, album_name) PK). Only set when the walk decided this file
+    // lives in a genuine Takeout album directory, so a normal user folder never
+    // becomes an album.
+    if let Some(ref album) = cand.album_name {
+        if let Err(e) = sqlx::query(
+            "INSERT OR IGNORE INTO photo_source_albums \
+             (photo_id, user_id, album_name, source, created_at) \
+             VALUES (?, ?, ?, 'google_takeout', ?)",
+        )
+        .bind(&photo_id)
+        .bind(&ctx.user_id)
+        .bind(album)
+        .bind(&now)
+        .execute(pool)
+        .await
+        {
+            tracing::warn!(file = %cand.rel_path, album = %album, error = %e, "Failed to record Takeout source album");
+        }
+    }
+
+    // Persist the parsed sidecar (title/description/geo/views) for the info panel.
+    // storage_path stays NULL — we don't copy the raw JSON blob on the scan path;
+    // the parsed columns carry everything the clients read.
+    if let Some(meta) = sidecar_meta {
+        let meta_id = Uuid::new_v4().to_string();
+        let rec = google_photos::normalise(
+            &meta,
+            meta_id,
+            ctx.user_id.clone(),
+            Some(photo_id.clone()),
+            None,
+        );
+        if let Err(e) = sqlx::query(
+            "INSERT INTO photo_metadata \
+             (id, user_id, photo_id, blob_id, source, title, description, taken_at, \
+              created_at_src, latitude, longitude, altitude, image_views, original_url, \
+              storage_path, imported_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&rec.id)
+        .bind(&rec.user_id)
+        .bind(&rec.photo_id)
+        .bind(&rec.blob_id)
+        .bind(&rec.source)
+        .bind(&rec.title)
+        .bind(&rec.description)
+        .bind(&rec.taken_at)
+        .bind(&rec.created_at_src)
+        .bind(rec.latitude)
+        .bind(rec.longitude)
+        .bind(rec.altitude)
+        .bind(rec.image_views)
+        .bind(&rec.original_url)
+        .bind(&rec.storage_path)
+        .bind(&rec.imported_at)
+        .execute(pool)
+        .await
+        {
+            tracing::warn!(file = %cand.rel_path, error = %e, "Failed to store Takeout photo metadata");
+        }
     }
 
     // Motion photo: store the embedded video trailer. Stills only, so the full
@@ -193,4 +310,172 @@ pub(crate) async fn register_native_file(
     }
 
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::str::FromStr;
+
+    /// End-to-end proof that a paired Google Takeout sidecar drives the DB row —
+    /// the exact behaviour the filesystem-scan import was missing: the sidecar's
+    /// `photoTakenTime` beats the file mtime, its `geoData` fills the GPS the
+    /// exported JPEG had stripped, the album folder is recorded, and a
+    /// `photo_metadata` row is written. Thumbnail/EXIF extraction on the dummy
+    /// bytes just no-ops (non-fatal), so the assertions isolate the sidecar path.
+    #[tokio::test]
+    async fn register_applies_takeout_sidecar_date_gps_and_album() {
+        // ── A temp Takeout album folder on disk ──
+        let root = std::env::temp_dir().join(format!("sp-reg-test-{}", uuid::Uuid::new_v4()));
+        let album_dir = root.join("Trip to Rome");
+        tokio::fs::create_dir_all(&album_dir).await.unwrap();
+        let media = album_dir.join("IMG_1.jpg");
+        tokio::fs::write(&media, b"dummy-bytes-just-need-something-to-hash")
+            .await
+            .unwrap();
+        // Sidecar: photoTakenTime = 2017-05-16T19:37:54Z, GPS in Rome.
+        let sidecar = album_dir.join("IMG_1.jpg.supplemental-metadata.json");
+        tokio::fs::write(
+            &sidecar,
+            br#"{
+                "title":"IMG_1.jpg",
+                "photoTakenTime":{"timestamp":"1494963474"},
+                "geoData":{"latitude":41.9028,"longitude":12.4964,"altitude":0.0},
+                "googlePhotosOrigin":{"mobileUpload":{}}
+            }"#,
+        )
+        .await
+        .unwrap();
+
+        // ── In-memory DB with the real migrations (FKs off: we insert a bare
+        //    photo row without the full users/blobs graph). ──
+        let opts = sqlx::sqlite::SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .foreign_keys(false);
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+
+        // ── The candidate exactly as the walker would hand it over ──
+        let cand = NativeCandidate {
+            abs_path: media.clone(),
+            rel_path: "Trip to Rome/IMG_1.jpg".to_string(),
+            name: "IMG_1.jpg".to_string(),
+            mime: "image/jpeg".to_string(),
+            media_type: "photo",
+            size: 39,
+            // File mtime — the WRONG (extraction-day) date the sidecar overrides.
+            modified: Some("2026-07-04T00:00:00.000Z".to_string()),
+            sidecar_abs: Some(sidecar.clone()),
+            album_name: Some("Trip to Rome".to_string()),
+        };
+        let ctx = RegisterContext {
+            user_id: "user-1".to_string(),
+            pano_sensitivity: crate::photos::metadata::PanoSensitivity::Strict,
+            gallery_hashes: Arc::new(std::collections::HashSet::new()),
+        };
+
+        assert!(
+            register_native_file(&pool, &root, &cand, &ctx).await,
+            "a new photo row must be inserted"
+        );
+
+        // taken_at came from the sidecar epoch, NOT the file mtime.
+        let (taken_at, lat, lon): (Option<String>, Option<f64>, Option<f64>) = sqlx::query_as(
+            "SELECT taken_at, latitude, longitude FROM photos WHERE user_id = 'user-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            taken_at.as_deref(),
+            Some("2017-05-16T19:37:54.000Z"),
+            "sidecar photoTakenTime must beat the file mtime"
+        );
+        assert_eq!(lat, Some(41.9028), "GPS latitude comes from the sidecar");
+        assert_eq!(lon, Some(12.4964), "GPS longitude comes from the sidecar");
+
+        // Album membership recorded from the folder.
+        let (album,): (String,) =
+            sqlx::query_as("SELECT album_name FROM photo_source_albums WHERE user_id = 'user-1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(album, "Trip to Rome");
+
+        // Parsed sidecar metadata persisted for the info panel.
+        let (meta_count,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM photo_metadata WHERE user_id = 'user-1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            meta_count, 1,
+            "a parsed sidecar metadata row must be stored"
+        );
+
+        let _ = tokio::fs::remove_dir_all(&root).await;
+    }
+
+    /// A plain library (no sidecars) must be untouched: no album invented, mtime
+    /// kept as the capture date. Guards against turning every user folder into an
+    /// album or regressing non-Takeout imports.
+    #[tokio::test]
+    async fn register_without_sidecar_keeps_mtime_and_records_no_album() {
+        let root = std::env::temp_dir().join(format!("sp-reg-test-{}", uuid::Uuid::new_v4()));
+        let dir = root.join("Vacation Photos");
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let media = dir.join("plain.jpg");
+        tokio::fs::write(&media, b"another-dummy-blob")
+            .await
+            .unwrap();
+
+        let opts = sqlx::sqlite::SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .foreign_keys(false);
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+
+        let cand = NativeCandidate {
+            abs_path: media.clone(),
+            rel_path: "Vacation Photos/plain.jpg".to_string(),
+            name: "plain.jpg".to_string(),
+            mime: "image/jpeg".to_string(),
+            media_type: "photo",
+            size: 18,
+            modified: Some("2020-01-02T03:04:05.000Z".to_string()),
+            sidecar_abs: None,
+            album_name: None,
+        };
+        let ctx = RegisterContext {
+            user_id: "user-1".to_string(),
+            pano_sensitivity: crate::photos::metadata::PanoSensitivity::Strict,
+            gallery_hashes: Arc::new(std::collections::HashSet::new()),
+        };
+
+        assert!(register_native_file(&pool, &root, &cand, &ctx).await);
+
+        let (taken_at,): (Option<String>,) =
+            sqlx::query_as("SELECT taken_at FROM photos WHERE user_id = 'user-1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(taken_at.as_deref(), Some("2020-01-02T03:04:05.000Z"));
+
+        let (album_count,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM photo_source_albums WHERE user_id = 'user-1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(album_count, 0, "no sidecars → no album invented");
+
+        let _ = tokio::fs::remove_dir_all(&root).await;
+    }
 }

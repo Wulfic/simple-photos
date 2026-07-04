@@ -128,6 +128,24 @@ pub fn resolve_upload_taken_at(
     file_modified: Option<&str>,
     fallback: &str,
 ) -> String {
+    resolve_taken_at(exif_taken, exif_has_offset, sidecar_taken, file_modified)
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+/// Same offset-aware priority as [`resolve_upload_taken_at`] but returns `None`
+/// when no signal carries a usable capture date (rather than substituting a
+/// fallback). The filesystem-scan import paths ([`crate::photos::register`])
+/// want this: a missing `taken_at` is left NULL so gallery sorting falls back to
+/// `created_at`, and — crucially for Google Takeout — the sidecar's
+/// `photoTakenTime` beats the file mtime, which for an unzipped Takeout is the
+/// *extraction* date, not the capture date. Every non-empty candidate is
+/// normalised to canonical ISO-8601 UTC so the result sorts correctly in SQLite.
+pub fn resolve_taken_at(
+    exif_taken: Option<&str>,
+    exif_has_offset: bool,
+    sidecar_taken: Option<&str>,
+    file_modified: Option<&str>,
+) -> Option<String> {
     let exif = exif_taken
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
@@ -145,14 +163,12 @@ pub fn resolve_upload_taken_at(
         sidecar.or(exif)
     };
 
-    chosen
-        .or_else(|| {
-            file_modified
-                .map(|s| s.trim())
-                .filter(|s| !s.is_empty())
-                .map(normalize_iso_timestamp)
-        })
-        .unwrap_or_else(|| fallback.to_string())
+    chosen.or_else(|| {
+        file_modified
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(normalize_iso_timestamp)
+    })
 }
 
 /// Read the `audio_backup_enabled` server setting.

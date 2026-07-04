@@ -4,9 +4,11 @@
 //! - [`handlers`]      — Import metadata from JSON sidecars, upload sidecar files.
 //! - [`takeout`]       — Scan and import from Google Photos Takeout directory structure.
 //! - [`google_photos`] — Google Photos JSON sidecar parser.
+//! - [`sidecar`]       — Definitive Takeout sidecar detection + name resolution.
 //! - [`models`]        — Request/response DTOs for import endpoints.
 
 pub mod google_photos;
 pub mod handlers;
 pub mod models;
+pub mod sidecar;
 pub mod takeout;
