@@ -97,7 +97,7 @@ fun NavGraph() {
                 onLogout = { navController.navigate(Screen.Login.route) { popUpTo(0) } },
                 onAlbumClick = { albumId -> navController.navigate(Screen.AlbumDetail.createRoute(albumId)) },
                 onSharedAlbumClick = { navController.navigate(Screen.SharedAlbums.route) },
-                onPeople = { navController.navigate(Screen.People.route) },
+                onPeople = { navController.navigate(Screen.People.base) },
                 onPets = { navController.navigate(Screen.Pets.route) },
                 onMemories = { navController.navigate(Screen.Memories.route) },
                 onTrips = { navController.navigate(Screen.Trips.route) },
@@ -153,7 +153,10 @@ fun NavGraph() {
             )
         ) {
             PhotoViewerScreen(
-                onBack = { navController.popBackStack() }
+                onBack = { navController.popBackStack() },
+                onSelectPerson = { photoId, detectionId ->
+                    navController.navigate(Screen.People.createAssignRoute(photoId, detectionId))
+                },
             )
         }
         composable(Screen.Settings.route) {
@@ -189,10 +192,19 @@ fun NavGraph() {
                 onBack = { navController.popBackStack() }
             )
         }
-        composable(Screen.People.route) {
+        composable(
+            route = Screen.People.route,
+            arguments = listOf(
+                navArgument("assignPhoto") { type = NavType.StringType; nullable = true; defaultValue = null },
+                navArgument("assignDetection") { type = NavType.StringType; nullable = true; defaultValue = null },
+            ),
+        ) { backStackEntry ->
+            val assignDetection = backStackEntry.arguments?.getString("assignDetection")?.toLongOrNull()
             PeopleScreen(
                 onBack = { navController.popBackStack() },
                 onPersonClick = { id -> navController.navigate(Screen.PersonDetail.createRoute(id)) },
+                assignDetectionId = assignDetection,
+                onAssigned = { navController.popBackStack() },
             )
         }
         composable(Screen.Pets.route) {

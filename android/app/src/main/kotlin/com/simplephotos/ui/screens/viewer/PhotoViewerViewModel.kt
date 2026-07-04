@@ -16,9 +16,11 @@ import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.local.entities.SyncStatus
 import com.simplephotos.data.remote.dto.FullMetadataResponse
 import com.simplephotos.data.remote.dto.MetadataUpdateRequest
+import com.simplephotos.data.repository.AiRepository
 import com.simplephotos.data.repository.AlbumRepository
 import com.simplephotos.data.repository.PhotoRepository
 import com.simplephotos.data.repository.TagRepository
+import com.simplephotos.data.remote.dto.PhotoFace
 import android.util.Log
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
@@ -46,6 +48,7 @@ class PhotoViewerViewModel @Inject constructor(
     private val photoRepository: PhotoRepository,
     private val albumRepository: AlbumRepository,
     private val tagRepository: TagRepository,
+    private val aiRepository: AiRepository,
     val okHttpClient: OkHttpClient,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
@@ -118,6 +121,11 @@ class PhotoViewerViewModel @Inject constructor(
 
     /** Last metadata save error, shown in the Info-panel editor. */
     var metadataError by mutableStateOf<String?>(null)
+        private set
+
+    /** Faces detected in the currently viewed photo (for the People section of
+     *  the Info panel). Empty until loaded / when AI is off or none detected. */
+    var photoFaces by mutableStateOf<List<PhotoFace>>(emptyList())
         private set
 
     init {
@@ -345,6 +353,24 @@ class PhotoViewerViewModel @Inject constructor(
     fun clearFullMetadata() {
         fullMetadata = null
         metadataError = null
+    }
+
+    /** Load the faces detected in a photo for the Info-panel People section.
+     *  Best-effort: on failure (AI off / none) [photoFaces] is left empty. */
+    fun loadPhotoFaces(serverPhotoId: String) {
+        viewModelScope.launch {
+            try {
+                photoFaces = withContext(Dispatchers.IO) { aiRepository.listPhotoFaces(serverPhotoId) }
+            } catch (e: Exception) {
+                Log.w(TAG, "[faces] loadPhotoFaces failed for $serverPhotoId: ${e.message}")
+                photoFaces = emptyList()
+            }
+        }
+    }
+
+    /** Clear the Info-panel face list when switching photos / closing. */
+    fun clearPhotoFaces() {
+        photoFaces = emptyList()
     }
 
     /**

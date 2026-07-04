@@ -40,6 +40,18 @@ export interface FaceDetectionRecord {
   created_at: string;
 }
 
+/** One face detected in a specific photo, with its current person label. */
+export interface PhotoFace {
+  id: number;
+  cluster_id: number | null;
+  cluster_label: string | null;
+  bbox_x: number;
+  bbox_y: number;
+  bbox_w: number;
+  bbox_h: number;
+  confidence: number;
+}
+
 export interface ObjectClassSummary {
   class_name: string;
   photo_count: number;
@@ -123,6 +135,20 @@ export const aiApi = {
       {
         method: "POST",
         body: JSON.stringify({ detection_ids: detectionIds }),
+      }
+    ),
+
+  /** List the faces detected in one photo (with current person labels) */
+  listPhotoFaces: (photoId: string) =>
+    request<PhotoFace[]>(`/ai/photos/${encodeURIComponent(photoId)}/faces`),
+
+  /** Manually reassign a face detection to a person (cluster) */
+  assignFace: (detectionId: number, clusterId: number) =>
+    request<{ detection_id: number; cluster_id: number; photo_id: string }>(
+      "/ai/faces/assign",
+      {
+        method: "POST",
+        body: JSON.stringify({ detection_id: detectionId, cluster_id: clusterId }),
       }
     ),
 

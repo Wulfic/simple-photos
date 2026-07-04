@@ -73,6 +73,33 @@ pub(crate) struct RegisterContext {
     pub gallery_hashes: Arc<HashSet<String>>,
 }
 
+/// Record a Google Takeout album membership (idempotent via the
+/// `(photo_id, album_name)` primary key). Shared by the fresh-insert path and the
+/// hash-duplicate backfill path so an album captures its members regardless of
+/// which physical copy of a photo the walk registers first.
+async fn record_source_album(
+    pool: &SqlitePool,
+    user_id: &str,
+    photo_id: &str,
+    album: &str,
+    now: &str,
+) {
+    if let Err(e) = sqlx::query(
+        "INSERT OR IGNORE INTO photo_source_albums \
+         (photo_id, user_id, album_name, source, created_at) \
+         VALUES (?, ?, ?, 'google_takeout', ?)",
+    )
+    .bind(photo_id)
+    .bind(user_id)
+    .bind(album)
+    .bind(now)
+    .execute(pool)
+    .await
+    {
+        tracing::warn!(photo_id = %photo_id, album = %album, error = %e, "Failed to record Takeout source album");
+    }
+}
+
 /// Register a single native media file: extract metadata + subtype, hash it,
 /// exclude gallery-hidden originals, `INSERT OR IGNORE`, extract an embedded
 /// motion video (motion photos), and generate a thumbnail.
@@ -204,7 +231,36 @@ pub(crate) async fn register_native_file(
 
     match insert_result {
         Ok(result) if result.rows_affected() == 0 => {
-            tracing::debug!(file = %cand.rel_path, "Already registered (concurrent scan), skipping");
+            // Hash-duplicate of an already-registered photo. Google Takeout stores
+            // the SAME image bytes in both its "Photos from YYYY" date folder and
+            // every album folder the photo belongs to, so the album copies collide
+            // on the (user_id, photo_hash) unique index and land here. We must NOT
+            // just skip: if this duplicate lives in an album, its membership has to
+            // be recorded against the photo that already exists — otherwise an album
+            // silently loses every member that also lives in a date folder (which,
+            // for Takeout, is all of them). No new photo row is created, so we still
+            // return false (callers count new registrations only).
+            if let (Some(album), Some(h)) = (cand.album_name.as_deref(), photo_hash.as_ref()) {
+                let existing_id: Option<String> = sqlx::query_scalar(
+                    "SELECT id FROM photos WHERE user_id = ? AND photo_hash = ? LIMIT 1",
+                )
+                .bind(&ctx.user_id)
+                .bind(h)
+                .fetch_optional(pool)
+                .await
+                .unwrap_or(None);
+                match existing_id {
+                    Some(existing_id) => {
+                        record_source_album(pool, &ctx.user_id, &existing_id, album, &now).await;
+                        tracing::debug!(file = %cand.rel_path, album = %album, "Duplicate copy — backfilled album membership onto existing photo");
+                    }
+                    None => {
+                        tracing::warn!(file = %cand.rel_path, "Duplicate on insert but existing photo not found by hash — album membership not recorded")
+                    }
+                }
+            } else {
+                tracing::debug!(file = %cand.rel_path, "Already registered (concurrent scan or duplicate), skipping");
+            }
             return false;
         }
         Err(e) => {
@@ -219,20 +275,7 @@ pub(crate) async fn register_native_file(
     // lives in a genuine Takeout album directory, so a normal user folder never
     // becomes an album.
     if let Some(ref album) = cand.album_name {
-        if let Err(e) = sqlx::query(
-            "INSERT OR IGNORE INTO photo_source_albums \
-             (photo_id, user_id, album_name, source, created_at) \
-             VALUES (?, ?, ?, 'google_takeout', ?)",
-        )
-        .bind(&photo_id)
-        .bind(&ctx.user_id)
-        .bind(album)
-        .bind(&now)
-        .execute(pool)
-        .await
-        {
-            tracing::warn!(file = %cand.rel_path, album = %album, error = %e, "Failed to record Takeout source album");
-        }
+        record_source_album(pool, &ctx.user_id, &photo_id, album, &now).await;
     }
 
     // Persist the parsed sidecar (title/description/geo/views) for the info panel.
@@ -475,6 +518,96 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(album_count, 0, "no sidecars → no album invented");
+
+        let _ = tokio::fs::remove_dir_all(&root).await;
+    }
+
+    /// THE Takeout album bug: Google stores identical bytes in both the
+    /// "Photos from YYYY" date folder and every album folder. The date-folder copy
+    /// registers first; the album copy then collides on the (user_id, photo_hash)
+    /// unique index and is a dedup no-op. It must STILL record the album membership
+    /// against the already-existing photo — otherwise albums come up empty.
+    #[tokio::test]
+    async fn duplicate_album_copy_backfills_membership_onto_existing_photo() {
+        let root = std::env::temp_dir().join(format!("sp-reg-test-{}", uuid::Uuid::new_v4()));
+        let year_dir = root.join("Photos from 2020");
+        let album_dir = root.join("Cats");
+        tokio::fs::create_dir_all(&year_dir).await.unwrap();
+        tokio::fs::create_dir_all(&album_dir).await.unwrap();
+
+        // Same bytes in both locations → same content hash → dedup collision.
+        let bytes = b"identical-cat-photo-bytes-shared-across-both-folders";
+        let year_media = year_dir.join("cat.jpg");
+        let album_media = album_dir.join("cat.jpg");
+        tokio::fs::write(&year_media, bytes).await.unwrap();
+        tokio::fs::write(&album_media, bytes).await.unwrap();
+
+        let opts = sqlx::sqlite::SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .foreign_keys(false);
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+
+        let ctx = RegisterContext {
+            user_id: "user-1".to_string(),
+            pano_sensitivity: crate::photos::metadata::PanoSensitivity::Strict,
+            gallery_hashes: Arc::new(std::collections::HashSet::new()),
+        };
+
+        // 1) Date-folder copy registers first — no album.
+        let year_cand = NativeCandidate {
+            abs_path: year_media.clone(),
+            rel_path: "Photos from 2020/cat.jpg".to_string(),
+            name: "cat.jpg".to_string(),
+            mime: "image/jpeg".to_string(),
+            media_type: "photo",
+            size: bytes.len() as i64,
+            modified: Some("2020-06-01T00:00:00.000Z".to_string()),
+            sidecar_abs: None,
+            album_name: None,
+        };
+        assert!(
+            register_native_file(&pool, &root, &year_cand, &ctx).await,
+            "first (date-folder) copy inserts a new photo"
+        );
+
+        // 2) Album-folder copy — identical bytes, carries the album name.
+        let album_cand = NativeCandidate {
+            abs_path: album_media.clone(),
+            rel_path: "Cats/cat.jpg".to_string(),
+            name: "cat.jpg".to_string(),
+            mime: "image/jpeg".to_string(),
+            media_type: "photo",
+            size: bytes.len() as i64,
+            modified: Some("2020-06-01T00:00:00.000Z".to_string()),
+            sidecar_abs: None,
+            album_name: Some("Cats".to_string()),
+        };
+        assert!(
+            !register_native_file(&pool, &root, &album_cand, &ctx).await,
+            "duplicate copy must NOT create a second photo row"
+        );
+
+        // Exactly one photo, and the album membership was backfilled onto it.
+        let (photo_count,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM photos WHERE user_id = 'user-1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(photo_count, 1, "dedup keeps a single photo row");
+
+        let (album, count): (String, i64) = sqlx::query_as(
+            "SELECT album_name, COUNT(*) FROM photo_source_albums WHERE user_id = 'user-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 1, "album membership must be recorded despite dedup");
+        assert_eq!(album, "Cats");
 
         let _ = tokio::fs::remove_dir_all(&root).await;
     }

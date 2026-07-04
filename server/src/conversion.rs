@@ -12,6 +12,7 @@
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use axum::Json;
 use serde::Serialize;
@@ -54,6 +55,100 @@ pub fn cpu_fallback_enabled() -> bool {
 /// Get the current GPU config, or None if not initialized.
 fn gpu_config() -> Option<&'static GpuConversionConfig> {
     GPU_CONFIG.get()
+}
+
+// ── CPU parallelism planning ─────────────────────────────────────────────────
+
+/// Target libx264 threads per CPU video encode. Software H.264 thread-scaling
+/// flattens out past a handful of threads, so on a many-core host we run several
+/// encodes in parallel — each capped near this many threads — instead of one
+/// thread-hungry encode that leaves cores idle waiting on the encoder's serial
+/// dependencies.
+const CPU_VIDEO_THREADS_TARGET: usize = 8;
+
+/// Max concurrent GPU video sessions. Hardware encoders (NVENC/QSV/VAAPI) expose
+/// only a few simultaneous encode sessions; over-subscribing them just fails or
+/// silently serialises, so the video lane is capped low on the GPU path
+/// regardless of core count.
+const GPU_VIDEO_SESSIONS: usize = 3;
+
+/// Fraction of cores held back for the rest of the server (request handling,
+/// encryption, AI/geo). `cores / RESERVE_DIVISOR`, floored at one core, is
+/// subtracted from the total so a heavy import never wedges the UI. `8` ⇒ ~12.5%
+/// headroom.
+const RESERVE_DIVISOR: usize = 8;
+
+/// Concurrency budget for a conversion batch, derived from the host's available
+/// CPU parallelism. See [`plan_parallelism`]. Auto-scales from a single-core box
+/// (everything serial) to a many-core workstation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConversionParallelism {
+    /// Concurrent image/audio conversions (each ffmpeg is ~single-threaded, so
+    /// this many run at once to fill the usable cores).
+    pub fast_lane: usize,
+    /// Concurrent video transcodes.
+    pub video_lane: usize,
+    /// `-threads` budget handed to each CPU (libx264) encode so
+    /// `video_lane * video_threads` stays within the usable core budget. Applies
+    /// to the CPU path and to the CPU fallback of a failed GPU encode.
+    pub video_threads: usize,
+}
+
+/// Operator override for the usable-core budget via `SIMPLE_PHOTOS_CONVERSION_JOBS`.
+/// `Some(n)` (n ≥ 1) pins the budget directly, bypassing the auto reserve;
+/// anything unset / unparseable / non-positive yields `None` (fully automatic).
+fn conversion_jobs_override() -> Option<usize> {
+    std::env::var("SIMPLE_PHOTOS_CONVERSION_JOBS")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|n| *n >= 1)
+}
+
+/// Turn a usable-core budget into a per-lane plan.
+fn plan_from_usable(usable: usize, gpu: bool) -> ConversionParallelism {
+    let usable = usable.max(1);
+    let fast_lane = usable;
+    let video_lane = if gpu {
+        // Hardware encoders expose only a handful of sessions.
+        usable.min(GPU_VIDEO_SESSIONS)
+    } else {
+        // Prefer several thread-capped software encodes over one thread-hungry
+        // one, since libx264 scaling plateaus quickly.
+        usable / CPU_VIDEO_THREADS_TARGET
+    }
+    .clamp(1, usable);
+    // Split the budget across the concurrent encodes so we don't oversubscribe.
+    let video_threads = (usable / video_lane).max(1);
+    ConversionParallelism {
+        fast_lane,
+        video_lane,
+        video_threads,
+    }
+}
+
+/// Plan conversion parallelism for a host with `available` CPUs.
+///
+/// Reserves `available / RESERVE_DIVISOR` cores (at least one) for the rest of
+/// the server, then hands the remaining "usable" budget to the fast lane. The
+/// video lane is derived from that budget: several thread-capped libx264 encodes
+/// on the CPU path, or a small number of hardware sessions on the GPU path.
+/// Scales from a single core (everything serial) up to a 1024-thread workstation
+/// without hardcoding a ceiling.
+pub fn plan_parallelism(available: usize, gpu: bool) -> ConversionParallelism {
+    let available = available.max(1);
+    let reserve = (available / RESERVE_DIVISOR).max(1);
+    let usable = available.saturating_sub(reserve).max(1);
+    plan_from_usable(usable, gpu)
+}
+
+/// Detect the host's parallelism and plan the conversion lanes, honouring the
+/// `SIMPLE_PHOTOS_CONVERSION_JOBS` override when set. `gpu` selects the video
+/// lane model (hardware sessions vs. thread-capped software encodes).
+pub fn detect_parallelism(gpu: bool) -> ConversionParallelism {
+    match conversion_jobs_override() {
+        Some(usable) => plan_from_usable(usable, gpu),
+        None => plan_parallelism(num_cpus::get(), gpu),
+    }
 }
 
 // ── Conversion progress tracking ─────────────────────────────────────────────
@@ -176,6 +271,20 @@ pub fn progress_tick() {
 pub fn progress_finish() {
     CONV_ACTIVE.store(false, Ordering::Relaxed);
     clear_start_clock();
+}
+
+/// Liveness heartbeat for a single long-running transcode.
+///
+/// A large video makes no `progress_tick` until `convert_file` returns (up to
+/// [`GPU_TRANSCODE_TIMEOUT`] + [`CPU_TRANSCODE_TIMEOUT`]), so without a heartbeat
+/// the frontend's short-fuse "looks stuck" banner fires while the encode is still
+/// healthily running. The ingest loop pulses this every ~20 s *during* a file's
+/// conversion. It only advances the watchdog liveness clock — never `done` /
+/// `total` — and the caller bounds how long it pulses, so a genuinely wedged file
+/// eventually stops heartbeating and the stuck-job watchdog can still recover the
+/// pipeline.
+pub fn heartbeat() {
+    stamp_progress();
 }
 
 /// RAII guard around a conversion batch that guarantees the global "active"
@@ -480,6 +589,23 @@ pub fn conversion_priority(cat: MediaCategory) -> u8 {
     }
 }
 
+// ── Per-attempt transcode timeouts ───────────────────────────────────────────
+
+/// Timeout for the GPU (hardware) video encode attempt.
+///
+/// Deliberately short. A hardware encode that hasn't finished in this window is
+/// almost always *hung* (unsupported codec path, driver/VAAPI stall) rather than
+/// merely slow — a working NVENC/QSV/VAAPI transcode of a normal clip completes
+/// in seconds. Failing over to the CPU encoder quickly caps the worst-case
+/// per-file time: without this, a pathological video burned the full 600 s GPU
+/// budget AND then the full 600 s CPU budget (~20 min of zero visible progress),
+/// which is what made the conversion banner read "stuck" (#18 follow-up).
+const GPU_TRANSCODE_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Timeout for the CPU (libx264) video encode. A software encode of a long clip
+/// can legitimately take minutes, so this keeps the longer budget.
+const CPU_TRANSCODE_TIMEOUT: Duration = Duration::from_secs(600);
+
 // ── FFmpeg conversion ────────────────────────────────────────────────────────
 
 /// Convert a media file to its browser-native target format.
@@ -494,10 +620,15 @@ pub fn conversion_priority(cat: MediaCategory) -> u8 {
 ///
 /// For video conversions, uses GPU-accelerated encoding when available
 /// (configured via `init_gpu_config()` at startup).
+/// `video_threads` caps the `-threads` handed to the CPU (libx264) encoder so a
+/// batch running several encodes in parallel doesn't oversubscribe the cores.
+/// `None` lets ffmpeg auto-detect (all cores) — appropriate for a lone, serial
+/// transcode such as a single interactive upload.
 pub async fn convert_file(
     input: &Path,
     output: &Path,
     target: &ConversionTarget,
+    video_threads: Option<usize>,
 ) -> Result<(), String> {
     // ── Path-injection sanitizer ─────────────────────────────────────────
     // Canonicalize input (must already exist) and the output's parent so all
@@ -542,6 +673,7 @@ pub async fn convert_file(
                 output_str,
                 gpu.map(|g| &g.hwaccel),
                 gpu.map(|g| g.fallback_to_cpu).unwrap_or(true),
+                video_threads,
             )
             .await
         }
@@ -609,6 +741,7 @@ pub(crate) async fn convert_video(
     output: &str,
     hwaccel: Option<&HwAccelCapability>,
     fallback_to_cpu: bool,
+    video_threads: Option<usize>,
 ) -> bool {
     // Diagnostics: log exactly which path was selected for every video.
     // Without this, operators report "still using CPU!" and we have no
@@ -648,9 +781,7 @@ pub(crate) async fn convert_video(
             let gpu_start = std::time::Instant::now();
             let mut cmd = crate::process::background_command("ffmpeg");
             cmd.args(&args).stdout(std::process::Stdio::null());
-            let result =
-                crate::process::run_with_timeout(&mut cmd, std::time::Duration::from_secs(600))
-                    .await;
+            let result = crate::process::run_with_timeout(&mut cmd, GPU_TRANSCODE_TIMEOUT).await;
 
             let gpu_ok = matches!(&result, Ok(out) if out.status.success());
 
@@ -709,10 +840,16 @@ pub(crate) async fn convert_video(
     );
     let cpu_start = std::time::Instant::now();
     let mut cmd = crate::process::background_command("ffmpeg");
+    // Bound the encoder's thread count when the caller runs several encodes in
+    // parallel (bulk import), so `video_lane * video_threads` cores aren't
+    // oversubscribed. `0` = ffmpeg auto (all cores) for a lone/interactive encode.
+    let threads_arg = video_threads.map(|n| n.max(1)).unwrap_or(0).to_string();
     cmd.args([
         "-y",
         "-i",
         input,
+        "-threads",
+        &threads_arg,
         "-vf",
         "scale=trunc(iw*sar/2)*2:trunc(ih/2)*2,setsar=1",
         "-c:v",
@@ -731,8 +868,7 @@ pub(crate) async fn convert_video(
     ])
     .stdout(std::process::Stdio::null())
     .stderr(std::process::Stdio::null());
-    let status =
-        crate::process::status_with_timeout(&mut cmd, std::time::Duration::from_secs(600)).await;
+    let status = crate::process::status_with_timeout(&mut cmd, CPU_TRANSCODE_TIMEOUT).await;
     let ok = matches!(status, Ok(s) if s.success());
     if ok {
         tracing::info!(
@@ -977,6 +1113,104 @@ mod tests {
         batch_start(5); // active, no progress ticks
         assert_eq!(stall_check(0), None, "0 threshold disables the watchdog");
         batch_end();
+    }
+
+    #[test]
+    fn gpu_attempt_times_out_faster_than_cpu() {
+        // The GPU attempt must fail over quickly so a hung hardware encode can't
+        // burn the full CPU budget on top of its own before falling back.
+        assert!(
+            GPU_TRANSCODE_TIMEOUT < CPU_TRANSCODE_TIMEOUT,
+            "GPU attempt must be shorter than the CPU fallback"
+        );
+    }
+
+    #[test]
+    fn heartbeat_advances_the_watchdog_liveness_clock() {
+        let _lock = global_state_lock();
+        batch_start(1); // active; stamps last_progress
+        // Force the liveness clock into the past so a heartbeat visibly advances it.
+        CONV_LAST_PROGRESS_MS.store(1, Ordering::Relaxed);
+        heartbeat();
+        let (last, _, _) = stall_telemetry();
+        assert!(
+            last > 1,
+            "heartbeat() must refresh the watchdog liveness clock"
+        );
+        // Heartbeat must NOT touch the batch counters — only liveness.
+        let (_active, total, done) = progress_snapshot();
+        assert_eq!(total, 1, "heartbeat must not change total");
+        assert_eq!(done, 0, "heartbeat must not advance done");
+        batch_end();
+    }
+
+    #[test]
+    fn parallelism_single_core_is_fully_serial() {
+        // A 1-core box must never spawn more than one encode per lane.
+        let p = plan_parallelism(1, false);
+        assert_eq!(p.fast_lane, 1);
+        assert_eq!(p.video_lane, 1);
+        assert_eq!(p.video_threads, 1);
+        // Two cores: reserve one for the server ⇒ still fully serial.
+        let p = plan_parallelism(2, false);
+        assert_eq!(p.fast_lane, 1);
+        assert_eq!(p.video_lane, 1);
+    }
+
+    #[test]
+    fn parallelism_reserves_headroom_for_the_server() {
+        // Never hand out every core — ~1/8 is held back for request handling,
+        // encryption, and AI/geo so a big import can't wedge the UI.
+        for cores in [4usize, 8, 16, 32, 128, 256, 1024] {
+            let p = plan_parallelism(cores, false);
+            assert!(
+                p.fast_lane < cores,
+                "{cores} cores: must reserve headroom, got fast_lane={}",
+                p.fast_lane
+            );
+            assert!(p.fast_lane >= 1);
+        }
+    }
+
+    #[test]
+    fn parallelism_scales_up_on_a_many_core_host() {
+        // The whole point: a 128-thread threadripper should run dozens of
+        // conversions at once, not the old fixed handful.
+        let p = plan_parallelism(128, false);
+        assert_eq!(p.fast_lane, 112, "128 - 16 reserved");
+        assert!(p.video_lane > 1, "many-core CPU host runs videos in parallel");
+        // video_lane * video_threads must stay within the usable budget.
+        assert!(p.video_lane * p.video_threads <= 112);
+
+        // And it keeps scaling into the thousands without a hardcoded ceiling.
+        let p = plan_parallelism(1024, false);
+        assert_eq!(p.fast_lane, 896);
+        assert!(p.video_lane >= 100);
+    }
+
+    #[test]
+    fn parallelism_caps_video_lane_on_gpu() {
+        // Hardware encoders only expose a few sessions regardless of core count.
+        let p = plan_parallelism(128, true);
+        assert_eq!(p.fast_lane, 112, "images still fill the usable cores");
+        assert_eq!(p.video_lane, GPU_VIDEO_SESSIONS, "GPU sessions are limited");
+    }
+
+    #[test]
+    fn parallelism_video_lane_never_exceeds_fast_lane() {
+        for cores in [1usize, 2, 4, 8, 16, 64, 1024] {
+            for gpu in [false, true] {
+                let p = plan_parallelism(cores, gpu);
+                assert!(p.video_lane >= 1);
+                assert!(p.video_threads >= 1);
+                assert!(
+                    p.video_lane <= p.fast_lane,
+                    "{cores} cores gpu={gpu}: video_lane {} > fast_lane {}",
+                    p.video_lane,
+                    p.fast_lane
+                );
+            }
+        }
     }
 
     #[test]

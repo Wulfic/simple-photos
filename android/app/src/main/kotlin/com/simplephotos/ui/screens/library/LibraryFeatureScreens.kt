@@ -60,6 +60,7 @@ private fun <T> GridScaffold(
     thumbUrl: (T) -> String?,
     onItemClick: (T) -> Unit,
     emptyHint: String,
+    banner: String? = null,
 ) {
     Scaffold(
         topBar = {
@@ -73,7 +74,19 @@ private fun <T> GridScaffold(
             )
         }
     ) { padding ->
-        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+        if (banner != null) {
+            Text(
+                banner,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+            )
+        }
+        Box(modifier = Modifier.fillMaxSize()) {
             when {
                 loading -> CircularProgressIndicator(
                     modifier = Modifier.align(Alignment.Center)
@@ -105,6 +118,7 @@ private fun <T> GridScaffold(
                     }
                 }
             }
+        }
         }
     }
 }
@@ -258,16 +272,31 @@ class PeopleViewModel @Inject constructor(
             loading = false
         }
     }
+
+    /** Reassign a face detection to the chosen person, then invoke [onDone]. */
+    fun assignFace(detectionId: Long, clusterId: Long, onDone: () -> Unit) {
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { repo.assignFace(detectionId, clusterId) }
+            } catch (e: Exception) {
+                error = e.message
+            }
+            onDone()
+        }
+    }
 }
 
 @Composable
 fun PeopleScreen(
     onBack: () -> Unit,
     onPersonClick: (Long) -> Unit,
+    assignDetectionId: Long? = null,
+    onAssigned: () -> Unit = {},
     vm: PeopleViewModel = hiltViewModel(),
 ) {
+    val assigning = assignDetectionId != null
     GridScaffold(
-        title = "People",
+        title = if (assigning) "Assign to person" else "People",
         onBack = onBack,
         loading = vm.loading,
         error = vm.error,
@@ -280,8 +309,15 @@ fun PeopleScreen(
                 if (vm.serverBaseUrl.isNotEmpty()) "${vm.serverBaseUrl}/api/photos/$id/thumb" else null
             }
         },
-        onItemClick = { cluster -> onPersonClick(cluster.id) },
+        onItemClick = { cluster ->
+            if (assignDetectionId != null) {
+                vm.assignFace(assignDetectionId, cluster.id, onAssigned)
+            } else {
+                onPersonClick(cluster.id)
+            }
+        },
         emptyHint = "No face clusters yet. Enable AI in Settings to begin scanning.",
+        banner = if (assigning) "Choose the correct person for this face." else null,
     )
 }
 

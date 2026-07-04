@@ -28,7 +28,14 @@ sealed class Screen(val route: String) {
     data object SharedAlbums : Screen("shared_albums")
     data object Diagnostics : Screen("diagnostics")
     // ── Smart album sub-pages (entered from Albums screen, not Library hub) ──
-    data object People : Screen("library/people")
+    // Optional query args put the People list into "assign a face to a person"
+    // mode, launched from the photo viewer's Info panel.
+    data object People : Screen("library/people?assignPhoto={assignPhoto}&assignDetection={assignDetection}") {
+        /** Plain entry (no assign mode) — used from the Albums screen. */
+        const val base = "library/people"
+        fun createAssignRoute(photoId: String, detectionId: Long) =
+            "library/people?assignPhoto=$photoId&assignDetection=$detectionId"
+    }
     data object Pets : Screen("library/pets")
     data object Memories : Screen("library/memories")
     data object Trips : Screen("library/trips")

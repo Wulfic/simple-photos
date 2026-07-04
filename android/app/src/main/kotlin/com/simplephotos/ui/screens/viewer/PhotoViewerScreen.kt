@@ -97,6 +97,7 @@ private data class CropCorners(
 @Composable
 fun PhotoViewerScreen(
     onBack: () -> Unit,
+    onSelectPerson: (photoId: String, detectionId: Long) -> Unit = { _, _ -> },
     viewModel: PhotoViewerViewModel = hiltViewModel()
 ) {
     // Wait for the photo list before creating pager state
@@ -528,8 +529,12 @@ fun PhotoViewerScreen(
     // changes while open. Cleared on photo change so stale EXIF never lingers.
     LaunchedEffect(currentPhoto?.serverPhotoId, showInfoPanel) {
         viewModel.clearFullMetadata()
+        viewModel.clearPhotoFaces()
         if (showInfoPanel) {
-            currentPhoto?.serverPhotoId?.let { viewModel.loadFullMetadata(it) }
+            currentPhoto?.serverPhotoId?.let {
+                viewModel.loadFullMetadata(it)
+                viewModel.loadPhotoFaces(it)
+            }
         }
     }
 
@@ -1139,6 +1144,7 @@ fun PhotoViewerScreen(
             visible = showInfoPanel,
             photo = currentPhoto,
             fullMeta = viewModel.fullMetadata,
+            faces = viewModel.photoFaces,
             saving = viewModel.metadataSaving,
             error = viewModel.metadataError,
             onDismiss = { showInfoPanel = false },
@@ -1147,6 +1153,12 @@ fun PhotoViewerScreen(
             },
             onWriteExif = {
                 currentPhoto?.serverPhotoId?.let { viewModel.writeExif(it) }
+            },
+            onSelectPerson = { detectionId ->
+                currentPhoto?.serverPhotoId?.let { pid ->
+                    showInfoPanel = false
+                    onSelectPerson(pid, detectionId)
+                }
             },
             modifier = Modifier.align(Alignment.BottomCenter)
         )

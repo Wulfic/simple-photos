@@ -80,6 +80,26 @@ data class FaceClusterPhotoEntry(
     @SerializedName("created_at") val createdAt: String? = null,
 )
 
+// Mirrors server `PhotoFaceRecord` (bare array from GET
+// /api/ai/photos/{photo_id}/faces) — the faces in one photo with their current
+// person label, used by the manual reassignment UI.
+data class PhotoFace(
+    val id: Long,
+    @SerializedName("cluster_id") val clusterId: Long? = null,
+    @SerializedName("cluster_label") val clusterLabel: String? = null,
+    @SerializedName("bbox_x") val bboxX: Double = 0.0,
+    @SerializedName("bbox_y") val bboxY: Double = 0.0,
+    @SerializedName("bbox_w") val bboxW: Double = 0.0,
+    @SerializedName("bbox_h") val bboxH: Double = 0.0,
+    val confidence: Double = 0.0,
+)
+
+// Server `AssignFaceRequest { detection_id, cluster_id }`.
+data class FaceAssignRequest(
+    @SerializedName("detection_id") val detectionId: Long,
+    @SerializedName("cluster_id") val clusterId: Long,
+)
+
 // ── Object classes ──────────────────────────────────────────────────────────
 
 // Mirrors server `ObjectClassSummary` (bare array from GET /api/ai/objects).

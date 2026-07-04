@@ -95,7 +95,10 @@ async fn generate_web_preview(input_path: &Path, output_path: &Path, preview_ext
             // when no hwaccel is registered or the GPU encode fails.
             let hwaccel = crate::conversion::active_hwaccel();
             let fallback = crate::conversion::cpu_fallback_enabled();
-            crate::conversion::convert_video(input_str, output_str, hwaccel, fallback).await
+            // A single on-the-fly preview is a lone transcode — let ffmpeg
+            // auto-detect threads (all cores). The per-encode thread cap is only
+            // for the bulk ingest pass that runs many encodes in parallel.
+            crate::conversion::convert_video(input_str, output_str, hwaccel, fallback, None).await
         }
         _ => false,
     };

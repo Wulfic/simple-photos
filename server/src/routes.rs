@@ -800,6 +800,13 @@ fn ai_routes() -> Router<AppState> {
             "/ai/faces/split",
             post(crate::ai::handlers::split_face_cluster),
         )
+        // Manual per-photo face correction: list a photo's faces and reassign
+        // one to a chosen person.
+        .route(
+            "/ai/photos/{photo_id}/faces",
+            get(crate::ai::handlers::list_photo_faces),
+        )
+        .route("/ai/faces/assign", post(crate::ai::handlers::assign_face))
         .route(
             "/ai/faces/{cluster_id}/photos",
             get(crate::ai::handlers::list_cluster_photos),

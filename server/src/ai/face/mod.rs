@@ -13,9 +13,10 @@
 mod legacy;
 
 use crate::ai::models::{BoundingBox, FaceDetection};
+use crate::ai::session::SessionPool;
 use image::{imageops::FilterType, DynamicImage, GenericImageView, RgbImage};
 use std::path::Path;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 
 use ort::session::Session;
 use tracing;
@@ -66,8 +67,8 @@ const ARCFACE_DST: [[f32; 2]; 5] = [
 
 // ── Model singletons ────────────────────────────────────────────────
 
-static DET_MODEL: OnceLock<Option<Arc<Mutex<Session>>>> = OnceLock::new();
-static REC_MODEL: OnceLock<Option<Arc<Mutex<Session>>>> = OnceLock::new();
+static DET_MODEL: OnceLock<Option<Arc<SessionPool>>> = OnceLock::new();
+static REC_MODEL: OnceLock<Option<Arc<SessionPool>>> = OnceLock::new();
 
 /// Raw detection before final NMS and coordinate mapping.
 struct RawDetection {
@@ -109,9 +110,9 @@ pub fn init_face_model(model_dir: &str) {
             }
         }
         match load_onnx_det(&p) {
-            Ok(session) => {
+            Ok(pool) => {
                 tracing::info!("SCRFD detection model loaded from {:?}", p);
-                Some(Arc::new(Mutex::new(session)))
+                Some(Arc::new(pool))
             }
             Err(e) => {
                 tracing::warn!("Failed to load SCRFD model: {}. Will try legacy model.", e);
@@ -137,9 +138,9 @@ pub fn init_face_model(model_dir: &str) {
             }
         }
         match load_onnx_rec(&p) {
-            Ok(session) => {
+            Ok(pool) => {
                 tracing::info!("ArcFace recognition model loaded from {:?}", p);
-                Some(Arc::new(Mutex::new(session)))
+                Some(Arc::new(pool))
             }
             Err(e) => {
                 tracing::warn!(
@@ -184,12 +185,12 @@ pub(super) fn download_model(url: &str, dest: &Path, min_size: usize) -> Result<
     Ok(())
 }
 
-fn load_onnx_det(path: &Path) -> anyhow::Result<Session> {
-    crate::ai::session::build_session(path)
+fn load_onnx_det(path: &Path) -> anyhow::Result<SessionPool> {
+    crate::ai::session::build_session_pool(path)
 }
 
-fn load_onnx_rec(path: &Path) -> anyhow::Result<Session> {
-    crate::ai::session::build_session(path)
+fn load_onnx_rec(path: &Path) -> anyhow::Result<SessionPool> {
+    crate::ai::session::build_session_pool(path)
 }
 
 // ── Detection entry point ───────────────────────────────────────────
@@ -211,9 +212,11 @@ pub fn detect_faces_from_image(
         return Ok(vec![]);
     }
 
-    // Try SCRFD (best)
+    // Try SCRFD (best). Round-robin a session from the pool so concurrent
+    // AI-batch workers run detection in parallel instead of all blocking on one.
     if let Some(det) = DET_MODEL.get().and_then(|m| m.as_ref()) {
-        let mut session = det.lock().unwrap_or_else(|p| p.into_inner());
+        let handle = det.acquire();
+        let mut session = handle.lock().unwrap_or_else(|p| p.into_inner());
         return detect_faces_scrfd(img, min_confidence, &mut session);
     }
 
@@ -551,7 +554,8 @@ fn extract_face_embedding_with_landmarks(
 
     if let Some(rec) = REC_MODEL.get().and_then(|m| m.as_ref()) {
         if has_landmarks {
-            let mut session = rec.lock().unwrap_or_else(|p| p.into_inner());
+            let handle = rec.acquire();
+            let mut session = handle.lock().unwrap_or_else(|p| p.into_inner());
             match extract_arcface_embedding(img, landmarks, &mut session) {
                 Ok(emb) => return emb,
                 Err(e) => tracing::warn!("ArcFace embedding failed: {e}, using histogram"),
@@ -769,7 +773,8 @@ fn solve_4x4(mut a: [[f64; 4]; 4], mut b: [f64; 4]) -> [f64; 4] {
 /// which provides landmarks internally. When no model is available, falls
 /// back to a 128-dim histogram/gradient feature vector.
 pub fn extract_face_embedding(img: &DynamicImage, bbox: &BoundingBox) -> Vec<f32> {
-    if let Some(rec_arc) = REC_MODEL.get().and_then(|m| m.as_ref()) {
+    if let Some(rec_pool) = REC_MODEL.get().and_then(|m| m.as_ref()) {
+        let rec_arc = rec_pool.acquire();
         let mut rec = rec_arc.lock().unwrap_or_else(|p| p.into_inner());
         // Synthesise approximate landmarks from bbox centre for non-SCRFD path
         let (iw, ih) = img.dimensions();

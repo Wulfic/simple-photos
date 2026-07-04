@@ -516,6 +516,140 @@ pub async fn split_face_cluster(
     })))
 }
 
+/// GET /api/ai/photos/:photo_id/faces — list the faces detected in one photo,
+/// each joined to its current person (cluster) label. Powers the manual
+/// "fix the person" UI in the photo info panel.
+pub async fn list_photo_faces(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(photo_id): Path<String>,
+) -> Result<Json<Vec<PhotoFaceRecord>>, AppError> {
+    let faces: Vec<PhotoFaceRecord> = sqlx::query_as(
+        "SELECT fd.id, fd.cluster_id, fc.label AS cluster_label, \
+                fd.bbox_x, fd.bbox_y, fd.bbox_w, fd.bbox_h, fd.confidence \
+         FROM face_detections fd \
+         LEFT JOIN face_clusters fc ON fc.id = fd.cluster_id AND fc.user_id = fd.user_id \
+         WHERE fd.user_id = ?1 AND fd.photo_id = ?2 \
+         ORDER BY fd.confidence DESC",
+    )
+    .bind(&auth.user_id)
+    .bind(&photo_id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    Ok(Json(faces))
+}
+
+/// Recompute and persist `photo_count` for a face cluster. When `prune_empty`
+/// is set and the cluster no longer has any detections it is deleted (used for
+/// the *source* cluster of a move so orphans don't linger in the People grid).
+async fn refresh_face_cluster_count(
+    pool: &sqlx::SqlitePool,
+    user_id: &str,
+    cluster_id: i64,
+    prune_empty: bool,
+) -> Result<(), AppError> {
+    let count: (i64,) = sqlx::query_as(
+        "SELECT COUNT(DISTINCT photo_id) FROM face_detections WHERE cluster_id = ?1 AND user_id = ?2",
+    )
+    .bind(cluster_id)
+    .bind(user_id)
+    .fetch_one(pool)
+    .await?;
+
+    if prune_empty && count.0 == 0 {
+        sqlx::query("DELETE FROM face_clusters WHERE id = ?1 AND user_id = ?2")
+            .bind(cluster_id)
+            .bind(user_id)
+            .execute(pool)
+            .await?;
+    } else {
+        sqlx::query(
+            "UPDATE face_clusters SET photo_count = ?1, updated_at = datetime('now') \
+             WHERE id = ?2 AND user_id = ?3",
+        )
+        .bind(count.0)
+        .bind(cluster_id)
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+    }
+    Ok(())
+}
+
+/// POST /api/ai/faces/assign — manually move one face detection into a chosen
+/// person (cluster). This is the correction path when the AI grouped a face
+/// under the wrong person. Keeps cluster photo-counts and the photo's
+/// `person:*` tags consistent, and prunes the source cluster if it empties out.
+pub async fn assign_face(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<AssignFaceRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    // Look up the detection (must belong to this user) and remember where it was.
+    let detection: Option<(Option<i64>, String)> = sqlx::query_as(
+        "SELECT cluster_id, photo_id FROM face_detections WHERE id = ?1 AND user_id = ?2",
+    )
+    .bind(body.detection_id)
+    .bind(&auth.user_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let (old_cluster_id, photo_id) = detection.ok_or(AppError::NotFound)?;
+
+    // The target person must exist and belong to this user.
+    let target: Option<(Option<String>,)> =
+        sqlx::query_as("SELECT label FROM face_clusters WHERE id = ?1 AND user_id = ?2")
+            .bind(body.cluster_id)
+            .bind(&auth.user_id)
+            .fetch_optional(&state.pool)
+            .await?;
+    if target.is_none() {
+        return Err(AppError::BadRequest("Target person not found".into()));
+    }
+
+    // No-op if it's already assigned to the requested person.
+    if old_cluster_id == Some(body.cluster_id) {
+        return Ok(Json(serde_json::json!({
+            "detection_id": body.detection_id,
+            "cluster_id": body.cluster_id,
+            "photo_id": photo_id,
+            "unchanged": true,
+        })));
+    }
+
+    sqlx::query("UPDATE face_detections SET cluster_id = ?1 WHERE id = ?2 AND user_id = ?3")
+        .bind(body.cluster_id)
+        .bind(body.detection_id)
+        .bind(&auth.user_id)
+        .execute(&state.pool)
+        .await?;
+
+    // Keep counts honest: bump the target, and prune the source if now empty.
+    refresh_face_cluster_count(&state.pool, &auth.user_id, body.cluster_id, false).await?;
+    if let Some(old) = old_cluster_id {
+        refresh_face_cluster_count(&state.pool, &auth.user_id, old, true).await?;
+    }
+
+    // Person tags on a photo are derived from every cluster present in it, so
+    // rebuild them for this photo after the move.
+    tagging::resync_photo_face_tags(&state.pool, &auth.user_id, &photo_id).await?;
+
+    tracing::info!(
+        user_id = %auth.user_id,
+        detection_id = body.detection_id,
+        photo_id = %photo_id,
+        from_cluster = ?old_cluster_id,
+        to_cluster = body.cluster_id,
+        "Manual face reassignment"
+    );
+
+    Ok(Json(serde_json::json!({
+        "detection_id": body.detection_id,
+        "cluster_id": body.cluster_id,
+        "photo_id": photo_id,
+    })))
+}
+
 // ── Object detections ────────────────────────────────────────────────
 
 /// GET /api/ai/objects — list unique object classes detected for this user.

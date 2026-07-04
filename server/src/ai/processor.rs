@@ -7,10 +7,11 @@
 //! Rate-limited by `photos_per_minute` config to avoid overwhelming the CPU.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use futures_util::stream::{self, StreamExt};
 use sqlx::SqlitePool;
 use tokio::time;
 use tracing;
@@ -245,47 +246,66 @@ async fn process_batch(
     );
 
     let batch_start = Instant::now();
-    let mut total_faces = 0usize;
-    let mut total_objects = 0usize;
+    let total_faces = AtomicUsize::new(0);
+    let total_objects = AtomicUsize::new(0);
 
-    for (photo_id, user_id, filename) in &unprocessed {
-        let photo_start = Instant::now();
-        match process_single_photo(
-            pool,
-            engine,
-            config,
-            storage_root,
-            jwt_secret,
-            photo_id,
-            user_id,
-            filename,
-        )
-        .await
-        {
-            Ok((nf, no)) => {
-                total_faces += nf;
-                total_objects += no;
-                tracing::info!(
-                    photo_id = %photo_id,
-                    filename = %filename,
-                    faces = nf,
-                    objects = no,
-                    elapsed_ms = photo_start.elapsed().as_millis(),
-                    "AI processor: photo processed"
-                );
+    // Process the batch concurrently. Each ONNX model is a *pool* of sessions
+    // (see `session::build_session_pool`), so `concurrency` inferences run in
+    // parallel — one per pooled session — while their decrypt / decode / DB
+    // steps overlap. The pool size already divides the core budget across
+    // sessions, so aggregate CPU use matches the old single-session path; this
+    // just fills the cores that used to sit idle between serial inferences.
+    // A pool of 1 (single-core host / `SIMPLE_PHOTOS_AI_JOBS=1`) is exactly the
+    // old serial loop.
+    let concurrency = crate::ai::session::ai_pool_plan().0.max(1);
+    tracing::debug!(concurrency, "AI processor: batch concurrency");
+
+    stream::iter(unprocessed.iter())
+        .for_each_concurrent(concurrency, |(photo_id, user_id, filename)| {
+            let total_faces = &total_faces;
+            let total_objects = &total_objects;
+            async move {
+                let photo_start = Instant::now();
+                match process_single_photo(
+                    pool, engine, config, storage_root, jwt_secret, photo_id, user_id, filename,
+                )
+                .await
+                {
+                    Ok((nf, no)) => {
+                        total_faces.fetch_add(nf, Ordering::Relaxed);
+                        total_objects.fetch_add(no, Ordering::Relaxed);
+                        tracing::info!(
+                            photo_id = %photo_id,
+                            filename = %filename,
+                            faces = nf,
+                            objects = no,
+                            elapsed_ms = photo_start.elapsed().as_millis(),
+                            "AI processor: photo processed"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            photo_id = %photo_id,
+                            filename = %filename,
+                            error = %e,
+                            "AI processor: failed to process photo — marking done to skip retry"
+                        );
+                        // Mark as processed anyway to avoid infinite retry loops.
+                        if let Err(me) = mark_processed(pool, photo_id, user_id).await {
+                            tracing::warn!(
+                                photo_id = %photo_id,
+                                error = %me,
+                                "AI processor: failed to mark errored photo processed"
+                            );
+                        }
+                    }
+                }
             }
-            Err(e) => {
-                tracing::warn!(
-                    photo_id = %photo_id,
-                    filename = %filename,
-                    error = %e,
-                    "AI processor: failed to process photo — marking done to skip retry"
-                );
-                // Mark as processed anyway to avoid infinite retry loops
-                mark_processed(pool, photo_id, user_id).await?;
-            }
-        }
-    }
+        })
+        .await;
+
+    let total_faces = total_faces.into_inner();
+    let total_objects = total_objects.into_inner();
 
     tracing::info!(
         photos = unprocessed.len(),

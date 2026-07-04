@@ -16,6 +16,7 @@
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
+use futures_util::stream::{self, StreamExt};
 use futures_util::TryStreamExt;
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -136,6 +137,387 @@ pub async fn run_conversion_pass(
     }
 }
 
+/// A non-native file discovered on disk that needs converting to a browser
+/// format before it can be registered.
+struct ConvertCandidate {
+    abs_path: PathBuf,
+    rel_path: String,
+    name: String,
+    target: conversion::ConversionTarget,
+    size: i64,
+    modified: Option<String>,
+}
+
+/// Shared, cheaply-cloneable context for the concurrent per-file conversion
+/// workers. Everything here is read-only for the duration of a pass except the
+/// database (which serialises its own writes), so it can be borrowed across all
+/// the in-flight `for_each_concurrent` tasks.
+struct ConvCtx {
+    pool: sqlx::SqlitePool,
+    storage_root: PathBuf,
+    admin_id: String,
+    conv_dir: PathBuf,
+    pano_sensitivity: crate::photos::metadata::PanoSensitivity,
+}
+
+/// Convert one candidate to a browser-native format and register it (or, on a
+/// conversion failure, register the original to avoid data loss). Returns `true`
+/// when a new row was registered so the caller can tally the batch.
+///
+/// This is the body run concurrently across the CPU cores. The heavy step is the
+/// `convert_file` transcode; the DB writes use `INSERT OR IGNORE` + hash dedup so
+/// concurrent workers (and concurrent scans) can't create duplicates.
+/// `video_threads` bounds each CPU video encode's thread count so a lane running
+/// several encodes at once doesn't oversubscribe the cores.
+async fn process_candidate(
+    candidate: &ConvertCandidate,
+    ctx: &ConvCtx,
+    video_threads: Option<usize>,
+) -> bool {
+    let ConvCtx {
+        pool,
+        storage_root,
+        admin_id,
+        conv_dir,
+        pano_sensitivity,
+    } = ctx;
+    let pano_sensitivity = *pano_sensitivity;
+
+    let conv_id = Uuid::new_v4();
+    let conv_filename = format!("{}.{}", conv_id, candidate.target.extension);
+    let conv_abs = conv_dir.join(&conv_filename);
+    let conv_rel = format!(".converted/{conv_filename}");
+
+    // Log BEFORE the transcode with file + category so that, if a single
+    // file hangs (the Windows "conversion stalls" report, #10), the last
+    // "converting" line names the culprit — the matching "converted in"
+    // line below never appears for a stuck file.
+    let file_start = std::time::Instant::now();
+    tracing::info!(
+        file = %candidate.name,
+        category = ?candidate.target.category,
+        size_bytes = candidate.size,
+        "[INGEST] converting"
+    );
+
+    // Heartbeat: a long transcode emits no `progress_tick` until it returns
+    // (up to the GPU + CPU attempt budgets), so pulse liveness every ~20s
+    // WHILE this file converts — otherwise the frontend's short-fuse "looks
+    // stuck" banner fires mid-encode on a large/slow video. Bounded to ~20 min
+    // so a file that somehow never returns (e.g. an unkillable ffmpeg on a dead
+    // network mount) stops heartbeating and the 2h stuck-job watchdog can still
+    // force-recover the pipeline.
+    let heartbeat = tokio::spawn(async {
+        for _ in 0..60 {
+            tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+            conversion::heartbeat();
+        }
+    });
+    let convert_result =
+        conversion::convert_file(&candidate.abs_path, &conv_abs, &candidate.target, video_threads)
+            .await;
+    heartbeat.abort();
+
+    match convert_result {
+        Ok(()) => {
+            conversion::progress_tick();
+            tracing::info!(
+                file = %candidate.name,
+                category = ?candidate.target.category,
+                elapsed_ms = file_start.elapsed().as_millis(),
+                "[INGEST] converted in"
+            );
+            let new_name = {
+                let stem = std::path::Path::new(&candidate.name)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("converted");
+                format!("{}.{}", stem, candidate.target.extension)
+            };
+            tracing::info!(
+                original = %candidate.name,
+                converted = %new_name,
+                "[INGEST] Converted file to browser-native format"
+            );
+
+            // ── Register the converted file in the DB ────
+            let photo_id = Uuid::new_v4().to_string();
+            let now = utc_now_iso();
+            let work_mime = candidate.target.mime_type;
+            let work_media_type = conversion::media_type_str(candidate.target.category);
+            let thumb_ext = if work_mime == "image/gif" {
+                "gif"
+            } else {
+                "jpg"
+            };
+            let thumb_rel = format!(".thumbnails/{photo_id}.thumb.{thumb_ext}");
+
+            // Extract metadata from the ORIGINAL file first — it has the real
+            // EXIF DateTimeOriginal, GPS, and camera data.  Conversion
+            // (FFmpeg/ImageMagick) typically strips EXIF from the output,
+            // so reading the converted file would lose the original dates.
+            let (_, _, orig_cam, orig_lat, orig_lon, orig_taken, orig_taken_offset) =
+                extract_media_metadata_async(candidate.abs_path.clone()).await;
+
+            // Extract dimensions from the converted file (the output format
+            // may have different dimensions due to SAR correction, etc.).
+            let (img_w, img_h, conv_cam, conv_lat, conv_lon, conv_taken, _) =
+                extract_media_metadata_async(conv_abs.clone()).await;
+
+            // ── Subtype detection from the ORIGINAL file ─────────────
+            // Conversion strips XMP, so an iPhone/Samsung HEIC panorama,
+            // 360° sphere, burst frame, or motion photo would lose its
+            // nature forever if we only ever looked at the converted
+            // JPEG.  Scan the original's prefix instead.
+            let mut subtype_info = if candidate.target.category == conversion::MediaCategory::Image {
+                let prefix = crate::photos::metadata::read_file_prefix(
+                    &candidate.abs_path,
+                    crate::photos::metadata::XMP_SCAN_PREFIX_BYTES,
+                )
+                .await;
+                crate::photos::metadata::extract_xmp_subtype(&prefix)
+            } else {
+                Default::default()
+            };
+            if candidate.target.category == conversion::MediaCategory::Image {
+                crate::photos::metadata::apply_aspect_subtype_fallback_with(
+                    &mut subtype_info,
+                    img_w,
+                    img_h,
+                    pano_sensitivity,
+                );
+            }
+
+            // Prefer original file's metadata; fall back to converted, then mtime.
+            let cam_model = orig_cam.or(conv_cam);
+            let exif_lat = orig_lat.or(conv_lat);
+            let exif_lon = orig_lon.or(conv_lon);
+            let final_taken_at = orig_taken
+                .map(|t| normalize_iso_timestamp(&t))
+                .or(conv_taken.map(|t| normalize_iso_timestamp(&t)))
+                .or(candidate.modified.clone());
+            // Only the original carries EXIF; conversion strips the zone.
+            let final_taken_offset = orig_taken_offset;
+
+            let photo_hash = compute_photo_hash_streaming(&conv_abs).await;
+
+            // Hash-based dedup: skip if an identical file was already registered
+            // (catches re-conversion of the same source across concurrent scans).
+            if let Some(ref hash) = photo_hash {
+                let dup_exists: bool = sqlx::query_scalar(
+                    "SELECT COUNT(*) > 0 FROM photos WHERE photo_hash = ? AND user_id = ?",
+                )
+                .bind(hash)
+                .bind(admin_id)
+                .fetch_one(pool)
+                .await
+                .unwrap_or(false);
+
+                if dup_exists {
+                    tracing::debug!(
+                        hash = %hash,
+                        file = %candidate.name,
+                        "[INGEST] Duplicate hash detected, skipping"
+                    );
+                    // Clean up the converted file we just created
+                    let _ = tokio::fs::remove_file(&conv_abs).await;
+                    return false;
+                }
+            }
+
+            let final_size = tokio::fs::metadata(&conv_abs)
+                .await
+                .map(|m| m.len() as i64)
+                .unwrap_or(candidate.size);
+
+            let source_path = Some(candidate.rel_path.clone());
+
+            let insert_result = sqlx::query(
+                "INSERT OR IGNORE INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
+                 size_bytes, width, height, taken_at, latitude, longitude, camera_model, thumb_path, \
+                 created_at, photo_hash, source_path, photo_subtype, burst_id, taken_at_offset) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(&photo_id)
+            .bind(admin_id)
+            .bind(&new_name)
+            .bind(&conv_rel)
+            .bind(work_mime)
+            .bind(work_media_type)
+            .bind(final_size)
+            .bind(img_w)
+            .bind(img_h)
+            .bind(&final_taken_at)
+            .bind(exif_lat)
+            .bind(exif_lon)
+            .bind(&cam_model)
+            .bind(&thumb_rel)
+            .bind(&now)
+            .bind(&photo_hash)
+            .bind(&source_path)
+            .bind(&subtype_info.photo_subtype)
+            .bind(&subtype_info.burst_id)
+            .bind(&final_taken_offset)
+            .execute(pool)
+            .await;
+
+            match insert_result {
+                Ok(result) if result.rows_affected() == 0 => {
+                    tracing::debug!(
+                        file = %conv_rel,
+                        "[INGEST] Already registered (concurrent scan), skipping"
+                    );
+                    return false;
+                }
+                Err(e) => {
+                    tracing::error!(
+                        file = %conv_rel,
+                        error = %e,
+                        "[INGEST] Failed to register converted photo"
+                    );
+                    return false;
+                }
+                Ok(_) => {}
+            }
+
+            // Motion photos keep their MP4 trailer in the ORIGINAL file
+            // (conversion drops it) — extract and store it now so the
+            // viewer's LIVE playback works for converted HEICs too.
+            if subtype_info.photo_subtype.as_deref() == Some("motion") {
+                let orig_bytes = tokio::fs::read(&candidate.abs_path).await.unwrap_or_default();
+                if !orig_bytes.is_empty() {
+                    crate::photos::motion::extract_and_store_motion_video(
+                        pool,
+                        storage_root,
+                        admin_id,
+                        &photo_id,
+                        &orig_bytes,
+                        subtype_info.motion_video_offset,
+                    )
+                    .await;
+                } else {
+                    tracing::warn!(
+                        file = %candidate.name,
+                        "[INGEST] Motion photo original unreadable — video trailer not extracted"
+                    );
+                }
+            }
+
+            // Generate thumbnail for the converted file.
+            let thumb_abs = storage_root.join(&thumb_rel);
+            if generate_thumbnail_file(&conv_abs, &thumb_abs, work_mime, None).await {
+                tracing::debug!(file = %conv_rel, "[INGEST] Generated thumbnail");
+            } else {
+                tracing::warn!(file = %conv_rel, "[INGEST] Failed to generate thumbnail");
+            }
+
+            true
+        }
+        Err(e) => {
+            conversion::progress_tick();
+            // Conversion failed (unsupported codec, GPU failure with CPU
+            // fallback disabled, a transcode crash, …). Do NOT silently drop
+            // the file — that loses data and makes the library smaller than
+            // the source on disk (issue #1: "reported size lower than actual;
+            // possible missing files"). Register the ORIGINAL in place so it
+            // is counted, encrypted/backed up in step 5, and downloadable. It
+            // may not render natively, but the bytes are preserved.
+            tracing::warn!(
+                file = %candidate.name,
+                category = ?candidate.target.category,
+                elapsed_ms = file_start.elapsed().as_millis(),
+                error = %e,
+                "[INGEST] Conversion failed — registering ORIGINAL to avoid data loss"
+            );
+            // Drop any partial converted output the failed attempt left behind.
+            let _ = tokio::fs::remove_file(&conv_abs).await;
+
+            let photo_id = Uuid::new_v4().to_string();
+            let now = utc_now_iso();
+            let orig_mime = crate::media::mime_from_extension(&candidate.name);
+            let orig_media_type = conversion::media_type_str(candidate.target.category);
+
+            let (img_w, img_h, orig_cam, orig_lat, orig_lon, orig_taken, orig_taken_offset) =
+                extract_media_metadata_async(candidate.abs_path.clone()).await;
+            let final_taken_at = orig_taken
+                .map(|t| normalize_iso_timestamp(&t))
+                .or(candidate.modified.clone());
+
+            // Hash-based dedup against already-registered files.
+            let photo_hash = compute_photo_hash_streaming(&candidate.abs_path).await;
+            if let Some(ref hash) = photo_hash {
+                let dup_exists: bool = sqlx::query_scalar(
+                    "SELECT COUNT(*) > 0 FROM photos WHERE photo_hash = ? AND user_id = ?",
+                )
+                .bind(hash)
+                .bind(admin_id)
+                .fetch_one(pool)
+                .await
+                .unwrap_or(false);
+                if dup_exists {
+                    return false;
+                }
+            }
+
+            // Best-effort thumbnail straight from the original — the thumbnail
+            // pipeline can often read a format the browser-native conversion
+            // choked on. Only record thumb_path when generation succeeds.
+            let thumb_ext = if orig_mime == "image/gif" {
+                "gif"
+            } else {
+                "jpg"
+            };
+            let thumb_rel = format!(".thumbnails/{photo_id}.thumb.{thumb_ext}");
+            let thumb_abs = storage_root.join(&thumb_rel);
+            let thumb_for_db: Option<String> =
+                if generate_thumbnail_file(&candidate.abs_path, &thumb_abs, orig_mime, None).await {
+                    Some(thumb_rel)
+                } else {
+                    None
+                };
+
+            let insert_result = sqlx::query(
+                "INSERT OR IGNORE INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
+                 size_bytes, width, height, taken_at, latitude, longitude, camera_model, thumb_path, \
+                 created_at, photo_hash, source_path, taken_at_offset) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(&photo_id)
+            .bind(admin_id)
+            .bind(&candidate.name)
+            .bind(&candidate.rel_path)
+            .bind(orig_mime)
+            .bind(orig_media_type)
+            .bind(candidate.size)
+            .bind(img_w)
+            .bind(img_h)
+            .bind(&final_taken_at)
+            .bind(orig_lat)
+            .bind(orig_lon)
+            .bind(&orig_cam)
+            .bind(&thumb_for_db)
+            .bind(&now)
+            .bind(&photo_hash)
+            .bind(&candidate.rel_path)
+            .bind(&orig_taken_offset)
+            .execute(pool)
+            .await;
+            match insert_result {
+                Ok(result) if result.rows_affected() > 0 => true,
+                Ok(_) => false,
+                Err(err) => {
+                    tracing::error!(
+                        file = %candidate.name,
+                        error = %err,
+                        "[INGEST] Failed to register original after conversion failure"
+                    );
+                    false
+                }
+            }
+        }
+    }
+}
+
 /// One full conversion pass: walk the tree, convert non-native files, register
 /// the results, and encrypt them. Always invoked under the conversion lock by
 /// [`run_conversion_pass`], which also handles the rerun-on-trigger semantics.
@@ -239,15 +621,6 @@ async fn run_conversion_pass_inner(
     }
 
     // ── Step 2: Walk directory and collect convertible candidates ─────────
-    struct ConvertCandidate {
-        abs_path: PathBuf,
-        rel_path: String,
-        name: String,
-        target: conversion::ConversionTarget,
-        size: i64,
-        modified: Option<String>,
-    }
-
     let mut candidates: Vec<ConvertCandidate> = Vec::new();
     let mut queue = vec![storage_root.clone()];
 
@@ -351,331 +724,72 @@ async fn run_conversion_pass_inner(
     let batch_guard = conversion::ConversionBatchGuard::start(candidates.len() as i64);
 
     let conv_dir = storage_root.join(".converted");
-    let mut registered = 0i64;
 
-    for candidate in &candidates {
-        let conv_id = Uuid::new_v4();
-        let conv_filename = format!("{}.{}", conv_id, candidate.target.extension);
-        let conv_abs = conv_dir.join(&conv_filename);
-        let conv_rel = format!(".converted/{conv_filename}");
+    // Auto-scale conversion concurrency to the host: a single-core box runs
+    // everything serially, a many-core workstation runs dozens of encodes at
+    // once — always leaving headroom for the rest of the server. The video lane
+    // is kept separate so hardware encoders / thread-hungry libx264 don't
+    // oversubscribe the cores the fast (image/audio) lane is already saturating.
+    let gpu = conversion::active_hwaccel()
+        .map(|h| h.is_gpu())
+        .unwrap_or(false);
+    let plan = conversion::detect_parallelism(gpu);
+    tracing::info!(
+        fast_lane = plan.fast_lane,
+        video_lane = plan.video_lane,
+        video_threads = plan.video_threads,
+        gpu,
+        "[INGEST] Conversion parallelism plan (auto-scaled to host cores)"
+    );
 
-        // Log BEFORE the transcode with file + category so that, if a single
-        // file hangs (the Windows "conversion stalls" report, #10), the last
-        // "converting" line names the culprit — the matching "converted in"
-        // line below never appears for a stuck file.
-        let file_start = std::time::Instant::now();
-        tracing::info!(
-            file = %candidate.name,
-            category = ?candidate.target.category,
-            size_bytes = candidate.size,
-            "[INGEST] converting"
-        );
+    let ctx = ConvCtx {
+        pool: pool.clone(),
+        storage_root: storage_root.clone(),
+        admin_id: admin_id.clone(),
+        conv_dir,
+        pano_sensitivity,
+    };
+    let registered = std::sync::atomic::AtomicI64::new(0);
 
-        match conversion::convert_file(&candidate.abs_path, &conv_abs, &candidate.target).await {
-            Ok(()) => {
-                conversion::progress_tick();
-                tracing::info!(
-                    file = %candidate.name,
-                    category = ?candidate.target.category,
-                    elapsed_ms = file_start.elapsed().as_millis(),
-                    "[INGEST] converted in"
-                );
-                let new_name = {
-                    let stem = std::path::Path::new(&candidate.name)
-                        .file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("converted");
-                    format!("{}.{}", stem, candidate.target.extension)
-                };
-                tracing::info!(
-                    original = %candidate.name,
-                    converted = %new_name,
-                    "[INGEST] Converted file to browser-native format"
-                );
+    // Split fast (image/audio) from slow (video) work. Fast formats run first at
+    // full width so a mixed import shows steady progress instead of appearing to
+    // stall on the first big video (#10); videos then run in their own, narrower
+    // lane. `partition` preserves the stable priority sort within each group.
+    let (videos, fast): (Vec<&ConvertCandidate>, Vec<&ConvertCandidate>) = candidates
+        .iter()
+        .partition(|c| c.target.category == conversion::MediaCategory::Video);
 
-                // ── Step 4: Register the converted file in the DB ────
-                let photo_id = Uuid::new_v4().to_string();
-                let now = utc_now_iso();
-                let work_mime = candidate.target.mime_type;
-                let work_media_type = conversion::media_type_str(candidate.target.category);
-                let thumb_ext = if work_mime == "image/gif" {
-                    "gif"
-                } else {
-                    "jpg"
-                };
-                let thumb_rel = format!(".thumbnails/{photo_id}.thumb.{thumb_ext}");
-
-                // Extract metadata from the ORIGINAL file first — it has the real
-                // EXIF DateTimeOriginal, GPS, and camera data.  Conversion
-                // (FFmpeg/ImageMagick) typically strips EXIF from the output,
-                // so reading the converted file would lose the original dates.
-                let (_, _, orig_cam, orig_lat, orig_lon, orig_taken, orig_taken_offset) =
-                    extract_media_metadata_async(candidate.abs_path.clone()).await;
-
-                // Extract dimensions from the converted file (the output format
-                // may have different dimensions due to SAR correction, etc.).
-                let (img_w, img_h, conv_cam, conv_lat, conv_lon, conv_taken, _) =
-                    extract_media_metadata_async(conv_abs.clone()).await;
-
-                // ── Subtype detection from the ORIGINAL file ─────────────
-                // Conversion strips XMP, so an iPhone/Samsung HEIC panorama,
-                // 360° sphere, burst frame, or motion photo would lose its
-                // nature forever if we only ever looked at the converted
-                // JPEG.  Scan the original's prefix instead.
-                let mut subtype_info =
-                    if candidate.target.category == conversion::MediaCategory::Image {
-                        let prefix = crate::photos::metadata::read_file_prefix(
-                            &candidate.abs_path,
-                            crate::photos::metadata::XMP_SCAN_PREFIX_BYTES,
-                        )
-                        .await;
-                        crate::photos::metadata::extract_xmp_subtype(&prefix)
-                    } else {
-                        Default::default()
-                    };
-                if candidate.target.category == conversion::MediaCategory::Image {
-                    crate::photos::metadata::apply_aspect_subtype_fallback_with(
-                        &mut subtype_info,
-                        img_w,
-                        img_h,
-                        pano_sensitivity,
-                    );
-                }
-
-                // Prefer original file's metadata; fall back to converted, then mtime.
-                let cam_model = orig_cam.or(conv_cam);
-                let exif_lat = orig_lat.or(conv_lat);
-                let exif_lon = orig_lon.or(conv_lon);
-                let final_taken_at = orig_taken
-                    .map(|t| normalize_iso_timestamp(&t))
-                    .or(conv_taken.map(|t| normalize_iso_timestamp(&t)))
-                    .or(candidate.modified.clone());
-                // Only the original carries EXIF; conversion strips the zone.
-                let final_taken_offset = orig_taken_offset;
-
-                let photo_hash = compute_photo_hash_streaming(&conv_abs).await;
-
-                // Hash-based dedup: skip if an identical file was already registered
-                // (catches re-conversion of the same source across concurrent scans).
-                if let Some(ref hash) = photo_hash {
-                    let dup_exists: bool = sqlx::query_scalar(
-                        "SELECT COUNT(*) > 0 FROM photos WHERE photo_hash = ? AND user_id = ?",
-                    )
-                    .bind(hash)
-                    .bind(&admin_id)
-                    .fetch_one(&pool)
-                    .await
-                    .unwrap_or(false);
-
-                    if dup_exists {
-                        tracing::debug!(
-                            hash = %hash,
-                            file = %candidate.name,
-                            "[INGEST] Duplicate hash detected, skipping"
-                        );
-                        // Clean up the converted file we just created
-                        let _ = tokio::fs::remove_file(&conv_abs).await;
-                        continue;
-                    }
-                }
-
-                let final_size = tokio::fs::metadata(&conv_abs)
-                    .await
-                    .map(|m| m.len() as i64)
-                    .unwrap_or(candidate.size);
-
-                let source_path = Some(candidate.rel_path.clone());
-
-                let insert_result = sqlx::query(
-                    "INSERT OR IGNORE INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
-                     size_bytes, width, height, taken_at, latitude, longitude, camera_model, thumb_path, \
-                     created_at, photo_hash, source_path, photo_subtype, burst_id, taken_at_offset) \
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                )
-                .bind(&photo_id)
-                .bind(&admin_id)
-                .bind(&new_name)
-                .bind(&conv_rel)
-                .bind(work_mime)
-                .bind(work_media_type)
-                .bind(final_size)
-                .bind(img_w)
-                .bind(img_h)
-                .bind(&final_taken_at)
-                .bind(exif_lat)
-                .bind(exif_lon)
-                .bind(&cam_model)
-                .bind(&thumb_rel)
-                .bind(&now)
-                .bind(&photo_hash)
-                .bind(&source_path)
-                .bind(&subtype_info.photo_subtype)
-                .bind(&subtype_info.burst_id)
-                .bind(&final_taken_offset)
-                .execute(&pool)
-                .await;
-
-                match insert_result {
-                    Ok(result) if result.rows_affected() == 0 => {
-                        tracing::debug!(
-                            file = %conv_rel,
-                            "[INGEST] Already registered (concurrent scan), skipping"
-                        );
-                        continue;
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            file = %conv_rel,
-                            error = %e,
-                            "[INGEST] Failed to register converted photo"
-                        );
-                        continue;
-                    }
-                    Ok(_) => {}
-                }
-
-                // Motion photos keep their MP4 trailer in the ORIGINAL file
-                // (conversion drops it) — extract and store it now so the
-                // viewer's LIVE playback works for converted HEICs too.
-                if subtype_info.photo_subtype.as_deref() == Some("motion") {
-                    let orig_bytes = tokio::fs::read(&candidate.abs_path)
-                        .await
-                        .unwrap_or_default();
-                    if !orig_bytes.is_empty() {
-                        crate::photos::motion::extract_and_store_motion_video(
-                            &pool,
-                            &storage_root,
-                            &admin_id,
-                            &photo_id,
-                            &orig_bytes,
-                            subtype_info.motion_video_offset,
-                        )
-                        .await;
-                    } else {
-                        tracing::warn!(
-                            file = %candidate.name,
-                            "[INGEST] Motion photo original unreadable — video trailer not extracted"
-                        );
-                    }
-                }
-
-                // Generate thumbnail for the converted file.
-                let thumb_abs = storage_root.join(&thumb_rel);
-                if generate_thumbnail_file(&conv_abs, &thumb_abs, work_mime, None).await {
-                    tracing::debug!(file = %conv_rel, "[INGEST] Generated thumbnail");
-                } else {
-                    tracing::warn!(file = %conv_rel, "[INGEST] Failed to generate thumbnail");
-                }
-
-                registered += 1;
-            }
-            Err(e) => {
-                conversion::progress_tick();
-                // Conversion failed (unsupported codec, GPU failure with CPU
-                // fallback disabled, a transcode crash, …). Do NOT silently drop
-                // the file — that loses data and makes the library smaller than
-                // the source on disk (issue #1: "reported size lower than actual;
-                // possible missing files"). Register the ORIGINAL in place so it
-                // is counted, encrypted/backed up in step 5, and downloadable. It
-                // may not render natively, but the bytes are preserved.
-                tracing::warn!(
-                    file = %candidate.name,
-                    category = ?candidate.target.category,
-                    elapsed_ms = file_start.elapsed().as_millis(),
-                    error = %e,
-                    "[INGEST] Conversion failed — registering ORIGINAL to avoid data loss"
-                );
-                // Drop any partial converted output the failed attempt left behind.
-                let _ = tokio::fs::remove_file(&conv_abs).await;
-
-                let photo_id = Uuid::new_v4().to_string();
-                let now = utc_now_iso();
-                let orig_mime = crate::media::mime_from_extension(&candidate.name);
-                let orig_media_type = conversion::media_type_str(candidate.target.category);
-
-                let (img_w, img_h, orig_cam, orig_lat, orig_lon, orig_taken, orig_taken_offset) =
-                    extract_media_metadata_async(candidate.abs_path.clone()).await;
-                let final_taken_at = orig_taken
-                    .map(|t| normalize_iso_timestamp(&t))
-                    .or(candidate.modified.clone());
-
-                // Hash-based dedup against already-registered files.
-                let photo_hash = compute_photo_hash_streaming(&candidate.abs_path).await;
-                if let Some(ref hash) = photo_hash {
-                    let dup_exists: bool = sqlx::query_scalar(
-                        "SELECT COUNT(*) > 0 FROM photos WHERE photo_hash = ? AND user_id = ?",
-                    )
-                    .bind(hash)
-                    .bind(&admin_id)
-                    .fetch_one(&pool)
-                    .await
-                    .unwrap_or(false);
-                    if dup_exists {
-                        continue;
-                    }
-                }
-
-                // Best-effort thumbnail straight from the original — the thumbnail
-                // pipeline can often read a format the browser-native conversion
-                // choked on. Only record thumb_path when generation succeeds.
-                let thumb_ext = if orig_mime == "image/gif" {
-                    "gif"
-                } else {
-                    "jpg"
-                };
-                let thumb_rel = format!(".thumbnails/{photo_id}.thumb.{thumb_ext}");
-                let thumb_abs = storage_root.join(&thumb_rel);
-                let thumb_for_db: Option<String> =
-                    if generate_thumbnail_file(&candidate.abs_path, &thumb_abs, orig_mime, None)
-                        .await
-                    {
-                        Some(thumb_rel)
-                    } else {
-                        None
-                    };
-
-                let insert_result = sqlx::query(
-                    "INSERT OR IGNORE INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
-                     size_bytes, width, height, taken_at, latitude, longitude, camera_model, thumb_path, \
-                     created_at, photo_hash, source_path, taken_at_offset) \
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                )
-                .bind(&photo_id)
-                .bind(&admin_id)
-                .bind(&candidate.name)
-                .bind(&candidate.rel_path)
-                .bind(orig_mime)
-                .bind(orig_media_type)
-                .bind(candidate.size)
-                .bind(img_w)
-                .bind(img_h)
-                .bind(&final_taken_at)
-                .bind(orig_lat)
-                .bind(orig_lon)
-                .bind(&orig_cam)
-                .bind(&thumb_for_db)
-                .bind(&now)
-                .bind(&photo_hash)
-                .bind(&candidate.rel_path)
-                .bind(&orig_taken_offset)
-                .execute(&pool)
-                .await;
-                match insert_result {
-                    Ok(result) if result.rows_affected() > 0 => {
-                        registered += 1;
-                    }
-                    Ok(_) => {}
-                    Err(err) => {
-                        tracing::error!(
-                            file = %candidate.name,
-                            error = %err,
-                            "[INGEST] Failed to register original after conversion failure"
-                        );
-                    }
+    // Fast lane: images + audio, each ffmpeg ~single-threaded, so run as many
+    // concurrently as the usable core budget allows.
+    stream::iter(fast)
+        .for_each_concurrent(plan.fast_lane, |candidate| {
+            let ctx = &ctx;
+            let registered = &registered;
+            async move {
+                if process_candidate(candidate, ctx, None).await {
+                    registered.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }
             }
-        }
-    }
+        })
+        .await;
+
+    // Video lane: fewer concurrent transcodes, each thread-capped so the lane
+    // stays within the same core budget instead of every encode grabbing all
+    // cores at once.
+    stream::iter(videos)
+        .for_each_concurrent(plan.video_lane, |candidate| {
+            let ctx = &ctx;
+            let registered = &registered;
+            let video_threads = plan.video_threads;
+            async move {
+                if process_candidate(candidate, ctx, Some(video_threads)).await {
+                    registered.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+        })
+        .await;
+
+    let registered = registered.load(std::sync::atomic::Ordering::Relaxed);
 
     batch_guard.finish();
 

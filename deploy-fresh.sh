@@ -5,6 +5,8 @@
 # ║  One command to redeploy a Docker instance from a branch with EVERYTHING  ║
 # ║  wired in: server image, web bundle, AI face/object models, offline geo   ║
 # ║  dataset, and the Android APK — then (optionally) wipe the DB +           ║
+# ║  AI/geo models & datasets are always downloaded and mounted so they're    ║
+# ║  present, but left DISABLED by default (enable via Settings/config.toml).║
 # ║  server-managed storage so it comes back as a brand-new, first-run setup  ║
 # ║  WITHOUT deleting your original photos / import sources.                   ║
 # ║                                                                           ║
@@ -183,15 +185,18 @@ provision_assets() {
     fi
 }
 
-# ── Wire AI + geo on, and ensure model/geo/apk mounts exist (idempotent) ─────
+# ── Ensure AI/geo config sections + model/geo/apk mounts exist (idempotent) ──
+# NOTE: AI and geo models/datasets are always provisioned (see provision_assets)
+# so they're present on disk, but we deliberately do NOT force `enabled = true`
+# here — that's an opt-in the user flips in Settings (or config.toml) after
+# first run. We only make sure the [ai]/[geo] sections exist at all.
 wire_features() {
-    step "Wire features (AI + geo on, mounts)"
-    # Enable AI + geo in the instance config (append section if absent, else flip).
-    grep -qE '^\[ai\]'  "$CONFIG" || printf '\n[ai]\nenabled = true\n'  >> "$CONFIG"
-    grep -qE '^\[geo\]' "$CONFIG" || printf '\n[geo]\nenabled = true\n' >> "$CONFIG"
-    awk 'BEGIN{s=""} /^\[/{s=$0} {if((s=="[ai]"||s=="[geo]")&&$0 ~ /^enabled[[:space:]]*=/){sub(/=.*/,"= true")} print}' \
-        "$CONFIG" > "$CONFIG.tmp" && mv "$CONFIG.tmp" "$CONFIG"
-    ok "AI + geo enabled in config.toml"
+    step "Wire features (AI/geo sections + mounts; NOT auto-enabled)"
+    # Ensure the sections exist (default enabled=false) without touching an
+    # existing enabled value — respect whatever the user already configured.
+    grep -qE '^\[ai\]'  "$CONFIG" || printf '\n[ai]\nenabled = false\n'  >> "$CONFIG"
+    grep -qE '^\[geo\]' "$CONFIG" || printf '\n[geo]\nenabled = false\n' >> "$CONFIG"
+    ok "AI + geo config sections present (left as-is; not force-enabled)"
 
     # Add the model / geo / apk bind-mounts right after the storage volume.
     local m
@@ -334,5 +339,5 @@ fi
 
 echo
 echo -e "${c_bold}Deploy complete.${c_nc}  →  http://127.0.0.1:${HOST_PORT}  (LAN: check the instance IP)"
-$DO_WIPE && echo "Fresh setup: open the URL and complete the first-run wizard. AI + geo are enabled; the APK is on the download page."
+$DO_WIPE && echo "Fresh setup: open the URL and complete the first-run wizard. AI + geo models are installed but disabled by default — enable them in Settings if you want them; the APK is on the download page."
 echo "Backups kept at: $BK"

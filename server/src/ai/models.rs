@@ -82,6 +82,23 @@ pub struct FaceDetectionRecord {
     pub created_at: String,
 }
 
+/// A single face detected within one photo, joined to its current cluster
+/// label. Powers the per-photo "faces in this photo" list used by the manual
+/// person-reassignment UI.
+#[derive(Debug, Serialize, FromRow)]
+pub struct PhotoFaceRecord {
+    pub id: i64,
+    pub cluster_id: Option<i64>,
+    /// Label of the cluster this face currently belongs to (None = unnamed or
+    /// not yet clustered).
+    pub cluster_label: Option<String>,
+    pub bbox_x: f64,
+    pub bbox_y: f64,
+    pub bbox_w: f64,
+    pub bbox_h: f64,
+    pub confidence: f64,
+}
+
 /// Pet cluster summary for the pet clusters list endpoint.
 #[derive(Debug, Serialize, FromRow)]
 pub struct PetClusterSummary {
@@ -145,6 +162,16 @@ pub struct MergeFacesRequest {
 #[derive(Debug, Deserialize)]
 pub struct SplitFacesRequest {
     pub detection_ids: Vec<i64>,
+}
+
+/// Request body for manually reassigning a single face detection to a person
+/// (cluster) — the correction path when the AI clustered a face wrong.
+#[derive(Debug, Deserialize)]
+pub struct AssignFaceRequest {
+    /// The face detection to move.
+    pub detection_id: i64,
+    /// The target face cluster (person) to move it into.
+    pub cluster_id: i64,
 }
 
 /// Request body for toggling AI processing.

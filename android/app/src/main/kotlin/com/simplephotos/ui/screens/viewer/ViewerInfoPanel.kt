@@ -49,9 +49,11 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.material.icons.filled.Person
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.remote.dto.FullMetadataResponse
 import com.simplephotos.data.remote.dto.MetadataUpdateRequest
+import com.simplephotos.data.remote.dto.PhotoFace
 import com.simplephotos.ui.components.SpButton
 import com.simplephotos.ui.components.SpButtonVariant
 import com.simplephotos.ui.theme.LocalSpColors
@@ -77,11 +79,13 @@ fun ViewerInfoPanel(
     visible: Boolean,
     photo: PhotoEntity?,
     fullMeta: FullMetadataResponse?,
+    faces: List<PhotoFace> = emptyList(),
     saving: Boolean,
     error: String?,
     onDismiss: () -> Unit,
     onSave: (request: MetadataUpdateRequest, newSubtype: String?) -> Unit,
     onWriteExif: () -> Unit,
+    onSelectPerson: (detectionId: Long) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -378,6 +382,8 @@ fun ViewerInfoPanel(
                             ViewModeContent(
                                 photo = photo,
                                 fullMeta = fullMeta,
+                                faces = faces,
+                                onSelectPerson = onSelectPerson,
                                 saving = saving,
                                 onWriteExif = onWriteExif,
                                 showExif = showExif,
@@ -407,6 +413,8 @@ fun ViewerInfoPanel(
 private fun ViewModeContent(
     photo: PhotoEntity,
     fullMeta: FullMetadataResponse?,
+    faces: List<PhotoFace>,
+    onSelectPerson: (detectionId: Long) -> Unit,
     saving: Boolean,
     onWriteExif: () -> Unit,
     showExif: Boolean,
@@ -423,6 +431,19 @@ private fun ViewModeContent(
     if (photo.createdAt > 0L) InfoRow("Uploaded", dateFmt.format(java.util.Date(photo.createdAt)))
     photo.durationSecs?.let { InfoRow("Duration", "%.1fs".format(it)) }
     fullMeta?.description?.let { if (it.isNotBlank()) InfoRow("Description", it) }
+
+    // People — manual person correction for detected faces.
+    if (faces.isNotEmpty()) {
+        SectionDivider()
+        SectionLabel("People")
+        faces.forEachIndexed { i, face ->
+            PersonRow(
+                index = i,
+                face = face,
+                onSelect = { onSelectPerson(face.id) },
+            )
+        }
+    }
 
     // Camera / Lens
     val cameraModel = photo.cameraModel ?: fullMeta?.cameraModel
@@ -628,6 +649,53 @@ private fun EditModeContent(
 }
 
 // ── Small building blocks ────────────────────────────────────────────────────
+
+@Composable
+private fun PersonRow(index: Int, face: PhotoFace, onSelect: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .clip(RoundedCornerShape(50))
+                .background(SpViewer.inputBg),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                Icons.Default.Person,
+                contentDescription = null,
+                tint = SpViewer.textMuted,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                face.clusterLabel ?: "Unassigned",
+                color = SpViewer.textPrimary,
+                fontSize = 13.sp,
+                maxLines = 1,
+            )
+            Text(
+                "Face ${index + 1} · ${(face.confidence * 100).toInt()}%",
+                color = SpViewer.textSubtle,
+                fontSize = 11.sp,
+            )
+        }
+        Text(
+            "Select Person",
+            color = SpViewer.accent,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .clickable { onSelect() }
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+        )
+    }
+}
 
 @Composable
 private fun InfoRow(label: String, value: String) {

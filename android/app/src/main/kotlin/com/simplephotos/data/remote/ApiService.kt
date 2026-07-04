@@ -407,6 +407,12 @@ interface ApiService {
     @GET("api/ai/faces/{cluster_id}/photos")
     suspend fun listFaceClusterPhotos(@Path("cluster_id") clusterId: String): List<FaceClusterPhotoEntry>
 
+    @GET("api/ai/photos/{photo_id}/faces")
+    suspend fun listPhotoFaces(@Path("photo_id") photoId: String): List<PhotoFace>
+
+    @POST("api/ai/faces/assign")
+    suspend fun assignFace(@Body request: FaceAssignRequest): Response<Unit>
+
     @PUT("api/ai/faces/{cluster_id}/name")
     suspend fun renameFaceCluster(
         @Path("cluster_id") clusterId: String,

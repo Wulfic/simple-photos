@@ -159,7 +159,10 @@ pub async fn upload_photo(
         // match below to keep counters accurate even on failure.
         conversion::progress_add(1);
 
-        let conv_result = conversion::convert_file(&tmp_input, &tmp_output, &target).await;
+        // A single interactive upload is a lone, serial transcode — let ffmpeg
+        // auto-detect threads (all cores). The bounded per-encode thread cap is
+        // only for the bulk ingest pass that runs many encodes in parallel.
+        let conv_result = conversion::convert_file(&tmp_input, &tmp_output, &target, None).await;
 
         // Always clean up input
         let _ = tokio::fs::remove_file(&tmp_input).await;

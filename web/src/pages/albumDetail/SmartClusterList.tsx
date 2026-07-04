@@ -48,6 +48,11 @@ interface SmartClusterListProps<T> {
   toCard: (item: T) => ClusterCard;
   /** Server-thumbnail fallback used when no cached thumbnail exists. */
   fallbackUrl?: (photoId: string) => string;
+  /** When set, replaces the default `navigate(card.href)` on card click —
+   *  used by the "assign a face to this person" picker flow. */
+  onCardClick?: (item: T) => void;
+  /** Optional banner rendered above the grid (e.g. the assign-mode prompt). */
+  notice?: ReactNode;
 }
 
 const GRID_CLASS: Record<"card" | "avatar", string> = {
@@ -66,6 +71,8 @@ export default function SmartClusterList<T>({
   load,
   toCard,
   fallbackUrl,
+  onCardClick,
+  notice,
 }: SmartClusterListProps<T>) {
   const navigate = useAppNavigate();
   const [items, setItems] = useState<T[]>([]);
@@ -87,9 +94,9 @@ export default function SmartClusterList<T>({
     return () => { cancelled = true; };
   }, []);
 
-  const cards = items.map(toCard);
+  const entries = items.map((item) => ({ item, card: toCard(item) }));
   const thumbUrls = useIdbThumbnailMap(
-    cards.map((c) => ({ key: c.key, photoId: c.photoId })),
+    entries.map(({ card }) => ({ key: card.key, photoId: card.photoId })),
     fallbackUrl ? { fallbackUrl } : undefined,
   );
 
@@ -99,16 +106,18 @@ export default function SmartClusterList<T>({
       <main className="p-4">
         <DetailHeader backTo={backTo} backTitle="Back to Albums" title={title} />
 
+        {notice}
+
         {loading ? (
           <GallerySkeleton />
-        ) : cards.length === 0 ? (
+        ) : entries.length === 0 ? (
           <div className="text-center py-12 border-2 border-dashed border-edge-strong rounded-lg">
             <p className="text-fg-muted">{emptyTitle}</p>
             {emptyHint && <p className="text-fg-muted text-sm mt-1">{emptyHint}</p>}
           </div>
         ) : (
           <div className={GRID_CLASS[variant]}>
-            {cards.map((card) => (
+            {entries.map(({ item, card }) => (
               <ClusterTile
                 key={card.key}
                 card={card}
@@ -116,7 +125,7 @@ export default function SmartClusterList<T>({
                 titleClassName={titleClassName}
                 thumbUrl={thumbUrls[card.key]}
                 placeholder={placeholder}
-                onClick={() => navigate(card.href)}
+                onClick={() => (onCardClick ? onCardClick(item) : navigate(card.href))}
               />
             ))}
           </div>

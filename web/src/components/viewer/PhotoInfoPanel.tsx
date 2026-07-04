@@ -3,6 +3,10 @@ import { useState, useEffect, useCallback } from "react";
 import { formatBytes } from "../../utils/formatters";
 import { db } from "../../db";
 import { metadataApi, type FullMetadataResponse, type MetadataUpdateRequest } from "../../api/metadata";
+import { aiApi, type PhotoFace } from "../../api/ai";
+import { api } from "../../api/client";
+import { useAppNavigate } from "../../hooks/useAppNavigate";
+import { useAuthStore } from "../../store/auth";
 
 /** Photo types the user may assign by hand.  Mirrors the server allowlist in
  *  `metadata_edit.rs`; "none" is the sentinel for an ordinary photo. */
@@ -70,12 +74,98 @@ function EditRow({ label, value, onChange, placeholder, type }: {
   );
 }
 
+/** Square crop of one detected face, cut from the photo's (aspect-preserving)
+ *  server thumbnail via the normalized bounding box. No natural dimensions
+ *  needed — CSS background-size/position does the framing. */
+function FaceCrop({ thumbUrl, face }: { thumbUrl: string | null; face: PhotoFace }) {
+  // Guard against degenerate boxes so we never divide by zero.
+  const w = Math.max(face.bbox_w, 0.0001);
+  const h = Math.max(face.bbox_h, 0.0001);
+  const style: React.CSSProperties = thumbUrl
+    ? {
+        backgroundImage: `url("${thumbUrl}")`,
+        backgroundSize: `${100 / w}% ${100 / h}%`,
+        backgroundPosition: `${(face.bbox_x / Math.max(1 - w, 0.0001)) * 100}% ${(face.bbox_y / Math.max(1 - h, 0.0001)) * 100}%`,
+      }
+    : {};
+  return (
+    <div
+      className="w-11 h-11 rounded-full bg-gray-800 border border-white/10 shrink-0 bg-no-repeat"
+      style={style}
+    />
+  );
+}
+
+/** "People" section: lists the faces detected in this photo and lets the user
+ *  correct a wrong AI match by picking the right person in the People page. */
+function PeopleFacesSection({ serverPhotoId, thumbUrl }: {
+  serverPhotoId: string | null;
+  thumbUrl: string | null;
+}) {
+  const navigate = useAppNavigate();
+  const [faces, setFaces] = useState<PhotoFace[] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!serverPhotoId) { setFaces(null); return; }
+    (async () => {
+      try {
+        const result = await aiApi.listPhotoFaces(serverPhotoId);
+        if (!cancelled) setFaces(result);
+      } catch {
+        if (!cancelled) setFaces([]); // AI disabled / no detections — stay quiet
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [serverPhotoId]);
+
+  // Nothing to show until we have at least one detected face.
+  if (!faces || faces.length === 0) return null;
+
+  const selectPerson = (face: PhotoFace) => {
+    // Hand off to the People page in "assign" mode; it reassigns and returns
+    // here via history-back once the user taps a person.
+    navigate(
+      `/albums/smart-people?assign=1&photo=${encodeURIComponent(serverPhotoId!)}&detection=${face.id}`,
+    );
+  };
+
+  return (
+    <div className="pt-2 border-t border-white/10 space-y-2">
+      <div className="text-gray-500 text-[10px] uppercase tracking-wider">People</div>
+      {faces.map((face, i) => (
+        <div key={face.id} className="flex items-center gap-3">
+          <FaceCrop thumbUrl={thumbUrl} face={face} />
+          <div className="flex-1 min-w-0">
+            <p className="text-white text-sm truncate">
+              {face.cluster_label || "Unassigned"}
+            </p>
+            <p className="text-gray-500 text-xs">
+              Face {i + 1} · {Math.round(face.confidence * 100)}%
+            </p>
+          </div>
+          <button
+            onClick={() => selectPerson(face)}
+            className="text-accent-400 hover:text-accent-300 text-xs transition-colors shrink-0"
+          >
+            Select Person
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function PhotoInfoPanel({ show, onClose, photoId, onSubtypeChange, photoInfo }: PhotoInfoPanelProps) {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fullMeta, setFullMeta] = useState<FullMetadataResponse | null>(null);
   const [showExif, setShowExif] = useState(false);
+  // The route/photoId may be an IndexedDB blobId (encrypted galleries); AI face
+  // records are keyed by the server photo id, so resolve it via the cache.
+  const [serverPhotoId, setServerPhotoId] = useState<string | null>(null);
+  const { accessToken } = useAuthStore();
 
   // Edit form state — basic
   const [editFilename, setEditFilename] = useState("");
@@ -126,6 +216,21 @@ export default function PhotoInfoPanel({ show, onClose, photoId, onSubtypeChange
       setError(null);
     }
   }, [show, photoId, loadFullMetadata]);
+
+  // Resolve the server photo id (route id may be an encrypted-gallery blobId).
+  useEffect(() => {
+    let cancelled = false;
+    if (!photoId) { setServerPhotoId(null); return; }
+    (async () => {
+      const cached = await db.photos.get(photoId).catch(() => undefined);
+      if (!cancelled) setServerPhotoId(cached?.serverPhotoId ?? photoId);
+    })();
+    return () => { cancelled = true; };
+  }, [photoId]);
+
+  const faceThumbUrl = serverPhotoId
+    ? `${api.photos.thumbUrl(serverPhotoId)}${accessToken ? `?token=${encodeURIComponent(accessToken)}` : ""}`
+    : null;
 
   const startEdit = () => {
     setEditFilename(photoInfo?.filename ?? "");
@@ -432,6 +537,9 @@ export default function PhotoInfoPanel({ show, onClose, photoId, onSubtypeChange
                 {fullMeta?.description && (
                   <InfoRow label="Description" value={fullMeta.description} />
                 )}
+
+                {/* People / faces — manual person correction */}
+                <PeopleFacesSection serverPhotoId={serverPhotoId} thumbUrl={faceThumbUrl} />
 
                 {/* Camera/Lens section */}
                 {(photoInfo.cameraModel || fullMeta?.camera_make || fullMeta?.lens_model) && (
