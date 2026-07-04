@@ -213,7 +213,7 @@ mod tests {
         let got = resolve_upload_taken_at(
             Some("2021-06-01T12:00:00+00:00"), // already-UTC EXIF instant
             true,                              // had a real offset
-            Some("1609459200"),               // sidecar epoch (2021-01-01) — ignored
+            Some("1609459200"),                // sidecar epoch (2021-01-01) — ignored
             None,
             FALLBACK,
         );
@@ -250,7 +250,8 @@ mod tests {
 
     #[test]
     fn file_modified_used_when_no_exif_or_sidecar() {
-        let got = resolve_upload_taken_at(None, false, None, Some("2020-01-01T00:00:00Z"), FALLBACK);
+        let got =
+            resolve_upload_taken_at(None, false, None, Some("2020-01-01T00:00:00Z"), FALLBACK);
         assert_eq!(got, "2020-01-01T00:00:00.000Z");
     }
 
