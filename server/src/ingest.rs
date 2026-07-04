@@ -213,9 +213,13 @@ async fn process_candidate(
             conversion::heartbeat();
         }
     });
-    let convert_result =
-        conversion::convert_file(&candidate.abs_path, &conv_abs, &candidate.target, video_threads)
-            .await;
+    let convert_result = conversion::convert_file(
+        &candidate.abs_path,
+        &conv_abs,
+        &candidate.target,
+        video_threads,
+    )
+    .await;
     heartbeat.abort();
 
     match convert_result {
@@ -269,7 +273,8 @@ async fn process_candidate(
             // 360° sphere, burst frame, or motion photo would lose its
             // nature forever if we only ever looked at the converted
             // JPEG.  Scan the original's prefix instead.
-            let mut subtype_info = if candidate.target.category == conversion::MediaCategory::Image {
+            let mut subtype_info = if candidate.target.category == conversion::MediaCategory::Image
+            {
                 let prefix = crate::photos::metadata::read_file_prefix(
                     &candidate.abs_path,
                     crate::photos::metadata::XMP_SCAN_PREFIX_BYTES,
@@ -384,7 +389,9 @@ async fn process_candidate(
             // (conversion drops it) — extract and store it now so the
             // viewer's LIVE playback works for converted HEICs too.
             if subtype_info.photo_subtype.as_deref() == Some("motion") {
-                let orig_bytes = tokio::fs::read(&candidate.abs_path).await.unwrap_or_default();
+                let orig_bytes = tokio::fs::read(&candidate.abs_path)
+                    .await
+                    .unwrap_or_default();
                 if !orig_bytes.is_empty() {
                     crate::photos::motion::extract_and_store_motion_video(
                         pool,
@@ -469,12 +476,18 @@ async fn process_candidate(
             };
             let thumb_rel = format!(".thumbnails/{photo_id}.thumb.{thumb_ext}");
             let thumb_abs = storage_root.join(&thumb_rel);
-            let thumb_for_db: Option<String> =
-                if generate_thumbnail_file(&candidate.abs_path, &thumb_abs, orig_mime, None).await {
-                    Some(thumb_rel)
-                } else {
-                    None
-                };
+            let thumb_for_db: Option<String> = if generate_thumbnail_file(
+                &candidate.abs_path,
+                &thumb_abs,
+                orig_mime,
+                None,
+            )
+            .await
+            {
+                Some(thumb_rel)
+            } else {
+                None
+            };
 
             let insert_result = sqlx::query(
                 "INSERT OR IGNORE INTO photos (id, user_id, filename, file_path, mime_type, media_type, \

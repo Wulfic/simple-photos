@@ -1129,7 +1129,7 @@ mod tests {
     fn heartbeat_advances_the_watchdog_liveness_clock() {
         let _lock = global_state_lock();
         batch_start(1); // active; stamps last_progress
-        // Force the liveness clock into the past so a heartbeat visibly advances it.
+                        // Force the liveness clock into the past so a heartbeat visibly advances it.
         CONV_LAST_PROGRESS_MS.store(1, Ordering::Relaxed);
         heartbeat();
         let (last, _, _) = stall_telemetry();
@@ -1178,7 +1178,10 @@ mod tests {
         // conversions at once, not the old fixed handful.
         let p = plan_parallelism(128, false);
         assert_eq!(p.fast_lane, 112, "128 - 16 reserved");
-        assert!(p.video_lane > 1, "many-core CPU host runs videos in parallel");
+        assert!(
+            p.video_lane > 1,
+            "many-core CPU host runs videos in parallel"
+        );
         // video_lane * video_threads must stay within the usable budget.
         assert!(p.video_lane * p.video_threads <= 112);
 

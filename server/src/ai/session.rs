@@ -158,7 +158,10 @@ pub fn build_session_pool(path: &Path) -> anyhow::Result<SessionPool> {
     let (pool_size, threads_per) = ai_pool_plan();
     let mut sessions = Vec::with_capacity(pool_size);
     for _ in 0..pool_size {
-        sessions.push(Arc::new(Mutex::new(build_session_with_threads(path, threads_per)?)));
+        sessions.push(Arc::new(Mutex::new(build_session_with_threads(
+            path,
+            threads_per,
+        )?)));
     }
     tracing::info!(
         model = %path.display(),

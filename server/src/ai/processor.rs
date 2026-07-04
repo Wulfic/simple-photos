@@ -267,7 +267,14 @@ async fn process_batch(
             async move {
                 let photo_start = Instant::now();
                 match process_single_photo(
-                    pool, engine, config, storage_root, jwt_secret, photo_id, user_id, filename,
+                    pool,
+                    engine,
+                    config,
+                    storage_root,
+                    jwt_secret,
+                    photo_id,
+                    user_id,
+                    filename,
                 )
                 .await
                 {
