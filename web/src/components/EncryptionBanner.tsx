@@ -6,9 +6,10 @@
  *  count, so web and Android render identical totals and ETA.
  *
  *  Shown across all pages via ProtectedLayout; dismissible with a close button.
- *  Suppressed while media conversion is active so the user sees a single
- *  banner at a time (the ingest engine runs a final encryption pass after all
- *  conversions complete). */
+ *  Renders independently of the conversion banner — when encryption and
+ *  conversion are BOTH active (e.g. a large import encrypting native files
+ *  while earlier files transcode), {@link BannerHost} stacks both so the user
+ *  sees each pipeline's real progress instead of one masking the other. */
 import { useState, useEffect, useRef, useCallback } from "react";
 import { api } from "../api/client";
 import { hasCryptoKey } from "../crypto/crypto";
@@ -25,21 +26,6 @@ export default function EncryptionBanner() {
 
   const poll = useCallback(async () => {
     try {
-      // While conversion is active, suppress the encryption banner. The ingest
-      // engine triggers a final encryption pass once all conversions complete —
-      // only then should this banner appear.
-      try {
-        const convStatus = await api.admin.conversionStatus();
-        if (convStatus.active) {
-          setCounts(null);
-          setEta(null);
-          endTask("encryption");
-          return;
-        }
-      } catch {
-        // Non-admin users won't have access — that's fine, proceed normally.
-      }
-
       const status = await api.encryption.status();
 
       if (!status.active || status.total === 0) {

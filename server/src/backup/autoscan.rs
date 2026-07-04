@@ -94,6 +94,20 @@ pub async fn background_auto_scan_task(
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
     tracing::info!("Auto-scan interval: every {} seconds", interval_secs);
 
+    // How many idle interval ticks (scan found nothing new) to skip before doing
+    // a full-tree conversion sweep anyway, so a pure NON-native drop-in (e.g. a
+    // HEIC copied straight into the storage folder, which the native scan never
+    // registers) is still eventually converted. `run_conversion_pass` walks the
+    // ENTIRE tree + queries every known path; doing that every tick on a large
+    // HDD library was the "after import the server thrashes the disk with
+    // nothing processing" report — an idle conversion pass that always finds
+    // zero work but re-walks tens of thousands of files. We keep the walk
+    // immediate whenever a scan registered new files (an import is in flight, so
+    // there are likely accompanying convertibles), and otherwise throttle the
+    // idle sweep to roughly hourly.
+    let idle_sweep_every_ticks: u32 = ((3600 / interval_secs.max(1)) as u32).max(1);
+    let mut idle_ticks: u32 = 0;
+
     loop {
         interval.tick().await;
         let root = (**storage_root.load()).clone();
@@ -120,8 +134,30 @@ pub async fn background_auto_scan_task(
             geo_trigger.notify_one();
         }
 
+        // Decide whether this tick should run the (disk-heavy) conversion sweep.
+        // New native files → run now (encrypt them + pick up any convertibles
+        // that arrived with them). Otherwise only sweep every ~hour so an idle
+        // server isn't re-walking the whole library every few minutes.
+        let run_conversion = if count > 0 {
+            idle_ticks = 0;
+            true
+        } else {
+            idle_ticks += 1;
+            if idle_ticks >= idle_sweep_every_ticks {
+                idle_ticks = 0;
+                true
+            } else {
+                tracing::debug!(
+                    idle_ticks,
+                    idle_sweep_every_ticks,
+                    "[DIAG:AUTOSCAN] Idle tick — skipping conversion sweep to spare disk I/O"
+                );
+                false
+            }
+        };
+
         // Trigger encryption then conversion ingest engine.
-        {
+        if run_conversion {
             let pool_clone = pool.clone();
             let root_clone = root.clone();
             let jwt_clone = jwt_secret.clone();

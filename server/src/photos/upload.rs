@@ -17,9 +17,7 @@ use super::metadata::{
     extract_media_metadata_async, extract_media_metadata_from_bytes_async, extract_xmp_subtype,
 };
 use super::thumbnail::generate_thumbnail_file;
-use super::utils::{
-    audio_backup_enabled, compute_photo_hash, normalize_iso_timestamp, utc_now_iso,
-};
+use super::utils::{audio_backup_enabled, compute_photo_hash, utc_now_iso};
 use chrono::Utc;
 
 /// POST /api/photos/upload
@@ -440,17 +438,25 @@ pub async fn upload_photo(
         .and_then(chrono::DateTime::<Utc>::from_timestamp_millis)
         .map(|dt| dt.to_rfc3339());
 
-    let final_taken_at = exif_taken
-        .map(|t| normalize_iso_timestamp(&t))
-        .or_else(|| header_taken_at.as_deref().map(normalize_iso_timestamp))
-        .or(header_file_modified_at)
-        .unwrap_or_else(|| now.clone());
+    // ── Date-taken priority (offset-aware) ──────────────────────────────
+    // Fixes "a lot of media with wrong dates": EXIF `DateTimeOriginal` is local
+    // wall-clock with no zone, so an offset-less value is only *assumed* UTC and
+    // lands non-UTC photos in the wrong day. Google Takeout's `photoTakenTime`
+    // (the `X-Taken-At` sidecar) is a true UTC epoch and must beat that guess.
+    // The full priority order lives in `resolve_upload_taken_at` (unit-tested).
+    let final_taken_at = crate::photos::utils::resolve_upload_taken_at(
+        exif_taken.as_deref(),
+        exif_taken_offset.is_some(),
+        header_taken_at.as_deref(),
+        header_file_modified_at.as_deref(),
+        &now,
+    );
 
-    // Original capture-zone offset (e.g. "+09:00"). The extractor only sets
-    // this alongside an EXIF DateTimeOriginal, and EXIF wins the `taken_at`
-    // chain above, so whenever this is `Some` the stored `final_taken_at`
-    // genuinely came from that zoned EXIF value. Sidecar epochs (Google
-    // Takeout) and file mtimes carry no zone, so it stays `None` for those.
+    // Original capture-zone offset (e.g. "+09:00"). The extractor only sets this
+    // alongside an EXIF DateTimeOriginal that had a real offset, and that is the
+    // ONLY branch that keeps the EXIF value — so whenever this is `Some` the
+    // stored `final_taken_at` genuinely came from that zoned EXIF value. Sidecar
+    // epochs (Takeout) and mtimes carry no zone, so it stays `None` for those.
     let final_taken_offset = exif_taken_offset;
 
     let resolved_lat = exif_lat.or(header_latitude);

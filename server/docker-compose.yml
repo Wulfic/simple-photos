@@ -5,6 +5,13 @@ services:
     restart: unless-stopped
     ports:
       - "3000:3000"
+      # LAN auto-discovery beacon. The Android/desktop apps scan this port
+      # (default 3301) to find the server in one probe per host instead of a
+      # slow 13-port fallback sweep. If it is NOT published, phones fall back to
+      # the multi-port /health scan (or fail to find the server at all) — this
+      # missing mapping is exactly why "the app can't find any servers on the
+      # network". Must match `server.discovery_port` in config.toml.
+      - "3301:3301"
     volumes:
       - ./config.toml:/app/config.toml:ro
       - ./web/dist:/app/web/dist:ro
