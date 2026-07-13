@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.simplephotos.data.collapseBursts
+import com.simplephotos.data.excludeSecure
 import com.simplephotos.data.local.entities.AlbumEntity
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.remote.dto.FaceCluster
@@ -20,6 +21,7 @@ import com.simplephotos.data.repository.AlbumRepository
 import com.simplephotos.data.repository.AuthRepository
 import com.simplephotos.data.repository.GeoRepository
 import com.simplephotos.data.repository.PhotoRepository
+import com.simplephotos.data.repository.SecureGalleryRepository
 import com.simplephotos.data.repository.SharingRepository
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_USERNAME
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -41,6 +43,7 @@ class AlbumViewModel @Inject constructor(
     private val sharingRepository: SharingRepository,
     private val aiRepository: AiRepository,
     private val geoRepository: GeoRepository,
+    private val secureGalleryRepository: SecureGalleryRepository,
     val dataStore: DataStore<Preferences>
 ) : ViewModel() {
     val albums = albumRepository.getAllAlbums()
@@ -53,6 +56,16 @@ class AlbumViewModel @Inject constructor(
     /** Map of albumId -> first PhotoEntity (for cover image preview) */
     var albumCoverPhotos by mutableStateOf<Map<String, PhotoEntity>>(emptyMap())
         private set
+
+    /** Map of albumId -> visible (secure-excluded) member count, for the tile
+     *  badge. Regular album tiles previously showed no count at all (#12); the
+     *  count is secure-excluded so it matches the album-detail grid (#16). */
+    var albumCounts by mutableStateOf<Map<String, Int>>(emptyMap())
+        private set
+
+    /** Blob IDs currently inside a secure gallery — excluded from smart counts
+     *  and per-album counts so a secured photo isn't double-counted (#16). */
+    private var secureBlobIds: Set<String> = emptySet()
 
     /** Base URL for server-based thumbnails */
     var serverBaseUrl by mutableStateOf("")
@@ -153,8 +166,16 @@ class AlbumViewModel @Inject constructor(
                 }
             }
         }
-        // Recompute smart-album counts/covers, shared albums, and Discover.
-        loadSmartAlbumCounts()
+        // Refresh the secure-gallery blob IDs first (so smart + per-album counts
+        // exclude them), then recompute counts/covers, shared albums, Discover.
+        viewModelScope.launch {
+            try {
+                secureBlobIds = withContext(Dispatchers.IO) { secureGalleryRepository.getSecureBlobIds() }
+            } catch (_: Exception) { /* endpoint unavailable — keep existing set */ }
+            loadSmartAlbumCounts()
+            // Recompute per-album counts with the fresh secure set + current list.
+            loadCoverPhotos(albums.first())
+        }
         loadSharedAlbums()
         loadDiscoverSections()
     }
@@ -193,7 +214,8 @@ class AlbumViewModel @Inject constructor(
             try {
                 val allPhotos = withContext(Dispatchers.IO) {
                     photoRepository.getAllPhotos().first()
-                }
+                }.excludeSecure(secureBlobIds) // secured photos are hidden from the
+                // main gallery + smart grids, so they must not be counted here (#16).
                 // Only override the server summary once the local mirror actually
                 // holds photos — otherwise an empty cold Room would reset the
                 // instant counts above back to 0.
@@ -229,19 +251,35 @@ class AlbumViewModel @Inject constructor(
         }
     }
 
-    /** Load cover photo for each album (call whenever albums list updates). */
+    /** Load cover photo + visible member count for each album (call whenever the
+     *  albums list updates). The count is the album's members that still exist in
+     *  the local mirror and are NOT in a secure gallery, so the tile badge (#12)
+     *  matches the secure-excluded album-detail grid (#16). */
     fun loadCoverPhotos(albums: List<AlbumEntity>) {
         viewModelScope.launch {
+            // One mirror fetch, reused for every album's count. A member counts
+            // only when it still exists in the mirror (drops stale xref ids) AND
+            // is not in a secure gallery — the exact predicate getAlbumPhotos uses
+            // for the detail grid, so the tile badge can't diverge from it.
+            val mirror = withContext(Dispatchers.IO) { photoRepository.getAllPhotos().first() }
+            val visibleLocalIds = mirror
+                .filter { it.serverBlobId == null || it.serverBlobId !in secureBlobIds }
+                .map { it.localId }
+                .toHashSet()
             val covers = mutableMapOf<String, PhotoEntity>()
+            val counts = mutableMapOf<String, Int>()
             for (album in albums) {
                 try {
                     val photoIds = withContext(Dispatchers.IO) { albumRepository.getPhotoIdsForAlbum(album.localId) }
-                    val firstId = photoIds.firstOrNull() ?: continue
+                    val visibleMembers = photoIds.filter { it in visibleLocalIds }
+                    counts[album.localId] = visibleMembers.size
+                    val firstId = visibleMembers.firstOrNull() ?: continue
                     val photo = withContext(Dispatchers.IO) { photoRepository.getPhoto(firstId) }
                     if (photo != null) covers[album.localId] = photo
                 } catch (_: Exception) {}
             }
             albumCoverPhotos = covers
+            albumCounts = counts
         }
     }
 

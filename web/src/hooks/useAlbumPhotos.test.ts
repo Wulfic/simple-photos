@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolveAlbumPhotos } from "./useAlbumPhotos";
+import { resolveAlbumPhotos, countRegularAlbum } from "./useAlbumPhotos";
 import { SMART_ALBUM_DEFS } from "../gallery/smartAlbums";
 import type { CachedPhoto, CachedAlbum } from "../db";
 
@@ -139,6 +139,38 @@ describe("resolveAlbumPhotos — smart albums", () => {
     });
     expect(out.map((p) => p.blobId)).toEqual(["b1", "solo"]);
     expect(out.find((p) => p.blobId === "b1")?._burstCount).toBe(2);
+  });
+});
+
+describe("countRegularAlbum — album-list badge source (#12)", () => {
+  const mirror = [photo("a"), photo("b"), photo("secret"), photo("c")];
+
+  it("counts only manifest members present in the mirror (drops stale ids)", () => {
+    // "gone" was deleted from the library — must not be counted.
+    expect(countRegularAlbum(album(["a", "b", "c", "gone"]), mirror, new Set())).toBe(3);
+  });
+
+  it("excludes secure blob ids so the badge matches the secure-filtered grid", () => {
+    expect(
+      countRegularAlbum(album(["a", "b", "secret", "c"]), mirror, new Set(["secret"]))
+    ).toBe(3);
+  });
+
+  it("equals resolveAlbumPhotos(...).length — badge can't diverge from grid", () => {
+    const members = album(["a", "b", "secret", "c", "gone"]);
+    const secure = new Set(["secret"]);
+    const resolved = resolveAlbumPhotos({
+      kind: "regular",
+      allPhotos: mirror,
+      secureBlobIds: secure,
+      album: members,
+    });
+    expect(countRegularAlbum(members, mirror, secure)).toBe(resolved.length);
+  });
+
+  it("falls back to raw manifest size while the mirror is cold (avoids flashing 0)", () => {
+    expect(countRegularAlbum(album(["a", "b", "c"]), undefined, new Set())).toBe(3);
+    expect(countRegularAlbum(album(["a", "b", "c"]), [], new Set())).toBe(3);
   });
 });
 

@@ -193,6 +193,7 @@ fun AlbumListScreen(
                                 is AlbumGridItem.UserAlbum -> {
                                     AlbumCard(
                                         album = item.album,
+                                        count = viewModel.albumCounts[item.album.localId],
                                         coverPhoto = viewModel.albumCoverPhotos[item.album.localId],
                                         serverBaseUrl = viewModel.serverBaseUrl,
                                         onClick = { onAlbumClick(item.album.localId) }
@@ -456,6 +457,7 @@ fun AlbumListScreen(
 @Composable
 private fun AlbumCard(
     album: AlbumEntity,
+    count: Int? = null,
     coverPhoto: PhotoEntity? = null,
     serverBaseUrl: String = "",
     onClick: () -> Unit = {}
@@ -513,6 +515,17 @@ private fun AlbumCard(
                 style = MaterialTheme.typography.titleSmall,
                 maxLines = 1
             )
+            // Member count badge (secure-excluded) — regular album tiles had no
+            // count before (#12). Hidden until the count resolves so the tile
+            // doesn't flash a wrong number.
+            if (count != null) {
+                Text(
+                    "$count item${if (count != 1) "s" else ""}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1
+                )
+            }
         }
     }
 }

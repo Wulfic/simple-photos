@@ -112,7 +112,9 @@ fun AlbumDetailScreen(
                             Icon(
                                 painter = painterResource(R.drawable.ic_back_arrow),
                                 contentDescription = "Back",
-                                modifier = Modifier.size(12.dp)
+                                // 24dp = standard Material action-icon glyph. Was
+                                // 12dp, which rendered a tiny, hard-to-hit icon.
+                                modifier = Modifier.size(24.dp)
                             )
                         }
                     },
@@ -122,7 +124,9 @@ fun AlbumDetailScreen(
                                 Icon(
                                     painter = painterResource(R.drawable.ic_trashcan),
                                     contentDescription = "Delete album",
-                                    modifier = Modifier.size(12.dp)
+                                    // Was 12dp — far too small (#26). 24dp is the
+                                    // standard Material action-icon size.
+                                    modifier = Modifier.size(24.dp)
                                 )
                             }
                         }

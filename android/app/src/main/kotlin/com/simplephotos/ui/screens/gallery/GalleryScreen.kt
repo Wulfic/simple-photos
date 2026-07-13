@@ -53,6 +53,7 @@ import com.simplephotos.ui.components.CloudBackupBadge
 import com.simplephotos.ui.components.TileSelectionCircle
 import com.simplephotos.ui.components.rememberGalleryRowHeight
 import com.simplephotos.ui.components.rememberThumbnailRequest
+import com.simplephotos.data.excludeSecure
 import com.simplephotos.data.local.AppDatabase
 import com.simplephotos.data.local.entities.AlbumEntity
 import com.simplephotos.data.local.entities.PhotoEntity
@@ -109,10 +110,10 @@ fun GalleryScreen(
     var showAlbumPicker by remember { mutableStateOf(false) }
     val isSystemDark = androidx.compose.foundation.isSystemInDarkTheme()
 
-    // Filter out photos that live in a secure gallery
+    // Filter out photos that live in a secure gallery (shared filter so the
+    // album grids/counts hide the exact same set — see #16).
     val visiblePhotos = remember(photos, viewModel.secureBlobIds) {
-        if (viewModel.secureBlobIds.isEmpty()) photos
-        else photos.filter { it.serverBlobId == null || it.serverBlobId !in viewModel.secureBlobIds }
+        photos.excludeSecure(viewModel.secureBlobIds)
     }
 
     // Collapse burst stacks: keep only the first frame of each burstId (matches web)

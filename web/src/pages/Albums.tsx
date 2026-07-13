@@ -19,6 +19,8 @@ import { usePhotoSummary } from "../hooks/usePhotoSummary";
 import { recreateAlbumsFromServer } from "../utils/takeoutAlbums";
 import { useAuthStore } from "../store/auth";
 import { useSecureAdd } from "../store/secureAdd";
+import { useSecureBlobFilter } from "../gallery/hooks/useSecureBlobFilter";
+import { countRegularAlbum } from "../hooks/useAlbumPhotos";
 import type { FaceCluster, PetCluster } from "../api/ai";
 
 type SharedAlbumInfo = {
@@ -90,6 +92,18 @@ export default function Albums() {
 
   // Encrypted photos from IndexedDB (for smart album counts)
   const encryptedPhotos = useLiveQuery(() => db.photos.toArray());
+
+  // Blob IDs currently inside a secure gallery. Album + smart counts must
+  // exclude these so a card's badge matches the secure-filtered grid the detail
+  // view renders (#12 wrong counts, #16 secure items leaking into counts). Live
+  // polled so securing a photo on another device updates the badges here.
+  const { secureBlobIds, refreshSecureBlobIds, startPolling } = useSecureBlobFilter();
+  useEffect(() => {
+    void refreshSecureBlobIds();
+    startPolling();
+    // refresh/startPolling are stable for the hook's lifetime.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Server-precomputed counts (Issue 3): render smart-album badges instantly on
   // a cold/empty cache — before the local IndexedDB mirror has finished syncing
@@ -286,15 +300,24 @@ export default function Albums() {
   // Live local counts from the IndexedDB mirror. Preferred whenever the mirror
   // holds any photos: they update instantly (favorite toggle, trash) with no
   // round-trip. Null while the Dexie query is still resolving.
-  const localCounts = encryptedPhotos && encryptedPhotos.length > 0 ? {
-    all: encryptedPhotos.length,
+  //
+  // Secure-excluded: photos moved into a secure gallery stay in db.photos but
+  // are hidden from the main gallery + smart album grids, so their counts must
+  // exclude them too or the card badge over-reports vs the grid (#12/#16).
+  const visiblePhotos = encryptedPhotos
+    ? (secureBlobIds.size > 0
+        ? encryptedPhotos.filter(p => !secureBlobIds.has(p.blobId))
+        : encryptedPhotos)
+    : encryptedPhotos;
+  const localCounts = visiblePhotos && visiblePhotos.length > 0 ? {
+    all: visiblePhotos.length,
     // "Recently Added" is capped at the 100 most-recently-imported items.
-    recent: Math.min(encryptedPhotos.length, 100),
-    favorites: encryptedPhotos.filter(p => !!p.isFavorite).length,
-    photos: encryptedPhotos.filter(p => p.mediaType === "photo" || p.mediaType === "gif").length,
-    gifs: encryptedPhotos.filter(p => p.mediaType === "gif").length,
-    videos: encryptedPhotos.filter(p => p.mediaType === "video").length,
-    audio: encryptedPhotos.filter(p => p.mediaType === "audio").length,
+    recent: Math.min(visiblePhotos.length, 100),
+    favorites: visiblePhotos.filter(p => !!p.isFavorite).length,
+    photos: visiblePhotos.filter(p => p.mediaType === "photo" || p.mediaType === "gif").length,
+    gifs: visiblePhotos.filter(p => p.mediaType === "gif").length,
+    videos: visiblePhotos.filter(p => p.mediaType === "video").length,
+    audio: visiblePhotos.filter(p => p.mediaType === "audio").length,
   } : null;
 
   // Fall back to the server summary until the local mirror has data, so a cold
@@ -312,16 +335,17 @@ export default function Albums() {
 
   const encryptedPhotoCounts = localCounts ?? summaryCounts;
 
-  // Find the first photo with a thumbnail for each category.
+  // Find the first photo with a thumbnail for each category (secure-excluded so
+  // a secured photo can't surface as a smart-album cover).
   function findCoverPhoto(filter: (p: CachedPhoto) => boolean): CachedPhoto | undefined {
-    if (!encryptedPhotos) return undefined;
-    return encryptedPhotos.find(p => filter(p) && p.thumbnailData);
+    if (!visiblePhotos) return undefined;
+    return visiblePhotos.find(p => filter(p) && p.thumbnailData);
   }
 
   // Cover for "Recently Added" = the most-recently-imported item with a
   // thumbnail (by addedAt, falling back to takenAt for un-backfilled entries).
-  const recentCover = encryptedPhotos
-    ? [...encryptedPhotos]
+  const recentCover = visiblePhotos
+    ? [...visiblePhotos]
         .sort((a, b) => (b.addedAt ?? b.takenAt ?? 0) - (a.addedAt ?? a.takenAt ?? 0))
         .find(p => p.thumbnailData)
     : undefined;
@@ -582,7 +606,12 @@ export default function Albums() {
           </p>
         )}
         {albums?.map((album) => (
-          <AlbumCard key={album.albumId} album={album} onClick={() => navigate(`/albums/${album.albumId}`)} />
+          <AlbumCard
+            key={album.albumId}
+            album={album}
+            count={countRegularAlbum(album, encryptedPhotos, secureBlobIds)}
+            onClick={() => navigate(`/albums/${album.albumId}`)}
+          />
         ))}
       </div>
 
@@ -914,7 +943,7 @@ export default function Albums() {
 
 // ── Album Card with cover thumbnail ──────────────────────────────────────────
 
-function AlbumCard({ album, onClick }: { album: CachedAlbum; onClick: () => void }) {
+function AlbumCard({ album, count, onClick }: { album: CachedAlbum; count: number; onClick: () => void }) {
   const [thumbUrl, setThumbUrl] = useState<string | null>(null);
 
   useEffect(() => {
@@ -955,13 +984,13 @@ function AlbumCard({ album, onClick }: { album: CachedAlbum; onClick: () => void
           <img src={thumbUrl} alt={album.name} className="w-full h-full object-cover" />
         ) : (
           <span className="text-fg-muted text-2xl">
-            {album.photoBlobIds.length}
+            {count}
           </span>
         )}
       </div>
       <p className="font-medium text-sm truncate">{album.name}</p>
       <p className="text-xs text-fg-muted">
-        {album.photoBlobIds.length} items
+        {count} {count === 1 ? "item" : "items"}
       </p>
     </div>
   );

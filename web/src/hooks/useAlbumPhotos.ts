@@ -95,6 +95,32 @@ export function resolveAlbumPhotos(params: {
   return [];
 }
 
+/**
+ * Count a regular album's *visible* members — the manifest intersected with the
+ * local mirror, secure-excluded. This is the single source for the album-list
+ * badges (Albums.tsx tiles, AddToAlbumModal) so a tile's count can never diverge
+ * from the grid the detail view renders via {@link resolveAlbumPhotos} (#12
+ * missing/wrong counts, #20 flicker). Raw `photoBlobIds.length` must never be
+ * shown as the count — it includes secure-hidden and stale (deleted) ids.
+ *
+ * When the mirror hasn't loaded yet (cold cache) we fall back to the raw
+ * manifest size rather than flashing 0; once the mirror holds photos the
+ * accurate secure-excluded intersection takes over.
+ */
+export function countRegularAlbum(
+  album: Pick<CachedAlbum, "photoBlobIds">,
+  allPhotos: CachedPhoto[] | undefined,
+  secureBlobIds: Set<string>
+): number {
+  if (!allPhotos || allPhotos.length === 0) return album.photoBlobIds.length;
+  const mirror = new Set(allPhotos.map((p) => p.blobId));
+  let n = 0;
+  for (const id of album.photoBlobIds) {
+    if (mirror.has(id) && !secureBlobIds.has(id)) n++;
+  }
+  return n;
+}
+
 export function useAlbumPhotos(
   albumId: string | undefined
 ): UseAlbumPhotosResult {

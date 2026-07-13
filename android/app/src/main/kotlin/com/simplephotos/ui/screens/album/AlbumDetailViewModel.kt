@@ -7,13 +7,17 @@ import com.simplephotos.ui.components.SelectionState
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.simplephotos.data.excludeSecure
 import com.simplephotos.data.local.entities.AlbumEntity
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.repository.AlbumRepository
 import com.simplephotos.data.repository.PhotoRepository
+import com.simplephotos.data.repository.SecureGalleryRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 /**
@@ -24,8 +28,13 @@ import javax.inject.Inject
 class AlbumDetailViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val albumRepository: AlbumRepository,
-    private val photoRepository: PhotoRepository
+    private val photoRepository: PhotoRepository,
+    private val secureGalleryRepository: SecureGalleryRepository
 ) : ViewModel() {
+
+    /** Blob IDs currently inside a secure gallery — hidden from this album's
+     *  grid + count so securing a photo removes it here too (#16). */
+    private var secureBlobIds: Set<String> = emptySet()
 
     val albumId: String = savedStateHandle["albumId"] ?: ""
 
@@ -75,8 +84,11 @@ class AlbumDetailViewModel @Inject constructor(
         viewModelScope.launch {
             loading = true
             try {
-                // Shared resolver — same source the viewer pager uses.
-                photos = photoRepository.getAlbumPhotos(albumId)
+                refreshSecureBlobIds()
+                // Shared resolver — same source the viewer pager uses. Secure-
+                // excluded so a secured favorite/photo/video doesn't reappear
+                // inside its smart album after being hidden from the gallery (#16).
+                photos = photoRepository.getAlbumPhotos(albumId).excludeSecure(secureBlobIds)
             } catch (e: Exception) {
                 error = e.message
             } finally {
@@ -89,10 +101,13 @@ class AlbumDetailViewModel @Inject constructor(
         viewModelScope.launch {
             loading = true
             try {
+                refreshSecureBlobIds()
                 album = albumRepository.getAlbum(albumId)
                 // Shared resolver — same source the viewer pager uses, so the
                 // tapped tile and the viewer's initial page always agree.
-                photos = photoRepository.getAlbumPhotos(albumId)
+                // Secure-excluded so the grid + count match the main gallery (#16):
+                // securing a photo removes it from its albums too.
+                photos = photoRepository.getAlbumPhotos(albumId).excludeSecure(secureBlobIds)
             } catch (e: Exception) {
                 error = e.message
             } finally {
@@ -101,10 +116,21 @@ class AlbumDetailViewModel @Inject constructor(
         }
     }
 
+    /** Refresh the set of blob IDs inside secure galleries (best-effort). */
+    private suspend fun refreshSecureBlobIds() {
+        try {
+            secureBlobIds = withContext(Dispatchers.IO) { secureGalleryRepository.getSecureBlobIds() }
+        } catch (_: Exception) { /* endpoint unavailable — keep existing set */ }
+    }
+
     fun openAddPanel() {
         viewModelScope.launch {
             val existingIds = photos.map { it.localId }.toSet()
-            allPhotos = photoRepository.getAllPhotos().first().filter { it.localId !in existingIds }
+            // Don't offer secured photos in the picker — they're hidden from the
+            // regular library, so adding them to an album would be surprising (#16).
+            allPhotos = photoRepository.getAllPhotos().first()
+                .excludeSecure(secureBlobIds)
+                .filter { it.localId !in existingIds }
             selectedToAdd = emptySet()
             showAddPanel = true
         }
