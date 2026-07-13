@@ -9,7 +9,8 @@
  * clusters, geo memories/trips) live in their own files there.
  */
 import { useParams } from "react-router-dom";
-import SmartAlbumView, { isSmartAlbum } from "./albumDetail/SmartAlbumView";
+import SmartAlbumView from "./albumDetail/SmartAlbumView";
+import { isSmartAlbum } from "../gallery/smartAlbums";
 import RegularAlbumView from "./albumDetail/RegularAlbumView";
 import { PeopleView, PersonDetailView } from "./albumDetail/PeopleView";
 import { PetsView, PetDetailView } from "./albumDetail/PetsView";

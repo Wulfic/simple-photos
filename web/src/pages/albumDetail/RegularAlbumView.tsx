@@ -9,8 +9,8 @@ import { useAppNavigate } from "../../hooks/useAppNavigate";
 import { useScrollMemory } from "../../hooks/useScrollMemory";
 import { api } from "../../api/client";
 import { encrypt, sha256Hex } from "../../crypto/crypto";
-import { db, type CachedPhoto, type CachedAlbum } from "../../db";
-import { useLiveQuery } from "dexie-react-hooks";
+import { db, type CachedAlbum } from "../../db";
+import { useAlbumPhotos } from "../../hooks/useAlbumPhotos";
 import AppHeader from "../../components/AppHeader";
 import AppIcon from "../../components/AppIcon";
 import DetailHeader from "../../components/DetailHeader";
@@ -37,7 +37,6 @@ export default function RegularAlbumView({ albumId }: { albumId: string | undefi
   const [showSharePicker, setShowSharePicker] = useState(false);
   const [shareUsers, setShareUsers] = useState<ShareUser[]>([]);
   const [shareSuccess, setShareSuccess] = useState("");
-  const [secureBlobIds, setSecureBlobIds] = useState<Set<string>>(new Set());
 
   // Surface errors as a dismissible toast popup instead of an under-navbar bar
   // (#8). e.g. sharing an album to yourself ("Cannot add yourself as a member").
@@ -54,42 +53,26 @@ export default function RegularAlbumView({ albumId }: { albumId: string | undefi
     }
   }, [shareSuccess]);
 
-  // Fetch secure blob IDs so secure photos are excluded from regular albums
-  useEffect(() => {
-    api.secureGalleries.secureBlobIds()
-      .then((res) => setSecureBlobIds(new Set(res.blob_ids)))
-      .catch((err: unknown) => {
-        // 404 = secure galleries feature not available — expected
-        const status = (err as { status?: number })?.status;
-        if (status !== 404) {
-          console.error("Failed to fetch secure blob IDs:", err);
-        }
-      });
-  }, []);
-
-  const album = useLiveQuery(
-    () => (albumId ? db.albums.get(albumId) : undefined),
-    [albumId]
-  );
-
-  const allPhotos = useLiveQuery(() =>
-    db.photos.orderBy("takenAt").reverse().toArray()
-  );
+  // Unified album resolution: membership, secure-exclusion and the count all
+  // come from one source, so the header badge can no longer diverge from the
+  // rendered grid (#12 missing counts, #20 count flicker). `album` is the
+  // manifest used by the CRUD handlers below.
+  const {
+    photos: albumPhotos,
+    count: albumCount,
+    album,
+    allPhotos,
+    secureBlobIds,
+  } = useAlbumPhotos(albumId);
 
   // Preserve scroll position when opening a photo and returning to the album.
   const { pathname } = useLocation();
-  // Photos that belong to this album (excluding any in secure galleries)
-  const albumPhotos = useMemo(() => {
-    if (!album || !allPhotos) return [];
-    const idSet = new Set(album.photoBlobIds);
-    return allPhotos.filter((p) => idSet.has(p.blobId) && !secureBlobIds.has(p.blobId));
-  }, [album, allPhotos, secureBlobIds]);
 
   useScrollMemory(pathname, albumPhotos.length > 0);
 
   // Photos NOT in this album (for "add photos" view), also excluding secure photos
   const availablePhotos = useMemo(() => {
-    if (!album || !allPhotos) return [];
+    if (!album) return [];
     const idSet = new Set(album.photoBlobIds);
     return allPhotos.filter((p) => !idSet.has(p.blobId) && !secureBlobIds.has(p.blobId));
   }, [album, allPhotos, secureBlobIds]);
@@ -307,7 +290,7 @@ export default function RegularAlbumView({ albumId }: { albumId: string | undefi
           backTo="/albums"
           backTitle="Back to Albums"
           title={album.name}
-          count={`${album.photoBlobIds.length} items`}
+          count={`${albumCount} items`}
           actions={!isBackupServer ? (
             <>
               <button
