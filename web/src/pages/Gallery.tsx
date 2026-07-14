@@ -29,7 +29,7 @@ import { useAuthStore } from "../store/auth";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
 import { toast } from "../store/toast";
 import { useSecureAdd } from "../store/secureAdd";
-import { addPhotosToSecureGallery } from "../utils/secureAdd";
+import { addPhotosToSecureGallery, secureAddResultMessage } from "../utils/secureAdd";
 import { getErrorMessage } from "../utils/formatters";
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -221,13 +221,19 @@ export default function Gallery() {
     if (!secureAddTarget || selectedIds.size === 0 || addingSecure) return;
     setAddingSecure(true);
     try {
-      const count = await addPhotosToSecureGallery(secureAddTarget.galleryId, Array.from(selectedIds));
-      toast.success(`Added ${count} photo${count !== 1 ? "s" : ""} to ${secureAddTarget.galleryName}`);
-      const target = secureAddTarget.galleryId;
-      clearSelection();
-      cancelSecureAdd();
-      await loadEncryptedPhotos();
-      navigate(`/secure-gallery?album=${target}`);
+      const result = await addPhotosToSecureGallery(secureAddTarget.galleryId, Array.from(selectedIds));
+      const msg = secureAddResultMessage(result, secureAddTarget.galleryName);
+      if (msg.success) toast.success(msg.success);
+      if (msg.error) toast.error(msg.error);
+      // Only leave for the secure album once something moved; if the whole batch
+      // failed, keep the selection so the user can retry.
+      if (result.added > 0) {
+        const target = secureAddTarget.galleryId;
+        clearSelection();
+        cancelSecureAdd();
+        await loadEncryptedPhotos();
+        navigate(`/secure-gallery?album=${target}`);
+      }
     } catch (err: unknown) {
       toast.error(getErrorMessage(err));
     } finally {

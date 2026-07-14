@@ -25,7 +25,7 @@ import { usePhotoSlideshow } from "../../hooks/useSlideshow";
 import SlideshowHost from "../../components/viewer/SlideshowHost";
 import SlideshowTriggers from "../../components/viewer/SlideshowTriggers";
 import { useSecureAdd } from "../../store/secureAdd";
-import { addPhotosToSecureGallery } from "../../utils/secureAdd";
+import { addPhotosToSecureGallery, secureAddResultMessage } from "../../utils/secureAdd";
 import type { ShareUser } from "../../types/sharing";
 import SharePickerModal from "../../components/SharePickerModal";
 
@@ -108,12 +108,18 @@ export default function RegularAlbumView({ albumId }: { albumId: string | undefi
     if (!secureAddTarget || selectedIds.size === 0 || addingSecure) return;
     setAddingSecure(true);
     try {
-      const count = await addPhotosToSecureGallery(secureAddTarget.galleryId, [...selectedIds]);
-      toast.success(`Added ${count} photo${count !== 1 ? "s" : ""} to ${secureAddTarget.galleryName}`);
-      clearSelection();
-      const target = secureAddTarget.galleryId;
-      cancelSecureAdd();
-      navigate(`/secure-gallery?album=${target}`);
+      const result = await addPhotosToSecureGallery(secureAddTarget.galleryId, [...selectedIds]);
+      const msg = secureAddResultMessage(result, secureAddTarget.galleryName);
+      if (msg.success) toast.success(msg.success);
+      if (msg.error) toast.error(msg.error);
+      // Only leave the album / end the secure-add session once something moved;
+      // if the whole batch failed, keep the selection so the user can retry.
+      if (result.added > 0) {
+        clearSelection();
+        const target = secureAddTarget.galleryId;
+        cancelSecureAdd();
+        navigate(`/secure-gallery?album=${target}`);
+      }
     } catch (err: unknown) {
       setError(getErrorMessage(err));
     } finally {

@@ -299,24 +299,35 @@ class SecureGalleryViewModel @Inject constructor(
         val gallery = selectedGallery ?: return
         Log.d(TAG, "addPhotosToGallery: ${blobIds.size} blobs → gallery ${gallery.id}")
         viewModelScope.launch {
-            try {
-                withContext(Dispatchers.IO) {
-                    coroutineScope {
-                        blobIds.map { blobId ->
-                            async {
-                                Log.d(TAG, "  adding blobId=$blobId")
+            // Secure each photo independently. Previously one failing addItem made
+            // awaitAll() rethrow and cancel every sibling coroutine, aborting the
+            // whole batch — some photos moved, the rest stayed in the regular
+            // gallery ("most items removed but not all", #16). Each job now catches
+            // its own failure and reports success/failure so the batch always
+            // finishes and the user is told when photos are left behind.
+            val outcomes = withContext(Dispatchers.IO) {
+                coroutineScope {
+                    blobIds.map { blobId ->
+                        async {
+                            try {
                                 secureGalleryRepository.addItem(gallery.id, blobId)
+                                true
+                            } catch (e: Exception) {
+                                Log.e(TAG, "  add failed for blobId=$blobId", e)
+                                false
                             }
-                        }.awaitAll()
-                    }
+                        }
+                    }.awaitAll()
                 }
-                Log.i(TAG, "Added ${blobIds.size} photos to gallery ${gallery.id}")
-                loadItems(gallery.id)
-                loadGalleries()
-            } catch (e: Exception) {
-                Log.e(TAG, "Add photos failed", e)
-                error = "Add photos failed: ${e.message}"
             }
+            val added = outcomes.count { it }
+            val failed = outcomes.size - added
+            Log.i(TAG, "Added $added/${blobIds.size} photos to gallery ${gallery.id} ($failed failed)")
+            if (failed > 0) {
+                error = "$failed photo${if (failed != 1) "s" else ""} couldn't be secured and remain in your gallery"
+            }
+            loadItems(gallery.id)
+            loadGalleries()
         }
     }
 
