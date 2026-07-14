@@ -279,6 +279,43 @@ mod tests {
     }
 
     #[test]
+    fn legacy_formats_sort_wrong_as_strings_but_right_after_normalization() {
+        // Issue #13 root cause: the gallery orders with a *string*
+        // `ORDER BY COALESCE(taken_at, created_at)`. A legacy raw-EXIF value
+        // ("2021:01:15 …", colon 0x3A) and a canonical one ("2021-12-31 …",
+        // dash 0x2D) sort by the wrong character, so a January photo lands
+        // after a December one. Prove the raw comparison is broken and that
+        // normalization restores chronological string order.
+        let jan_raw = "2021:01:15 09:00:00"; // earlier instant, legacy EXIF form
+        let dec_canonical = "2021-12-31T23:00:00.000Z"; // later instant, canonical
+        assert!(
+            jan_raw > dec_canonical,
+            "the bug: raw-EXIF January must (wrongly) sort after canonical December as strings"
+        );
+
+        let jan_norm = normalize_iso_timestamp(jan_raw);
+        let dec_norm = normalize_iso_timestamp(dec_canonical);
+        assert_eq!(jan_norm, "2021-01-15T09:00:00.000Z");
+        assert_eq!(dec_norm, "2021-12-31T23:00:00.000Z");
+        assert!(
+            jan_norm < dec_norm,
+            "after normalization January must sort before December"
+        );
+    }
+
+    #[test]
+    fn bare_rfc3339_mtime_matches_canonical_shape_after_normalization() {
+        // The exact takeout.rs regression: a chrono `to_rfc3339()` mtime
+        // ("…+00:00", seconds precision) must land on the same canonical shape
+        // every other write path produces, so same-instant rows don't split
+        // into two sort buckets.
+        assert_eq!(
+            normalize_iso_timestamp("2026-07-04T00:00:00+00:00"),
+            "2026-07-04T00:00:00.000Z"
+        );
+    }
+
+    #[test]
     fn blank_sidecar_falls_back_to_offsetless_exif() {
         let got = resolve_upload_taken_at(
             Some("2021-06-01T21:00:00Z"),

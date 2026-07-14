@@ -410,6 +410,84 @@ pub async fn scan_and_register(
         }
     }
 
+    // ── One-time canonicalization of legacy timestamps (#13) ─────────────
+    // Gallery order is a *string* `ORDER BY COALESCE(taken_at, created_at) DESC`,
+    // so every value must be the canonical `YYYY-MM-DDTHH:MM:SS.sssZ` form. Older
+    // code versions (and the pre-fix Takeout endpoint) wrote raw EXIF
+    // ("2021:06:01 12:00:00"), offset ("…+00:00"), or micros-precision strings;
+    // those sort incorrectly against canonical rows, scrambling the timeline.
+    // All current write paths already normalize, so this only rewrites the
+    // legacy stragglers, runs once per user, and is a no-op on a clean library.
+    let ts_repair_key = format!("taken_at_canonical_repair_v1:{}", auth.user_id);
+    let ts_repair_done: bool =
+        sqlx::query_scalar("SELECT value = 'true' FROM server_settings WHERE key = ?")
+            .bind(&ts_repair_key)
+            .fetch_optional(&state.pool)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or(false);
+    if !ts_repair_done {
+        let rows: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT id, taken_at, created_at FROM photos WHERE user_id = ?",
+        )
+        .bind(&auth.user_id)
+        .fetch_all(&state.pool)
+        .await
+        .unwrap_or_default();
+
+        let mut repaired = 0usize;
+        for (pid, taken_at, created_at) in rows {
+            // Only a non-empty value that changes under normalization needs a write.
+            let new_taken = taken_at.as_deref().and_then(|t| {
+                let t = t.trim();
+                let n = normalize_iso_timestamp(t);
+                (!t.is_empty() && n != t).then_some(n)
+            });
+            let new_created = created_at.as_deref().and_then(|c| {
+                let c = c.trim();
+                let n = normalize_iso_timestamp(c);
+                (!c.is_empty() && n != c).then_some(n)
+            });
+            if new_taken.is_none() && new_created.is_none() {
+                continue;
+            }
+            // COALESCE keeps the untouched column unchanged.
+            if let Err(e) = sqlx::query(
+                "UPDATE photos SET taken_at = COALESCE(?, taken_at), \
+                 created_at = COALESCE(?, created_at) WHERE id = ?",
+            )
+            .bind(&new_taken)
+            .bind(&new_created)
+            .bind(&pid)
+            .execute(&state.pool)
+            .await
+            {
+                tracing::warn!(photo_id = %pid, error = %e, "Failed to canonicalize legacy timestamp");
+            } else {
+                repaired += 1;
+            }
+        }
+
+        if repaired > 0 {
+            tracing::info!(
+                repaired,
+                "Canonicalized {} legacy photo timestamps for correct ordering (#13)",
+                repaired
+            );
+        }
+        if let Err(e) = sqlx::query(
+            "INSERT INTO server_settings (key, value) VALUES (?, 'true') \
+             ON CONFLICT(key) DO UPDATE SET value = 'true'",
+        )
+        .bind(&ts_repair_key)
+        .execute(&state.pool)
+        .await
+        {
+            tracing::warn!(error = %e, "Failed to persist timestamp canonicalization flag");
+        }
+    }
+
     // ── Retroactively fill missing XMP subtypes for existing photos ──────
     // Detect motion, panorama, burst, HDR subtypes that were missed by
     // earlier scan versions that didn't do XMP extraction.

@@ -278,10 +278,15 @@ pub async fn import_takeout(
 
         let file_meta = tokio::fs::metadata(media_path).await.ok();
         let size = file_meta.as_ref().map(|m| m.len() as i64).unwrap_or(0);
+        // Normalise the mtime to the canonical `...sssZ` form. This value is used
+        // as the `taken_at` fallback below, and gallery ordering is a *string*
+        // `ORDER BY COALESCE(taken_at, created_at)` — a bare `to_rfc3339()`
+        // ("+00:00", seconds precision) sorts incorrectly against the canonical
+        // millis-Z timestamps every other write path produces (issue #13).
         let modified = file_meta.and_then(|m| {
             m.modified().ok().map(|t| {
                 let dt: chrono::DateTime<chrono::Utc> = t.into();
-                dt.to_rfc3339()
+                crate::photos::utils::normalize_iso_timestamp(&dt.to_rfc3339())
             })
         });
 
@@ -412,10 +417,18 @@ pub async fn import_takeout(
         };
 
         // Capture the album membership authoritatively, keyed by photo_id, from
-        // the parent folder name. Runs for both freshly-imported and
-        // already-existing (deduped) photos so a re-import backfills albums.
-        // Idempotent via the (photo_id, album_name) primary key.
-        if let Some(album_name) = media_path.parent().and_then(sidecar::derive_album_from_dir) {
+        // the parent folder. Runs for both freshly-imported and already-existing
+        // (deduped) photos so a re-import backfills albums. Idempotent via the
+        // (photo_id, album_name) primary key. Resolved through the per-directory
+        // context so it honours the same `is_takeout` gate as the scan/autoscan
+        // paths — a folder with no Google sidecars is a plain user folder and must
+        // NOT be turned into a spurious album (part of #11: albums not faithful).
+        if let Some(album_name) = media_path
+            .parent()
+            .and_then(|d| contexts.get(d))
+            .and_then(|ctx| ctx.album_name())
+            .map(|s| s.to_string())
+        {
             let now = Utc::now().to_rfc3339();
             match sqlx::query(
                 "INSERT OR IGNORE INTO photo_source_albums \
