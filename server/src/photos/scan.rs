@@ -430,13 +430,12 @@ pub async fn scan_and_register(
             .flatten()
             .unwrap_or(false);
     if !ts_repair_done {
-        let rows: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
-            "SELECT id, taken_at, created_at FROM photos WHERE user_id = ?",
-        )
-        .bind(&auth.user_id)
-        .fetch_all(&state.pool)
-        .await
-        .unwrap_or_default();
+        let rows: Vec<(String, Option<String>, Option<String>)> =
+            sqlx::query_as("SELECT id, taken_at, created_at FROM photos WHERE user_id = ?")
+                .bind(&auth.user_id)
+                .fetch_all(&state.pool)
+                .await
+                .unwrap_or_default();
 
         let mut repaired = 0usize;
         for (pid, taken_at, created_at) in rows {

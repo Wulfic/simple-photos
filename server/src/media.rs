@@ -138,8 +138,13 @@ pub fn is_gif_header(header: &[u8]) -> bool {
 /// otherwise, this returns the corrected `(mime, media_type)` to apply; `None`
 /// when no correction is needed. Only ever upgrades an image to `gif` — never
 /// touches `video`/`audio`, which a GIF signature can't legitimately override.
-pub fn gif_override(current_media_type: &str, header: &[u8]) -> Option<(&'static str, &'static str)> {
-    if current_media_type != "gif" && current_media_type != "video" && current_media_type != "audio"
+pub fn gif_override(
+    current_media_type: &str,
+    header: &[u8],
+) -> Option<(&'static str, &'static str)> {
+    if current_media_type != "gif"
+        && current_media_type != "video"
+        && current_media_type != "audio"
         && is_gif_header(header)
     {
         Some(("image/gif", "gif"))
