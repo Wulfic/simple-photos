@@ -197,6 +197,11 @@ fun PhotoViewerScreen(
                 .build()
                 .apply {
                     playWhenReady = false
+                    // Loop videos instead of stopping after one play (#22).
+                    // Trimmed videos never reach the natural end (the trim
+                    // handler loops them within [trimStart, trimEnd]); this
+                    // covers every untrimmed video.
+                    repeatMode = androidx.media3.common.Player.REPEAT_MODE_ONE
                     videoChangeFrameRateStrategy =
                         C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF
                 }

@@ -123,8 +123,9 @@ internal fun VideoPlayerPage(
     }
 
     // Enforce trim boundaries during playback — seek to trimStart when
-    // playback begins, pause when trimEnd is reached.
-    LaunchedEffect(isActivePage, trimStart, trimEnd) {
+    // playback begins, and at trimEnd either pause (edit mode, so the user can
+    // scrub the boundary) or loop back to trimStart (normal viewing, #22).
+    LaunchedEffect(isActivePage, trimStart, trimEnd, editMode) {
         if (!isActivePage) return@LaunchedEffect
         val listener = object : androidx.media3.common.Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
@@ -144,8 +145,14 @@ internal fun VideoPlayerPage(
                 if (trimEnd > 0.01f) {
                     val currentMs = sharedPlayer.currentPosition
                     if (currentMs >= (trimEnd * 1000).toLong()) {
-                        sharedPlayer.playWhenReady = false
-                        sharedPlayer.seekTo((trimEnd * 1000).toLong())
+                        if (editMode) {
+                            // Editing the trim: stop at the boundary so it can be scrubbed.
+                            sharedPlayer.playWhenReady = false
+                            sharedPlayer.seekTo((trimEnd * 1000).toLong())
+                        } else {
+                            // Normal viewing: loop within the trimmed range.
+                            sharedPlayer.seekTo((trimStart * 1000).toLong())
+                        }
                     }
                 }
             }

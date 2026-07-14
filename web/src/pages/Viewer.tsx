@@ -744,7 +744,7 @@ export default function Viewer() {
               <video
                 ref={videoRef}
                 src={mediaUrl}
-                playsInline autoPlay
+                playsInline autoPlay loop
                 className="w-full h-full"
                 style={{
                   objectFit: 'contain' as const,
@@ -760,9 +760,11 @@ export default function Viewer() {
                   computeCropZoom();
                 }}
                 onTimeUpdate={(e) => {
+                  // Loop back to the trim start (not natural end) when a trim is
+                  // set, so trimmed videos loop within their range. The native
+                  // `loop` attribute handles untrimmed videos.
                   if (cropData?.trimEnd && e.currentTarget.currentTime >= cropData.trimEnd) {
-                    e.currentTarget.pause();
-                    e.currentTarget.currentTime = cropData.trimEnd;
+                    e.currentTarget.currentTime = cropData?.trimStart ?? 0;
                   }
                 }}
                 onError={() => setVideoError(true)}

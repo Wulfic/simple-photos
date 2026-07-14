@@ -168,9 +168,20 @@ Legend: 🔴 High · 🟡 Medium · 🟢 Low · ✨ Feature
 - [ ] Consider transcode/faststart (moov atom at front) for large source files.
 - [ ] Test: play a large (>1GB) and small (<20MB) video end-to-end on device.
 
-### D2 — #22 🟢 Videos should loop instead of stopping after one play
-- [ ] Enable looping in the video player (web + Android). Small change; do both
-      platforms for parity.
+### D2 — #22 🟢 Videos should loop instead of stopping after one play — ✅ DONE
+- [x] Web (`Viewer.tsx` normal-mode `<video>`): added native `loop`; the
+      `onTimeUpdate` trim-end handler now seeks back to `trimStart` (was
+      pause+seek-to-end) so trimmed videos loop within [trimStart, trimEnd].
+- [x] Android main viewer (`PhotoViewerScreen.kt` shared ExoPlayer):
+      `repeatMode = REPEAT_MODE_ONE`. `VideoPlayer.kt` trim handler now loops
+      back to `trimStart` at `trimEnd` in normal viewing (keeps pause-at-end in
+      edit mode so the trim boundary stays scrubbable; `editMode` added to the
+      `LaunchedEffect` keys so the listener closure isn't stale).
+- [x] Android secure viewer (`SecurePhotoViewer.kt` main player):
+      `repeatMode = REPEAT_MODE_ALL` for parity (motion overlay already looped).
+- [x] Web tsc + 40 vitest green; Android `compileDebugKotlin` green. Player
+      config is declarative — on-device/browser playback verify is the E2E gate
+      (shares the device-pending bucket with #17/#20).
 
 ---
 

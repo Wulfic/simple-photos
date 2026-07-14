@@ -431,6 +431,9 @@ private fun SecureVideoPage(
         videoFile?.let { f ->
             ExoPlayer.Builder(context).build().apply {
                 setMediaItem(MediaItem.fromUri(Uri.fromFile(f)))
+                // Loop instead of stopping after one play (#22), matching the
+                // main gallery video viewer.
+                repeatMode = Player.REPEAT_MODE_ALL
                 prepare()
                 playWhenReady = false
             }
