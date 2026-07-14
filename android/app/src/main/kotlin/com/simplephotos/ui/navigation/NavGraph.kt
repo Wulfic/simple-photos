@@ -23,6 +23,7 @@ import com.simplephotos.ui.screens.setup.ServerSetupScreen
 import com.simplephotos.ui.screens.trash.TrashScreen
 import com.simplephotos.ui.screens.twofactor.TwoFactorSetupScreen
 import com.simplephotos.ui.screens.viewer.PhotoViewerScreen
+import com.simplephotos.ui.screens.viewer.CompareScreen
 import com.simplephotos.ui.screens.search.SearchScreen
 import com.simplephotos.ui.screens.diagnostics.DiagnosticsScreen
 import com.simplephotos.ui.screens.securegallery.SecureGalleryScreen
@@ -82,7 +83,10 @@ fun NavGraph() {
                 onSharedAlbumsClick = { navController.navigate(Screen.SharedAlbums.route) },
                 onDiagnosticsClick = { navController.navigate(Screen.Diagnostics.route) },
                 onLogout = { navController.navigate(Screen.Login.route) { popUpTo(0) } },
-                isAdmin = isAdmin
+                isAdmin = isAdmin,
+                onCompareClick = { firstId, secondId ->
+                    navController.navigate(Screen.Compare.createRoute(firstId, secondId))
+                }
             )
         }
         composable(Screen.AlbumList.route) {
@@ -157,6 +161,19 @@ fun NavGraph() {
                 onSelectPerson = { photoId, detectionId ->
                     navController.navigate(Screen.People.createAssignRoute(photoId, detectionId))
                 },
+            )
+        }
+        composable(
+            route = Screen.Compare.route,
+            arguments = listOf(
+                navArgument("firstId") { type = NavType.StringType },
+                navArgument("secondId") { type = NavType.StringType },
+            )
+        ) { backStackEntry ->
+            CompareScreen(
+                firstId = backStackEntry.arguments?.getString("firstId") ?: "",
+                secondId = backStackEntry.arguments?.getString("secondId") ?: "",
+                onBack = { navController.popBackStack() },
             )
         }
         composable(Screen.Settings.route) {

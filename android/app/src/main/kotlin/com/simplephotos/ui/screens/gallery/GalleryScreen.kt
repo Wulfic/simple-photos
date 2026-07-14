@@ -53,6 +53,8 @@ import com.simplephotos.ui.components.CloudBackupBadge
 import com.simplephotos.ui.components.TileSelectionCircle
 import com.simplephotos.ui.components.rememberGalleryRowHeight
 import com.simplephotos.ui.components.rememberThumbnailRequest
+import com.simplephotos.ui.components.canCompare
+import com.simplephotos.ui.components.compareTargets
 import com.simplephotos.data.excludeSecure
 import com.simplephotos.data.local.AppDatabase
 import com.simplephotos.data.local.entities.AlbumEntity
@@ -102,6 +104,7 @@ fun GalleryScreen(
     onDiagnosticsClick: () -> Unit = {},
     onLogout: () -> Unit,
     isAdmin: Boolean = false,
+    onCompareClick: (String, String) -> Unit = { _, _ -> },
     viewModel: GalleryViewModel = hiltViewModel()
 ) {
     val photos by viewModel.photos.collectAsState(initial = emptyList())
@@ -179,6 +182,19 @@ fun GalleryScreen(
                             }
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            // Compare — only when exactly two photos are selected (#21).
+                            if (canCompare(viewModel.selectedIds.size)) {
+                                OutlinedButton(
+                                    onClick = {
+                                        compareTargets(viewModel.selectedIds)?.let { (a, b) ->
+                                            onCompareClick(a, b)
+                                        }
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                ) {
+                                    Text("Compare", fontSize = 12.sp)
+                                }
+                            }
                             OutlinedButton(
                                 onClick = { showAlbumPicker = true },
                                 enabled = viewModel.selectedIds.isNotEmpty(),

@@ -29,6 +29,21 @@ fun toggleGroupSelection(current: Set<String>, group: Set<String>): Set<String> 
     return if (allSelected) current - group else current + group
 }
 
+/** Split-screen Compare shows exactly two photos side by side (#21). */
+const val COMPARE_SELECTION_SIZE = 2
+
+/** True when the current selection can enter Compare (exactly two items). */
+fun canCompare(count: Int): Boolean = count == COMPARE_SELECTION_SIZE
+
+/**
+ * Resolve a selection into the ordered pair Compare needs, or null when the
+ * selection isn't exactly two items. Mirrors the web `compareTargets`.
+ */
+fun compareTargets(ids: Collection<String>): Pair<String, String>? {
+    val list = ids.toList()
+    return if (list.size == COMPARE_SELECTION_SIZE) list[0] to list[1] else null
+}
+
 class SelectionState {
     var selectedIds by mutableStateOf(emptySet<String>())
         private set

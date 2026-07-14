@@ -205,6 +205,15 @@ class PhotoViewerViewModel @Inject constructor(
     }
 
     /**
+     * Fetch a single photo by its local id. Used by the split-screen Compare
+     * screen (#21), which reuses this ViewModel's decrypt helpers + serverBaseUrl
+     * but loads its own two photos rather than the paged gallery list.
+     */
+    suspend fun loadPhotoByLocalId(localId: String): PhotoEntity? = withContext(Dispatchers.IO) {
+        photoRepository.getPhoto(localId)
+    }
+
+    /**
      * The streaming source backing encrypted-video playback (issue #17). The
      * repository implements it; the viewer builds a [MediaBlobDataSource.Factory]
      * from it so ExoPlayer fetches + decrypts only the frames it reads.

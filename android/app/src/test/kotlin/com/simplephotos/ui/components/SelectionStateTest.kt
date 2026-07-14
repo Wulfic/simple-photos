@@ -1,6 +1,9 @@
 package com.simplephotos.ui.components
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -55,5 +58,30 @@ class SelectionStateTest {
         assertEquals(setOf("a"), added)
         val removed = toggleGroupSelection(current = added, group = setOf("a"))
         assertEquals(emptySet<String>(), removed)
+    }
+
+    // ── Compare selection gate (#21) ────────────────────────────────────────
+
+    @Test
+    fun canCompareOnlyWithExactlyTwo() {
+        assertFalse(canCompare(0))
+        assertFalse(canCompare(1))
+        assertTrue(canCompare(2))
+        assertFalse(canCompare(3))
+        assertFalse(canCompare(10))
+    }
+
+    @Test
+    fun compareTargetsReturnsOrderedPairForTwo() {
+        assertEquals("a" to "b", compareTargets(listOf("a", "b")))
+        // LinkedHashSet preserves insertion order (the selection's real type).
+        assertEquals("x" to "y", compareTargets(linkedSetOf("x", "y")))
+    }
+
+    @Test
+    fun compareTargetsIsNullUnlessExactlyTwo() {
+        assertNull(compareTargets(emptyList()))
+        assertNull(compareTargets(listOf("only")))
+        assertNull(compareTargets(listOf("a", "b", "c")))
     }
 }

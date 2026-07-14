@@ -19,6 +19,10 @@ sealed class Screen(val route: String) {
             return if (albumId != null) "$base?albumId=$albumId" else base
         }
     }
+    /** Split-screen Compare of exactly two photos (#21). */
+    data object Compare : Screen("compare/{firstId}/{secondId}") {
+        fun createRoute(firstId: String, secondId: String) = "compare/$firstId/$secondId"
+    }
     data object Settings : Screen("settings")
     data object Search : Screen("search")
     data object Trash : Screen("trash")

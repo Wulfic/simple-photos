@@ -219,9 +219,28 @@ Legend: 🔴 High · 🟡 Medium · 🟢 Low · ✨ Feature
 
 ## EPIC F — Feature Requests
 
-### F1 — #21 ✨ Split-screen: view 2 photos simultaneously
-- [ ] Design first (think-plan). Web + Android. Lower priority than all bug
-      work above — schedule after Epics A–E.
+### F1 — #21 ✨ Split-screen: view 2 photos simultaneously — ✅ DONE (code)
+- [x] Design decisions (user's call): entry = gallery multi-select "Compare"
+      (shown only when exactly 2 selected); zoom/pan **independent** per pane;
+      media scope = **photos + GIFs + videos**.
+- [x] Shared pure gate — `canCompare(count)` + `compareTargets(ids)`: web
+      `utils/compare.ts`, Android co-located in `SelectionState.kt`. Both
+      unit-tested (web `compare.test.ts` +3; Android `SelectionStateTest` +3).
+- [x] Web: new `/compare` route (lazy `pages/Compare.tsx`) — adaptive layout
+      (`flex-col` portrait / `landscape:flex-row`). `components/compare/ComparePane.tsx`
+      reuses `useViewerMedia` (own per-pane preload cache) + self-contained
+      pointer/pinch/wheel/double-click zoom; video panes autoplay muted+loop.
+      Gallery selection bar gained a "Compare" button (2-selected gate).
+- [x] Android: new `Screen.Compare` route + NavGraph; `CompareScreen.kt` reuses
+      `PhotoPageContent` twice (each an always-active page with its OWN ExoPlayer,
+      so two videos play at once, muted+loop) — independent pinch-zoom for free.
+      Adaptive Row/Column by orientation. `GalleryScreen` "Compare" button
+      (2-selected gate) → `onCompareClick`. `PhotoViewerViewModel.loadPhotoByLocalId`
+      added for the two-photo fetch.
+- [x] Tests: web tsc + 43 vitest + prod build green; Android `compileDebugKotlin`
+      + full `testDebugUnitTest` green (SelectionStateTest 10/10). Split-screen is
+      largely declarative UI → on-device/browser visual verify is the E2E gate
+      (shares the device-pending bucket with #17/#20). NOT committed.
 
 ---
 

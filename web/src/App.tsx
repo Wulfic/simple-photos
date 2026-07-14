@@ -16,6 +16,7 @@ const Gallery = lazy(() => import("./pages/Gallery"));
 const Albums = lazy(() => import("./pages/Albums"));
 const AlbumDetail = lazy(() => import("./pages/AlbumDetail"));
 const Viewer = lazy(() => import("./pages/Viewer"));
+const Compare = lazy(() => import("./pages/Compare"));
 const Settings = lazy(() => import("./pages/Settings"));
 const Welcome = lazy(() => import("./pages/Welcome"));
 const Trash = lazy(() => import("./pages/Trash"));
@@ -272,6 +273,7 @@ export default function App() {
           <Route path="/albums/:albumId" element={<AlbumDetail />} />
           <Route path="/albums/:albumId/:subId" element={<AlbumDetail />} />
           <Route path="/photo/:id" element={<Viewer />} />
+          <Route path="/compare" element={<Compare />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/trash" element={<Trash />} />
           <Route path="/shared/:albumId" element={<SharedAlbumDetail />} />
