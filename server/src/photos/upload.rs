@@ -208,15 +208,17 @@ pub async fn upload_photo(
         (body, filename, mime)
     };
 
-    let media_type = if mime_type.starts_with("video/") {
-        "video"
-    } else if mime_type.starts_with("audio/") {
-        "audio"
-    } else if mime_type == "image/gif" {
-        "gif"
-    } else {
-        "photo"
-    };
+    let mut media_type = crate::media::media_type_from_mime(&mime_type);
+    // Content-based GIF rescue (#14): an uploaded GIF renamed to a non-`.gif`
+    // name (or sent with a generic MIME) would otherwise be tagged `photo` and
+    // never appear in the GIF smart album. The plaintext bytes are already in
+    // memory here, so sniff them directly.
+    let mut mime_type = mime_type;
+    if let Some((m, t)) = crate::media::gif_override(media_type, body.as_ref()) {
+        tracing::info!(filename = %filename, "Reclassified upload as GIF from content signature");
+        mime_type = m.to_string();
+        media_type = t;
+    }
 
     // Honor the `audio_backup_enabled` server toggle.  When audio backup is
     // disabled, the multipart upload endpoint must reject audio outright —

@@ -136,7 +136,9 @@ pub async fn scan_and_register(
                         continue;
                     }
 
-                    // Native format — determine MIME and media type directly.
+                    // Native format — determine MIME and media type directly. A
+                    // content-based GIF rescue happens later in `register_native_file`
+                    // (it reads the header once with the file already open).
                     let mime = mime_from_extension(&name).to_string();
                     let media_type: &'static str = if mime.starts_with("video/") {
                         "video"
@@ -485,6 +487,83 @@ pub async fn scan_and_register(
         .await
         {
             tracing::warn!(error = %e, "Failed to persist timestamp canonicalization flag");
+        }
+    }
+
+    // ── One-time content-based GIF re-detection for existing photos (#14) ─
+    // Earlier imports classified media purely by extension/MIME, so GIFs that
+    // arrived renamed (`funny.jpg`), with a generic MIME, or oddly exported by
+    // Takeout were tagged `photo` and never showed in the GIF smart album. Sniff
+    // the leading bytes of every `photo` row once per user and re-tag the real
+    // GIFs. Runs once (gated) and is a no-op on a library with no hidden GIFs.
+    let gif_repair_key = format!("gif_detect_repair_v1:{}", auth.user_id);
+    let gif_repair_done: bool =
+        sqlx::query_scalar("SELECT value = 'true' FROM server_settings WHERE key = ?")
+            .bind(&gif_repair_key)
+            .fetch_optional(&state.pool)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or(false);
+    if !gif_repair_done {
+        let photo_rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT id, file_path FROM photos WHERE user_id = ? AND media_type = 'photo' \
+             AND file_path != ''",
+        )
+        .bind(&auth.user_id)
+        .fetch_all(&state.pool)
+        .await
+        .unwrap_or_default();
+
+        let regif_count = Arc::new(AtomicI64::new(0));
+        stream::iter(photo_rows)
+            .map(|(pid, fpath)| {
+                let pool = state.pool.clone();
+                let regif_count = regif_count.clone();
+                let storage_root = storage_root.clone();
+                async move {
+                    let abs = storage_root.join(&fpath);
+                    let header = match crate::photos::register::read_header_bytes(&abs).await {
+                        Some(h) => h,
+                        None => return,
+                    };
+                    if crate::media::gif_override("photo", &header).is_none() {
+                        return;
+                    }
+                    if let Err(e) = sqlx::query(
+                        "UPDATE photos SET media_type = 'gif', mime_type = 'image/gif' WHERE id = ?",
+                    )
+                    .bind(&pid)
+                    .execute(&pool)
+                    .await
+                    {
+                        tracing::warn!(photo_id = %pid, error = %e, "Failed to re-tag GIF during scan (#14)");
+                    } else {
+                        regif_count.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            })
+            .buffer_unordered(scan_parallelism())
+            .for_each(|_| async {})
+            .await;
+
+        let regif_count = regif_count.load(Ordering::Relaxed);
+        if regif_count > 0 {
+            tracing::info!(
+                regif_count,
+                "Re-tagged {} misclassified GIFs from content signature (#14)",
+                regif_count
+            );
+        }
+        if let Err(e) = sqlx::query(
+            "INSERT INTO server_settings (key, value) VALUES (?, 'true') \
+             ON CONFLICT(key) DO UPDATE SET value = 'true'",
+        )
+        .bind(&gif_repair_key)
+        .execute(&state.pool)
+        .await
+        {
+            tracing::warn!(error = %e, "Failed to persist GIF detection repair flag");
         }
     }
 

@@ -265,16 +265,18 @@ pub async fn import_takeout(
             .and_then(|ctx| ctx.resolve_sidecar(&filename))
             .map(|j| media_path.with_file_name(j));
 
-        let mime = crate::media::mime_from_extension(&filename).to_string();
-        let media_type = if mime.starts_with("video/") {
-            "video"
-        } else if mime.starts_with("audio/") {
-            "audio"
-        } else if mime == "image/gif" {
-            "gif"
-        } else {
-            "photo"
-        };
+        let mut mime = crate::media::mime_from_extension(&filename).to_string();
+        let mut media_type = crate::media::media_type_from_mime(&mime);
+        // Content-based GIF rescue (#14): Takeout occasionally exports GIFs under a
+        // non-`.gif` name, so the extension-derived classification tags them `photo`
+        // and they never reach the GIF smart album. Sniff the leading bytes and fix.
+        if let Some(header) = crate::photos::register::read_header_bytes(media_path).await {
+            if let Some((m, t)) = crate::media::gif_override(media_type, &header) {
+                tracing::info!(file = %filename, "Reclassified Takeout file as GIF from content signature");
+                mime = m.to_string();
+                media_type = t;
+            }
+        }
 
         let file_meta = tokio::fs::metadata(media_path).await.ok();
         let size = file_meta.as_ref().map(|m| m.len() as i64).unwrap_or(0);
@@ -329,7 +331,9 @@ pub async fn import_takeout(
 
             let photo_id = Uuid::new_v4().to_string();
             let now = Utc::now().to_rfc3339();
-            let thumb_rel = format!(".thumbnails/{photo_id}.thumb.jpg");
+            // GIFs keep an animated GIF thumbnail; everything else gets a JPEG.
+            let thumb_ext = if media_type == "gif" { "gif" } else { "jpg" };
+            let thumb_rel = format!(".thumbnails/{photo_id}.thumb.{thumb_ext}");
 
             // Try to read taken_at from sidecar if available
             let mut taken_at = modified.clone();

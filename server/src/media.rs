@@ -107,6 +107,47 @@ pub fn mime_from_extension(name: &str) -> &'static str {
     }
 }
 
+/// Classify a database `media_type` (`photo | gif | video | audio`) from a MIME
+/// type. Single source of truth for the derivation that every import path
+/// previously reimplemented inline. Note this is only as reliable as the MIME
+/// itself — extension-derived MIMEs miss content-renamed files, so callers with
+/// the file bytes on hand should follow up with [`gif_override`].
+pub fn media_type_from_mime(mime: &str) -> &'static str {
+    if mime.starts_with("video/") {
+        "video"
+    } else if mime.starts_with("audio/") {
+        "audio"
+    } else if mime == "image/gif" {
+        "gif"
+    } else {
+        "photo"
+    }
+}
+
+/// The 6-byte GIF signature (`GIF87a` / `GIF89a`) that opens every GIF file.
+/// `header` need only contain the leading bytes of the file.
+pub fn is_gif_header(header: &[u8]) -> bool {
+    header.starts_with(b"GIF87a") || header.starts_with(b"GIF89a")
+}
+
+/// Content-based GIF rescue. Extension- and MIME-based classification silently
+/// misses GIFs that were renamed (`funny.jpg`), delivered with a generic MIME
+/// (`application/octet-stream`), or exported oddly by Google Takeout — they get
+/// tagged `photo` and vanish from the GIF smart album (issue #14). When the
+/// leading file bytes are actually a GIF but the current `media_type` says
+/// otherwise, this returns the corrected `(mime, media_type)` to apply; `None`
+/// when no correction is needed. Only ever upgrades an image to `gif` — never
+/// touches `video`/`audio`, which a GIF signature can't legitimately override.
+pub fn gif_override(current_media_type: &str, header: &[u8]) -> Option<(&'static str, &'static str)> {
+    if current_media_type != "gif" && current_media_type != "video" && current_media_type != "audio"
+        && is_gif_header(header)
+    {
+        Some(("image/gif", "gif"))
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,5 +205,43 @@ mod tests {
         let names = ["Photo.JPG", "photo-edited.jpg"];
         let shadowed = edited_shadowed_originals(names.iter().copied());
         assert!(shadowed.contains("photo.jpg"));
+    }
+
+    #[test]
+    fn media_type_from_mime_classifies_all_categories() {
+        assert_eq!(media_type_from_mime("image/jpeg"), "photo");
+        assert_eq!(media_type_from_mime("image/png"), "photo");
+        assert_eq!(media_type_from_mime("image/gif"), "gif");
+        assert_eq!(media_type_from_mime("video/mp4"), "video");
+        assert_eq!(media_type_from_mime("audio/mpeg"), "audio");
+        // Unknown/generic MIME falls back to photo (an image we couldn't name).
+        assert_eq!(media_type_from_mime("application/octet-stream"), "photo");
+    }
+
+    #[test]
+    fn is_gif_header_matches_both_signatures() {
+        assert!(is_gif_header(b"GIF89a\x00\x01"));
+        assert!(is_gif_header(b"GIF87a rest of file"));
+        // Not a GIF.
+        assert!(!is_gif_header(b"\xFF\xD8\xFF\xE0JFIF")); // JPEG
+        assert!(!is_gif_header(b"\x89PNG\r\n\x1a\n")); // PNG
+        assert!(!is_gif_header(b"GIF")); // truncated — must be the full 6-byte magic
+        assert!(!is_gif_header(b"")); // empty
+    }
+
+    #[test]
+    fn gif_override_rescues_misclassified_gif() {
+        // A GIF whose extension/MIME made it look like a plain photo.
+        assert_eq!(
+            gif_override("photo", b"GIF89a...."),
+            Some(("image/gif", "gif"))
+        );
+        // Already correctly a gif — no override churn.
+        assert_eq!(gif_override("gif", b"GIF89a...."), None);
+        // A real photo stays a photo.
+        assert_eq!(gif_override("photo", b"\xFF\xD8\xFF\xE0"), None);
+        // Never reclassify video/audio off a stray GIF signature.
+        assert_eq!(gif_override("video", b"GIF89a...."), None);
+        assert_eq!(gif_override("audio", b"GIF89a...."), None);
     }
 }

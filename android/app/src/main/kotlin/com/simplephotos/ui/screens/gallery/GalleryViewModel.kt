@@ -397,14 +397,22 @@ class GalleryViewModel @Inject constructor(
             for (uri in uris) {
                 try {
                     val resolver = context.contentResolver
-                    val mimeType = resolver.getType(uri) ?: "image/jpeg"
-                    val mediaType = when {
+                    var mimeType = resolver.getType(uri) ?: "image/jpeg"
+                    var mediaType = when {
                         mimeType.startsWith("video/") -> "video"
                         mimeType.startsWith("audio/") -> "audio"
                         mimeType == "image/gif" -> "gif"
                         else -> "photo"
                     }
                     val data = withContext(Dispatchers.IO) { resolver.openInputStream(uri)?.use { it.readBytes() } } ?: continue
+
+                    // Content-based GIF rescue (#14): a GIF picked with a wrong/generic
+                    // MIME would land in the gallery but not the GIF smart album.
+                    val rescued = com.simplephotos.data.media.MediaTypeDetector.rescueGif(mediaType, data)
+                    if (rescued != mediaType) {
+                        mediaType = rescued
+                        mimeType = "image/gif"
+                    }
 
                     // Content hash dedup — skip if identical content already exists in DB
                     val contentHash = withContext(Dispatchers.IO) {

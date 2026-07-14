@@ -30,6 +30,17 @@ use crate::photos::motion::extract_and_store_motion_video;
 use crate::photos::thumbnail::generate_thumbnail_file;
 use crate::photos::utils::{compute_photo_hash_streaming, resolve_taken_at, utc_now_iso};
 
+/// Read up to the first 16 bytes of a file for content-signature sniffing
+/// (magic-byte format detection). Returns `None` on any IO error — callers
+/// treat that as "no signature available" and fall back to extension/MIME.
+pub(crate) async fn read_header_bytes(path: &Path) -> Option<Vec<u8>> {
+    use tokio::io::AsyncReadExt;
+    let mut file = tokio::fs::File::open(path).await.ok()?;
+    let mut buf = [0u8; 16];
+    let n = file.read(&mut buf).await.ok()?;
+    Some(buf[..n].to_vec())
+}
+
 /// An unregistered native media file discovered on disk during the walk phase.
 ///
 /// The walk resolves everything cheap (paths, MIME, size, mtime) so the
@@ -115,12 +126,28 @@ pub(crate) async fn register_native_file(
 ) -> bool {
     let photo_id = Uuid::new_v4().to_string();
     let now = utc_now_iso();
-    // GIFs keep an animated GIF thumbnail; everything else gets a JPEG.
-    let thumb_ext = if cand.mime == "image/gif" {
-        "gif"
-    } else {
-        "jpg"
+
+    // Content-based GIF rescue (#14): the extension-derived MIME misses GIFs that
+    // were renamed or exported with a non-`.gif` name, tagging them `photo` so
+    // they never reach the GIF smart album. Sniff the first bytes and correct the
+    // classification before it's persisted.
+    let (mime, media_type): (&str, &str) = match read_header_bytes(&cand.abs_path).await {
+        Some(header) => match crate::media::gif_override(cand.media_type, &header) {
+            Some((m, t)) => {
+                tracing::info!(
+                    file = %cand.rel_path,
+                    "Reclassified as GIF from content signature (extension said {})",
+                    cand.media_type
+                );
+                (m, t)
+            }
+            None => (cand.mime.as_str(), cand.media_type),
+        },
+        None => (cand.mime.as_str(), cand.media_type),
     };
+
+    // GIFs keep an animated GIF thumbnail; everything else gets a JPEG.
+    let thumb_ext = if mime == "image/gif" { "gif" } else { "jpg" };
     let thumb_rel = format!(".thumbnails/{photo_id}.thumb.{thumb_ext}");
 
     // Header-only metadata extraction (dimensions, camera, GPS, capture date).
@@ -130,7 +157,7 @@ pub(crate) async fn register_native_file(
     // XMP subtype (motion / panorama / 360 / HDR / burst) — photos only. Scanning
     // a video's bytes for XMP is meaningless and the aspect fallback would
     // mis-flag wide videos as panoramas.
-    let subtype_info = if cand.media_type == "photo" {
+    let subtype_info = if media_type == "photo" {
         let mut info = extract_xmp_subtype_async(cand.abs_path.clone()).await;
         apply_aspect_subtype_fallback_with(&mut info, img_w, img_h, ctx.pano_sensitivity);
         info
@@ -211,8 +238,8 @@ pub(crate) async fn register_native_file(
     .bind(&ctx.user_id)
     .bind(&cand.name)
     .bind(&cand.rel_path)
-    .bind(&cand.mime)
-    .bind(cand.media_type)
+    .bind(mime)
+    .bind(media_type)
     .bind(cand.size)
     .bind(img_w)
     .bind(img_h)
@@ -348,7 +375,7 @@ pub(crate) async fn register_native_file(
 
     // Generate the thumbnail last so a failure here still leaves a usable row.
     let thumb_abs = storage_root.join(&thumb_rel);
-    if !generate_thumbnail_file(&cand.abs_path, &thumb_abs, &cand.mime, None).await {
+    if !generate_thumbnail_file(&cand.abs_path, &thumb_abs, mime, None).await {
         tracing::warn!(file = %cand.rel_path, "Failed to generate thumbnail");
     }
 
