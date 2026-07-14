@@ -143,6 +143,19 @@ interface ApiService {
     @Streaming
     suspend fun downloadBlob(@Path("id") blobId: String): ResponseBody
 
+    /**
+     * Range download of an encrypted blob. Returns the full [Response] so the
+     * caller can read `Content-Range` (total encrypted size) off the 206 headers.
+     * Backs the streaming video DataSource (issue #17): only the ~4 MiB frame(s)
+     * ExoPlayer actually reads are fetched, never the whole file up front.
+     */
+    @GET("api/blobs/{id}")
+    @Streaming
+    suspend fun downloadBlobRange(
+        @Path("id") blobId: String,
+        @Header("Range") range: String,
+    ): Response<ResponseBody>
+
     @GET("api/blobs/{id}/thumb")
     @Streaming
     suspend fun downloadThumbBlob(@Path("id") blobId: String): ResponseBody

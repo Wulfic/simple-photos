@@ -205,6 +205,14 @@ class PhotoViewerViewModel @Inject constructor(
     }
 
     /**
+     * The streaming source backing encrypted-video playback (issue #17). The
+     * repository implements it; the viewer builds a [MediaBlobDataSource.Factory]
+     * from it so ExoPlayer fetches + decrypts only the frames it reads.
+     */
+    val encryptedBlobStream: com.simplephotos.data.repository.EncryptedBlobStream
+        get() = photoRepository
+
+    /**
      * Download, decrypt, and write media directly to a temp file.
      * Used for video/audio to avoid OOM — the decoded bytes never live
      * entirely in the Java heap (only the encrypted blob + decrypted JSON

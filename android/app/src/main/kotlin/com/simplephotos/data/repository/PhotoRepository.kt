@@ -47,6 +47,25 @@ import java.time.ZoneOffset
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/** One encrypted byte-range read of a blob plus the blob's total encrypted size. */
+data class BlobRange(val bytes: ByteArray, val encryptedTotal: Long)
+
+/**
+ * Narrow surface the streaming video DataSource ([com.simplephotos.ui.screens.viewer.MediaBlobDataSource])
+ * needs, decoupled from the full repository. Lets encrypted video stream + seek
+ * by fetching and decrypting only the frames ExoPlayer reads (issue #17).
+ */
+interface EncryptedBlobStream {
+    /** Fetch encrypted bytes `[start, endInclusive]`; also reports the total encrypted size. */
+    suspend fun fetchRange(blobId: String, start: Long, endInclusive: Long): BlobRange
+
+    /** Decrypt one AES-GCM frame (`[nonce][ciphertext+tag]`). Synchronous. */
+    fun decryptFrame(frame: ByteArray): ByteArray
+
+    /** Full decrypted media bytes (both container formats) — the v1 (< 32 MiB) fallback. */
+    suspend fun fetchWholePlaintext(blobId: String): ByteArray
+}
+
 /**
  * Central photo/video management: upload (encrypted), download, decrypt,
  * sync from server, and local cache management.
@@ -62,7 +81,7 @@ class PhotoRepository @Inject constructor(
     private val crypto: CryptoManager,
     private val dataStore: DataStore<Preferences>,
     @ApplicationContext private val context: Context
-) {
+) : EncryptedBlobStream {
     companion object {
         private const val TAG = "PhotoRepository"
         /** Bounded concurrency for thumbnail downloads during sync. Keeps the
@@ -582,6 +601,36 @@ class PhotoRepository @Inject constructor(
         val encrypted = response.bytes()
         return crypto.decrypt(encrypted)
     }
+
+    // ── EncryptedBlobStream (streaming video DataSource, issue #17) ───────────
+
+    /**
+     * Fetch encrypted bytes `[start, endInclusive]` of a blob and the blob's
+     * total encrypted size (from the 206 `Content-Range`). Bounded: a caller only
+     * ever requests one ~4 MiB frame block or a 12-byte header probe, so reading
+     * the range body fully into memory is safe.
+     */
+    override suspend fun fetchRange(blobId: String, start: Long, endInclusive: Long): BlobRange {
+        val resp = api.downloadBlobRange(blobId, "bytes=$start-$endInclusive")
+        if (!resp.isSuccessful) {
+            throw java.io.IOException("blob range ${resp.code()} for $blobId ($start-$endInclusive)")
+        }
+        val body = resp.body() ?: throw java.io.IOException("empty range body for $blobId")
+        val bytes = body.byteStream().use { it.readBytes() }
+        val total = parseContentRangeTotal(resp.headers()["Content-Range"])
+            ?: resp.headers()["Content-Length"]?.toLongOrNull()?.let { start + it }
+            ?: (start + bytes.size)
+        return BlobRange(bytes, total)
+    }
+
+    override fun decryptFrame(frame: ByteArray): ByteArray = crypto.decrypt(frame)
+
+    override suspend fun fetchWholePlaintext(blobId: String): ByteArray =
+        downloadAndDecryptMediaBytes(blobId)
+
+    /** Parse the total size out of a `Content-Range: bytes START-END/TOTAL` header. */
+    private fun parseContentRangeTotal(header: String?): Long? =
+        header?.substringAfterLast('/', "")?.trim()?.toLongOrNull()
 
     /**
      * Download a blob and decrypt it into raw **media bytes**, handling both the

@@ -222,6 +222,16 @@ internal fun PhotoPageContent(
     // directly to a temp file. Peak heap: ~1× blob size (vs ~4× before).
     LaunchedEffect(photo.localId, shouldDecrypt) {
         if (shouldDecrypt && isMedia && decryptedData == null && tempMediaUri == null) {
+            // Video: hand ExoPlayer a `spblob://<blobId>` URI so MediaBlobDataSource
+            // streams + range-decrypts only the frames it reads (issue #17) — no
+            // whole-file download+decrypt before the first frame. The scheme must
+            // match MediaBlobDataSource.SCHEME. Audio keeps the decrypt-to-temp-file
+            // path below (small, not seek-critical).
+            if (photo.mediaType == "video") {
+                tempMediaUri = Uri.parse("spblob://${photo.serverBlobId!!}")
+                decryptLoading = false
+                return@LaunchedEffect
+            }
             decryptLoading = true
             try {
                 val ext = if (photo.mediaType == "audio") ".mp3"
@@ -260,7 +270,9 @@ internal fun PhotoPageContent(
     // accumulating dozens of large video files in the cache directory.
     DisposableEffect(photo.localId) {
         onDispose {
-            tempMediaUri?.path?.let { path ->
+            // Only a real temp file needs deleting; a spblob:// streaming URI
+            // (encrypted video, issue #17) has nothing on disk to clean up.
+            tempMediaUri?.takeIf { it.scheme == "file" }?.path?.let { path ->
                 try { java.io.File(path).delete() } catch (_: Exception) {}
             }
             // Release decryptedData so GC can reclaim it when page is disposed

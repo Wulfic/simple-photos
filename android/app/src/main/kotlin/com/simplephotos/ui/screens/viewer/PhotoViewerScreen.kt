@@ -61,7 +61,6 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
@@ -158,10 +157,12 @@ fun PhotoViewerScreen(
     // This mirrors how the web browser works: download first, play local.
     val sharedPlayer = remember {
         run {
-            // Local-only data source — handles file:// and content:// URIs.
-            // No network data source needed; download is handled separately.
+            // Data source that streams encrypted video blobs (spblob:// URIs) by
+            // fetching + decrypting only the frames ExoPlayer reads (issue #17),
+            // and delegates local file://, content:// (originals, motion trailers)
+            // to the default source. Replaces the old download-whole-file-first path.
             val mediaSourceFactory = DefaultMediaSourceFactory(
-                DefaultDataSource.Factory(context)
+                MediaBlobDataSource.Factory(context, viewModel.encryptedBlobStream)
             )
 
             // ── Minimal in-memory buffer ─────────────────────────────
