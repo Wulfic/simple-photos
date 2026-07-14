@@ -2,6 +2,7 @@
 import { useRef, useEffect, useCallback } from "react";
 import type { MediaType } from "../../db";
 import { formatTimecode } from "../../utils/formatters";
+import { supportsInPlaceEditSave } from "../../gallery/utils/gifDetection";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -320,15 +321,22 @@ export default function ViewerEditPanel({
 
       {/* ── Action buttons ───────────────────────────────────────────── */}
       <div className="flex items-center justify-center gap-2">
-        <button
-          onClick={onSave}
-          className="btn btn-primary btn-md"
-        >
-          Save
-        </button>
+        {/* GIFs have no in-place Save. A metadata-only Save never re-bakes the
+            animated-GIF thumbnail (the tile transform is unreliable for animated
+            drawables — issue #14/#18), so GIF edits must go through Save Copy,
+            which re-encodes the GIF via ffmpeg AND regenerates a cropped
+            thumbnail. Users can delete the original copy manually if desired. */}
+        {supportsInPlaceEditSave(mediaType) && (
+          <button
+            onClick={onSave}
+            className="btn btn-primary btn-md"
+          >
+            Save
+          </button>
+        )}
         <button
           onClick={onSaveCopy}
-          className="btn btn-secondary btn-md"
+          className={supportsInPlaceEditSave(mediaType) ? "btn btn-secondary btn-md" : "btn btn-primary btn-md"}
           title="Save as a new copy — keeps the original unchanged"
         >
           Save Copy

@@ -34,6 +34,19 @@ export function needsFullGifLoad(
 }
 
 /**
+ * True when a media type supports a non-destructive, in-place "Save" of edits
+ * (crop/rotate/brightness stored as `crop_metadata`, rendered live by a client
+ * transform). GIFs do NOT: a metadata-only save never re-bakes the animated-GIF
+ * thumbnail, so the tile keeps the unedited frame (issue #18). GIF edits must
+ * instead go through Save Copy, which re-encodes the GIF via ffmpeg and
+ * regenerates a correctly cropped thumbnail. Videos/audio keep the transform on
+ * the player, so in-place save is fine for them.
+ */
+export function supportsInPlaceEditSave(mediaType: string): boolean {
+  return mediaType !== "gif";
+}
+
+/**
  * Derive the gallery `mediaType` field from a raw MIME string.
  * Returns `"gif"` for GIFs, `"video"` for video/*, `"audio"` for audio/*,
  * and `"photo"` for everything else.

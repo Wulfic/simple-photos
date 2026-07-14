@@ -133,11 +133,27 @@ Legend: 🔴 High · 🟡 Medium · 🟢 Low · ✨ Feature
 - [ ] Backfill: re-tag existing undetected GIFs.
 - [ ] Test: fixture set of GIFs (various sources) all land in the smart album.
 
-### C2 — #18 🟡 GIF crop-save doesn't regenerate thumbnail
-- [ ] Crop-save edits the full GIF correctly but thumbnail keeps old frame.
-- [ ] Trigger thumbnail regeneration on GIF edit-save (same path as photo crop
-      thumb regen — check `crop no-thumb-regen` mem0 note for the pattern).
-- [ ] Test: crop a GIF → assert stored thumbnail bytes changed.
+### C2 — #18 🟡 GIF crop-save doesn't regenerate thumbnail — ✅ DONE
+- [x] Root cause: in-place "Save" is metadata-only on both platforms; the tile
+      renders the crop via a live transform (web CSS / Android `graphicsLayer`).
+      That transform is unreliable for Coil's **animated-GIF** drawable, so the
+      GIF thumbnail kept the unedited frame even though the full viewer showed
+      the crop (matches the report; both transform fixes predate the issue).
+- [x] Fix (per user decision): **remove in-place "Save" for GIFs — Save Copy
+      only.** Save Copy already re-encodes the GIF via ffmpeg AND regenerates a
+      gif-aware, cropped thumbnail (`save_copy.rs`, copy has `crop_metadata=NULL`
+      → no transform, thumbnail is truly cropped). User can delete the original.
+- [x] Web: `ViewerEditPanel` hides Save for GIFs (Save Copy promoted to primary);
+      `useViewerActions.handleLeaveAndSave` routes GIF-with-edits → Save Copy.
+      Gated on new pure `supportsInPlaceEditSave(mediaType)` in `gifDetection.ts`.
+- [x] Android: `ViewerEditPanel.kt` hides Save for GIFs; `PhotoViewerScreen.saveEdit()`
+      defensively routes GIF-with-edits → `duplicatePhoto` (Save Copy).
+- [x] Tests: `gifDetection.test.ts` (+6, predicate). Web tsc + 40 vitest green;
+      Android `compileDebugKotlin` green. (No new ffmpeg E2E — GIF render already
+      covered by `ffmpeg.rs` arg-construction tests; full bake is Python-harness.)
+- [ ] FOLLOW-UP (optional, low): legacy GIFs already carrying `crop_metadata`
+      from a prior in-place save still rely on the Android transform → may still
+      look uncropped on-device. Not backfilled (clearing would drop their edit).
 
 ---
 

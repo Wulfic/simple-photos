@@ -596,23 +596,33 @@ fun PhotoViewerScreen(
             (mediaDuration <= 0f || kotlin.math.abs(trimEnd - mediaDuration) < 0.5f)
         val allDefault = isDefaultCrop && isDefaultBrightness && isDefaultRotate && isDefaultTrim
 
-        if (allDefault) {
-            viewModel.saveCropMetadata(photo, null)
-        } else {
-            val meta = JSONObject().apply {
-                put("x", c.x.toDouble().coerceIn(0.0, 1.0))
-                put("y", c.y.toDouble().coerceIn(0.0, 1.0))
-                put("width", c.w.toDouble().coerceIn(0.05, 1.0))
-                put("height", c.h.toDouble().coerceIn(0.05, 1.0))
-                put("rotate", rotateValue)
-                put("brightness", brightnessValue.toDouble())
-                if (!isDefaultTrim) {
-                    put("trimStart", trimStart.toDouble())
-                    put("trimEnd", trimEnd.toDouble())
-                }
-            }.toString()
-            viewModel.saveCropMetadata(photo, meta)
+        val meta = if (allDefault) null else JSONObject().apply {
+            put("x", c.x.toDouble().coerceIn(0.0, 1.0))
+            put("y", c.y.toDouble().coerceIn(0.0, 1.0))
+            put("width", c.w.toDouble().coerceIn(0.05, 1.0))
+            put("height", c.h.toDouble().coerceIn(0.05, 1.0))
+            put("rotate", rotateValue)
+            put("brightness", brightnessValue.toDouble())
+            if (!isDefaultTrim) {
+                put("trimStart", trimStart.toDouble())
+                put("trimEnd", trimEnd.toDouble())
+            }
+        }.toString()
+
+        // GIFs have no in-place metadata Save (issue #18): a metadata-only save
+        // can't re-bake the animated-GIF thumbnail (Coil's animated drawable
+        // ignores the graphicsLayer tile transform), so the thumbnail keeps the
+        // unedited frame. Route real GIF edits through the server duplicate
+        // render, which re-encodes the GIF via ffmpeg AND regenerates a cropped
+        // thumbnail. Defensive: the GIF Save button is already hidden — this
+        // guards any other in-place-save entry point. A reset (meta == null)
+        // still clears the metadata below.
+        if (photo.mediaType == "gif" && meta != null) {
+            viewModel.duplicatePhoto(photo, meta) { editMode = false }
+            return
         }
+
+        viewModel.saveCropMetadata(photo, meta)
         editMode = false
     }
 

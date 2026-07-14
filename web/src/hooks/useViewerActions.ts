@@ -12,6 +12,7 @@ import { useAuthStore } from "../store/auth";
 import { useBackupStore } from "../store/backup";
 import { useProcessingStore } from "../store/processing";
 import { applyEditsToImageDownload } from "../utils/media";
+import { supportsInPlaceEditSave } from "../gallery/utils/gifDetection";
 import type { CropMetadata, PreloadEntry } from "./useViewerMedia";
 
 interface ViewerLocationState {
@@ -323,10 +324,19 @@ export default function useViewerActions({
   }, [id, setCropData, setCropCorners, setBrightness, setRotateValue, setTrimStart, setTrimEnd, mediaDuration]);
 
   const handleLeaveAndSave = useCallback(async () => {
-    await handleSaveEdit();
+    // GIFs have no in-place metadata Save (issue #18): a metadata-only save
+    // can't re-bake the animated-GIF thumbnail, so the tile keeps the unedited
+    // frame. Persist real GIF edits as a rendered Save Copy instead, which
+    // re-encodes the GIF via ffmpeg AND regenerates a correctly cropped
+    // thumbnail. All-default (a reset) still falls through to the metadata clear.
+    if (!supportsInPlaceEditSave(mediaType) && buildEditMetadata()) {
+      await handleSaveCopy();
+    } else {
+      await handleSaveEdit();
+    }
     setShowLeavePrompt(false);
     navigate(backTo);
-  }, [handleSaveEdit, navigate, backTo]);
+  }, [mediaType, buildEditMetadata, handleSaveCopy, handleSaveEdit, navigate, backTo]);
 
   const handleLeaveAndDiscard = useCallback(() => {
     setEditMode(false);
