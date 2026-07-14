@@ -152,13 +152,17 @@ fun TrashScreen(
                             Spacer(Modifier.width(4.dp))
                             Text("Restore", fontSize = 13.sp)
                         }
+                        // Icon-only so the label can't wrap when the selected-count
+                        // text squeezes this row alongside Restore (#23).
                         Button(
                             onClick = { viewModel.deleteSelected() },
                             enabled = viewModel.actionLoading == null
                         ) {
-                            Icon(painter = painterResource(R.drawable.ic_trashcan), contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Delete", fontSize = 13.sp)
+                            Icon(
+                                painter = painterResource(R.drawable.ic_trashcan),
+                                contentDescription = "Delete",
+                                modifier = Modifier.size(18.dp)
+                            )
                         }
                     }
                 }

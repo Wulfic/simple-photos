@@ -179,8 +179,12 @@ class GalleryViewModel @Inject constructor(
     fun selectAll(allPhotos: List<PhotoEntity>) =
         selection.setSelection(allPhotos.map { it.localId }.toSet())
 
-    fun selectDay(dayPhotoIds: Set<String>) =
-        selection.setSelection(selectedIds + dayPhotoIds)
+    /**
+     * Toggle every photo in a day group so a whole day can be selected — and,
+     * crucially, deselected — in one tap instead of one photo at a time (#24).
+     * Delegates to the shared [SelectionState.toggleGroup].
+     */
+    fun selectDay(dayPhotoIds: Set<String>) = selection.toggleGroup(dayPhotoIds)
 
     fun clearSelection() = selection.clear()
 

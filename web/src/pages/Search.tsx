@@ -709,26 +709,9 @@ function SearchResultTile({
         )}
       </div>
 
-      {/* Tag chips overlay on hover */}
-      {result.tags.length > 0 && (
-        <div className="absolute inset-x-0 top-0 p-1 opacity-0 group-hover:opacity-100 transition-opacity">
-          <div className="flex flex-wrap gap-0.5">
-            {result.tags.slice(0, 3).map((tag) => (
-              <span
-                key={tag}
-                className="bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded-full"
-              >
-                {tag}
-              </span>
-            ))}
-            {result.tags.length > 3 && (
-              <span className="bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded-full">
-                +{result.tags.length - 3}
-              </span>
-            )}
-          </div>
-        </div>
-      )}
+      {/* Tags are intentionally NOT overlaid on result tiles — they cluttered the
+          media and users don't expect their tags stamped on the thumbnail (#15).
+          Tags remain searchable and viewable in the photo's info/tag panel. */}
     </div>
   );
 }

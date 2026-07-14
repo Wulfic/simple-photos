@@ -7,7 +7,6 @@ package com.simplephotos.ui.screens.search
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -21,7 +20,6 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -278,7 +276,7 @@ private fun SearchResultTile(
 
         // Burst stack badge (top-end) — the server collapses bursts to one
         // result, so mark the stack and show its frame count, matching the
-        // gallery and secure grids. Placed top-end so it clears the tag chips.
+        // gallery and secure grids.
         if (!result.burstId.isNullOrEmpty()) {
             Surface(
                 modifier = Modifier
@@ -315,43 +313,8 @@ private fun SearchResultTile(
             }
         }
 
-        // Tag chips at top
-        if (result.tags.isNotEmpty()) {
-            Row(
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(4.dp),
-                horizontalArrangement = Arrangement.spacedBy(2.dp)
-            ) {
-                result.tags.take(2).forEach { tag ->
-                    Surface(
-                        color = Color.Black.copy(alpha = 0.6f),
-                        shape = CircleShape
-                    ) {
-                        Text(
-                            text = tag,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                            color = Color.White,
-                            fontSize = 9.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-                if (result.tags.size > 2) {
-                    Surface(
-                        color = Color.Black.copy(alpha = 0.6f),
-                        shape = CircleShape
-                    ) {
-                        Text(
-                            text = "+${result.tags.size - 2}",
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                            color = Color.White,
-                            fontSize = 9.sp
-                        )
-                    }
-                }
-            }
-        }
+        // Tags are intentionally NOT overlaid on result tiles — they cluttered the
+        // media and users don't expect their tags stamped on the thumbnail (#15).
+        // Tags remain searchable and are still viewable in the photo's tag panel.
     }
 }

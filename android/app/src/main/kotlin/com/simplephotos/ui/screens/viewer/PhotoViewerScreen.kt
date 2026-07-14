@@ -248,7 +248,12 @@ fun PhotoViewerScreen(
     // Controls overlay visibility — starts hidden so the photo is the focus.
     // Single tap toggles; when shown, auto-hide after 3 s of inactivity.
     var showOverlay by remember { mutableStateOf(false) }
-    LaunchedEffect(showOverlay) {
+    // Bumped whenever the user interacts with a control (e.g. favoriting). Keyed
+    // into the auto-hide effect so each interaction restarts the 3 s countdown —
+    // otherwise rapid consecutive favorites let the timer fire mid-interaction and
+    // the top bar vanished while still in use, taking seconds to tap back (#19).
+    var overlayInteraction by remember { mutableIntStateOf(0) }
+    LaunchedEffect(showOverlay, overlayInteraction) {
         if (showOverlay) {
             kotlinx.coroutines.delay(3_000)
             showOverlay = false
@@ -1046,7 +1051,12 @@ fun PhotoViewerScreen(
                     Spacer(Modifier.weight(1f))
                     if (currentPhoto != null) {
                         if (currentPhoto.serverPhotoId != null) {
-                            IconButton(onClick = { viewModel.toggleFavorite(currentPhoto.serverPhotoId!!) }, modifier = Modifier.size(40.dp)) {
+                            IconButton(onClick = {
+                                // Keep the top bar alive: rapid consecutive favorites
+                                // must restart the auto-hide countdown, not race it (#19).
+                                overlayInteraction++
+                                viewModel.toggleFavorite(currentPhoto.serverPhotoId!!)
+                            }, modifier = Modifier.size(40.dp)) {
                                 Icon(
                                     imageVector = if (viewModel.isFavorite) Icons.Filled.Star else Icons.Filled.StarBorder,
                                     contentDescription = if (viewModel.isFavorite) "Unfavorite" else "Favorite",

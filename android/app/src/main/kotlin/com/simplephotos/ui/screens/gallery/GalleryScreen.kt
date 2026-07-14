@@ -188,14 +188,18 @@ fun GalleryScreen(
                                 Spacer(Modifier.width(4.dp))
                                 Text("Album", fontSize = 12.sp)
                             }
+                            // Icon-only so the label can't wrap to a second line when
+                            // the "N selected" count grows and squeezes this row (#23).
                             Button(
                                 onClick = { viewModel.deleteSelectedPhotos(visiblePhotos) },
                                 enabled = viewModel.selectedIds.isNotEmpty(),
                                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                             ) {
-                                Icon(painter = painterResource(R.drawable.ic_trashcan), contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text("Delete", fontSize = 12.sp)
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_trashcan),
+                                    contentDescription = "Delete",
+                                    modifier = Modifier.size(18.dp)
+                                )
                             }
                         }
                     }
