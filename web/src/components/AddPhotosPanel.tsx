@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { CachedPhoto } from "../db";
 import { ThumbnailImg } from "./AlbumTile";
+import { filterPickerPhotos } from "../utils/pickerFilter";
 
 export interface AddPhotosPanelProps {
   photos: CachedPhoto[];
@@ -10,6 +11,15 @@ export interface AddPhotosPanelProps {
 
 export default function AddPhotosPanel({ photos, onAdd, onCancel }: AddPhotosPanelProps) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [query, setQuery] = useState("");
+
+  // A real library is thousands of photos, so the picker has to be searchable
+  // to be usable — an endless flat scroll is exactly the complaint in #27. The
+  // grid itself is now lazy (ThumbnailImg only builds a blob URL once a tile
+  // nears the viewport), so rendering the whole complement no longer freezes.
+  const filtered = useMemo(() => filterPickerPhotos(photos, query), [photos, query]);
+  const allFilteredSelected =
+    filtered.length > 0 && filtered.every((p) => selected.has(p.blobId));
 
   function toggle(id: string) {
     setSelected((prev) => {
@@ -20,9 +30,21 @@ export default function AddPhotosPanel({ photos, onAdd, onCancel }: AddPhotosPan
     });
   }
 
+  function toggleSelectAllFiltered() {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allFilteredSelected) {
+        for (const p of filtered) next.delete(p.blobId);
+      } else {
+        for (const p of filtered) next.add(p.blobId);
+      }
+      return next;
+    });
+  }
+
   return (
     <div className="mb-6 p-4 bg-accent-50 dark:bg-accent-900/30 rounded-lg">
-      <div className="flex items-center justify-between mb-3">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
         <p className="text-sm font-medium text-accent-800 dark:text-accent-300">
           Select photos to add ({selected.size} selected)
         </p>
@@ -48,37 +70,64 @@ export default function AddPhotosPanel({ photos, onAdd, onCancel }: AddPhotosPan
           All photos are already in this album.
         </p>
       ) : (
-        <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 gap-1 max-h-64 overflow-y-auto">
-          {photos.map((photo) => {
-            const isSelected = selected.has(photo.blobId);
-            return (
-              <div
-                key={photo.blobId}
-                className={`relative aspect-square rounded overflow-hidden cursor-pointer border-2 ${
-                  isSelected ? "border-accent-600" : "border-transparent"
-                }`}
-                onClick={() => toggle(photo.blobId)}
-              >
-                <ThumbnailImg photo={photo} />
-                {isSelected && (
-                  <div className="absolute inset-0 bg-accent-600/30 flex items-center justify-center">
-                    <svg
-                      className="w-6 h-6 text-white"
-                      fill="currentColor"
-                      viewBox="0 0 20 20"
-                    >
-                      <path
-                        fillRule="evenodd"
-                        d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
-                        clipRule="evenodd"
-                      />
-                    </svg>
+        <>
+          <div className="flex flex-wrap items-center gap-3 mb-3">
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search by filename…"
+              className="input flex-1 min-w-[12rem]"
+              aria-label="Search photos to add"
+            />
+            <button
+              onClick={toggleSelectAllFiltered}
+              disabled={filtered.length === 0}
+              className="text-accent-600 dark:text-accent-400 text-sm hover:underline disabled:opacity-50 disabled:no-underline whitespace-nowrap"
+            >
+              {allFilteredSelected ? "Deselect all" : "Select all"}
+              {query.trim() ? ` (${filtered.length})` : ""}
+            </button>
+          </div>
+
+          {filtered.length === 0 ? (
+            <p className="text-fg-muted text-sm">
+              No photos match “{query.trim()}”.
+            </p>
+          ) : (
+            <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 gap-1 max-h-[60vh] overflow-y-auto">
+              {filtered.map((photo) => {
+                const isSelected = selected.has(photo.blobId);
+                return (
+                  <div
+                    key={photo.blobId}
+                    className={`relative aspect-square rounded overflow-hidden cursor-pointer border-2 ${
+                      isSelected ? "border-accent-600" : "border-transparent"
+                    }`}
+                    onClick={() => toggle(photo.blobId)}
+                  >
+                    <ThumbnailImg photo={photo} />
+                    {isSelected && (
+                      <div className="absolute inset-0 bg-accent-600/30 flex items-center justify-center">
+                        <svg
+                          className="w-6 h-6 text-white"
+                          fill="currentColor"
+                          viewBox="0 0 20 20"
+                        >
+                          <path
+                            fillRule="evenodd"
+                            d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                            clipRule="evenodd"
+                          />
+                        </svg>
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
+                );
+              })}
+            </div>
+          )}
+        </>
       )}
     </div>
   );

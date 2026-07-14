@@ -5,36 +5,66 @@ import { formatDuration } from "../utils/gallery";
 // ── Thumbnail helper ──────────────────────────────────────────────────────────
 
 export function ThumbnailImg({ photo }: { photo: CachedPhoto }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  // Lazy visibility gate. Without this, a grid that renders the whole library
+  // (the regular-album "Add photos" picker feeds ~7000 photos in) built an
+  // object URL for every tile at mount, freezing the tab so the picker never
+  // appeared (#27). Mirror ThumbnailTile: only build the blob URL once the tile
+  // nears the viewport. Fall back to eager when IntersectionObserver is absent
+  // (SSR / tests) so a tile never stays permanently blank.
+  const [visible, setVisible] = useState(
+    typeof IntersectionObserver === "undefined",
+  );
   const [src, setSrc] = useState<string | null>(null);
 
   useEffect(() => {
-    if (photo.thumbnailData) {
-      // Encrypted thumbnail stored in IndexedDB
-      const mime = photo.thumbnailMimeType || (photo.mediaType === "gif" ? "image/gif" : "image/jpeg");
-      const url = URL.createObjectURL(
-        new Blob([photo.thumbnailData], { type: mime })
-      );
-      setSrc(url);
-      return () => URL.revokeObjectURL(url);
-    } else {
-      setSrc(null);
+    if (visible) return;
+    const el = containerRef.current;
+    if (!el || typeof IntersectionObserver === "undefined") {
+      setVisible(true);
+      return;
     }
-  }, [photo.thumbnailData, photo.thumbnailMimeType, photo.mediaType]);
-
-  if (src) {
-    return (
-      <img
-        src={src}
-        alt={photo.filename}
-        className="w-full h-full object-cover"
-        loading="lazy"
-      />
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setVisible(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: `${Math.max(200, Math.round(window.innerHeight * 0.5))}px` },
     );
-  }
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [visible]);
+
+  useEffect(() => {
+    if (!visible || !photo.thumbnailData) {
+      setSrc(null);
+      return;
+    }
+    // Encrypted thumbnail stored in IndexedDB
+    const mime = photo.thumbnailMimeType || (photo.mediaType === "gif" ? "image/gif" : "image/jpeg");
+    const url = URL.createObjectURL(
+      new Blob([photo.thumbnailData], { type: mime })
+    );
+    setSrc(url);
+    return () => URL.revokeObjectURL(url);
+  }, [visible, photo.thumbnailData, photo.thumbnailMimeType, photo.mediaType]);
 
   return (
-    <div className="w-full h-full flex items-center justify-center text-fg-muted text-xs px-1 text-center bg-surface-raised">
-      {photo.filename}
+    <div ref={containerRef} className="w-full h-full">
+      {src ? (
+        <img
+          src={src}
+          alt={photo.filename}
+          className="w-full h-full object-cover"
+          loading="lazy"
+        />
+      ) : (
+        <div className="w-full h-full flex items-center justify-center text-fg-muted text-xs px-1 text-center bg-surface-raised">
+          {photo.filename}
+        </div>
+      )}
     </div>
   );
 }
