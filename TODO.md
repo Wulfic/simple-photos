@@ -68,15 +68,21 @@ Legend: 🔴 High · 🟡 Medium · 🟢 Low · ✨ Feature
 - [x] Unit test: pure `filterPickerPhotos` (`pickerFilter.test.ts`). Browser E2E
       pending (no web DOM harness).
 
-### A3 — #20 🔴 Albums section glitch / count flicker (Android)
-- [ ] Symptom: album list "constantly refreshing", tiles reorder, count flashes
-      ~7000 then settles to 5645. Likely: (a) list re-fetch loop with unstable
-      keys, and (b) count shows total-library before album-scoped count resolves.
-- [ ] Fix unstable list keys / re-render loop (check `LaunchedEffect` deps and
-      album list state source).
-- [ ] Show album-scoped count from the start (A0 resolver), never the global
-      library total as a placeholder.
-- [ ] Verify no infinite refresh via network log on the albums screen.
+### A3 — #20 🔴 Albums section glitch / count flicker (Android) — 🟡 CODE FIXES DONE, device verify pending
+- [x] Count flash ~7000→5645 (the quantified symptom): `loadSmartAlbumCounts`
+      wrote the server summary total (global, secure-INCLUSIVE) unconditionally,
+      then overrode it with the local secure-excluded count. Now reads the local
+      mirror FIRST and only falls back to the server summary on a cold/empty Room,
+      so warm starts publish one accurate value — no flash.
+- [x] "Constantly refreshing" churn: `syncAlbumsFromServer` called Room `update()`
+      on every album each resume even when nothing changed; Room invalidates the
+      `getAllAlbums()` Flow on ANY write, re-emitting an unchanged list. Now guards
+      with `if (updated != existing)` so no-op syncs don't churn the list.
+      (XRef rebuild left as-is — `getAllAlbums` = `SELECT * FROM albums`, doesn't
+      observe XRefs.)
+- [x] List keys already stable (`keyOf = { it.id }`).
+- [ ] DEVICE: confirm on-device the list no longer visibly refreshes and the count
+      no longer flashes (network log on the albums screen). Harness `.device-test\dev.ps1`.
 
 ### A4 — #25 🟢 Secure albums missing "Select all" button — ✅ DONE (pending commit)
 - [x] Added Select-all/Deselect-all to BOTH Android secure-album surfaces that

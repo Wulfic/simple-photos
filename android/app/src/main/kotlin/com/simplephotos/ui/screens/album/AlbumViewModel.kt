@@ -191,48 +191,38 @@ class AlbumViewModel @Inject constructor(
 
     private fun loadSmartAlbumCounts() {
         viewModelScope.launch {
-            // Fast path (Issue 3): server-precomputed counts render the smart-album
-            // badges INSTANTLY on a cold/empty Room mirror — before the local
-            // encrypted-sync finishes filling it — instead of showing 0 until a
-            // full pagination completes. The burst-collapsed local counts below
-            // override these as soon as Room actually holds photos.
-            try {
-                val summary = withContext(Dispatchers.IO) { photoRepository.apiService.photosSummary() }
-                totalCount = summary.total.toInt()
-                recentCount = minOf(summary.total, 100L).toInt()
-                favoritesCount = summary.favorites.toInt()
-                photosCount = (summary.photos + summary.gifs).toInt()
-                gifsCount = summary.gifs.toInt()
-                videosCount = summary.videos.toInt()
-                audioCount = summary.audio.toInt()
-            } catch (e: Exception) {
-                // Non-fatal: local Room counts below are the fallback. Log so a
-                // broken endpoint (stale server) is visible rather than silent.
-                android.util.Log.w("AlbumViewModel", "photos/summary fetch failed: ${e.message}")
-            }
-
-            try {
-                val allPhotos = withContext(Dispatchers.IO) {
+            // Read the local mirror FIRST. When Room already holds photos (the
+            // common warm-start case) its secure-excluded, burst-collapsed counts
+            // are the accurate ones, so we publish them directly and never touch
+            // the server summary. Previously the server total (~7000, global and
+            // secure-INCLUSIVE) was written unconditionally and then overridden by
+            // the local count (5645) — two sequential state writes the user saw as
+            // the badge flashing 7000 before settling (#20). The server summary is
+            // now only a cold-start fallback so badges aren't stuck at 0 until the
+            // first encrypted-sync fills Room.
+            val allPhotos = try {
+                withContext(Dispatchers.IO) {
                     photoRepository.getAllPhotos().first()
                 }.excludeSecure(secureBlobIds) // secured photos are hidden from the
                 // main gallery + smart grids, so they must not be counted here (#16).
-                // Only override the server summary once the local mirror actually
-                // holds photos — otherwise an empty cold Room would reset the
-                // instant counts above back to 0.
-                if (allPhotos.isNotEmpty()) {
-                    totalCount = allPhotos.size
-                    // "Recently Added" mirrors the web smart album: capped at 100,
-                    // with bursts collapsed so a burst counts as one item (the
-                    // detail list does the same — see AlbumDetailViewModel).
-                    recentCount = minOf(allPhotos.collapseBursts().size, 100)
-                    // Counts match the collapsed grids (Favorites/Photos collapse
-                    // bursts in getAlbumPhotos) so the card count equals the tiles.
-                    favoritesCount = allPhotos.filter { it.isFavorite }.collapseBursts().size
-                    photosCount = allPhotos.filter { it.mediaType == "photo" || it.mediaType == "gif" }.collapseBursts().size
-                    gifsCount = allPhotos.count { it.mediaType == "gif" }
-                    videosCount = allPhotos.count { it.mediaType == "video" }
-                    audioCount = allPhotos.count { it.mediaType == "audio" }
-                }
+            } catch (e: Exception) {
+                android.util.Log.w("AlbumViewModel", "local smart-album counts failed: ${e.message}")
+                emptyList()
+            }
+
+            if (allPhotos.isNotEmpty()) {
+                totalCount = allPhotos.size
+                // "Recently Added" mirrors the web smart album: capped at 100,
+                // with bursts collapsed so a burst counts as one item (the
+                // detail list does the same — see AlbumDetailViewModel).
+                recentCount = minOf(allPhotos.collapseBursts().size, 100)
+                // Counts match the collapsed grids (Favorites/Photos collapse
+                // bursts in getAlbumPhotos) so the card count equals the tiles.
+                favoritesCount = allPhotos.filter { it.isFavorite }.collapseBursts().size
+                photosCount = allPhotos.filter { it.mediaType == "photo" || it.mediaType == "gif" }.collapseBursts().size
+                gifsCount = allPhotos.count { it.mediaType == "gif" }
+                videosCount = allPhotos.count { it.mediaType == "video" }
+                audioCount = allPhotos.count { it.mediaType == "audio" }
 
                 // Load cover photos for smart albums (most recent photo matching each filter)
                 val sorted = allPhotos.sortedByDescending { it.takenAt }
@@ -245,8 +235,24 @@ class AlbumViewModel @Inject constructor(
                 sorted.firstOrNull { it.mediaType == "video" }?.let { covers["smart-videos"] = it }
                 sorted.firstOrNull { it.mediaType == "audio" }?.let { covers["smart-audio"] = it }
                 smartAlbumCoverPhotos = covers
-            } catch (e: Exception) {
-                android.util.Log.w("AlbumViewModel", "local smart-album counts failed: ${e.message}")
+            } else {
+                // Cold/empty Room — fall back to the server-precomputed counts so
+                // the badges render instantly instead of showing 0 until the first
+                // pagination completes. A later refresh replaces these with the
+                // exact local counts once Room holds photos.
+                try {
+                    val summary = withContext(Dispatchers.IO) { photoRepository.apiService.photosSummary() }
+                    totalCount = summary.total.toInt()
+                    recentCount = minOf(summary.total, 100L).toInt()
+                    favoritesCount = summary.favorites.toInt()
+                    photosCount = (summary.photos + summary.gifs).toInt()
+                    gifsCount = summary.gifs.toInt()
+                    videosCount = summary.videos.toInt()
+                    audioCount = summary.audio.toInt()
+                } catch (e: Exception) {
+                    // Non-fatal. Log so a broken endpoint (stale server) is visible.
+                    android.util.Log.w("AlbumViewModel", "photos/summary fetch failed: ${e.message}")
+                }
             }
         }
     }

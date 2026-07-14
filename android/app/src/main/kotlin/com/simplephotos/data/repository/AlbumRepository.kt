@@ -160,17 +160,21 @@ class AlbumRepository @Inject constructor(
                     db.photoDao().getByServerBlobId(bId)?.localId
                 }
 
-                // Upsert the album entry
+                // Upsert the album entry. Only write when something actually
+                // changed: Room's InvalidationTracker fires the getAllAlbums()
+                // Flow on ANY write to the albums table — even a no-op update —
+                // so re-running this sync on every ON_RESUME re-emitted an
+                // unchanged list, which the album screen re-rendered as the
+                // "constantly refreshing / tiles move then settle" churn (#20).
                 val existing = db.albumDao().getById(albumId)
                 if (existing != null) {
-                    db.albumDao().update(
-                        existing.copy(
-                            name = albumName,
-                            serverManifestBlobId = blob.id,
-                            coverPhotoLocalId = coverLocalId ?: existing.coverPhotoLocalId,
-                            syncStatus = SyncStatus.SYNCED
-                        )
+                    val updated = existing.copy(
+                        name = albumName,
+                        serverManifestBlobId = blob.id,
+                        coverPhotoLocalId = coverLocalId ?: existing.coverPhotoLocalId,
+                        syncStatus = SyncStatus.SYNCED
                     )
+                    if (updated != existing) db.albumDao().update(updated)
                 } else {
                     db.albumDao().insert(
                         AlbumEntity(
