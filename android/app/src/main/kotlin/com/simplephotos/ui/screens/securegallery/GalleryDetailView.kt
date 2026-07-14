@@ -156,6 +156,17 @@ internal fun GalleryDetailView(
                         }
                     },
                     actions = {
+                        // Select all / deselect all the items in this album (#25),
+                        // matching the regular gallery's multi-select affordance.
+                        val allSelected = displayItems.isNotEmpty() &&
+                            displayItems.all { it.id in selectedItemIds }
+                        TextButton(onClick = {
+                            selectedItemIds = if (allSelected) emptySet()
+                                else displayItems.map { it.id }.toSet()
+                            if (selectedItemIds.isEmpty()) selectionMode = false
+                        }) {
+                            Text(if (allSelected) "Deselect all" else "Select all")
+                        }
                         IconButton(
                             onClick = { if (selectedItemIds.isNotEmpty()) confirmDelete = true },
                             enabled = selectedItemIds.isNotEmpty()
@@ -237,6 +248,15 @@ internal fun GalleryDetailView(
                     onToggle = { blobId ->
                         selectedBlobIds = if (blobId in selectedBlobIds)
                             selectedBlobIds - blobId else selectedBlobIds + blobId
+                    },
+                    onSelectAll = {
+                        // Select-all toggles the *current source's* photos into the
+                        // running selection (which persists across tabs/albums), so
+                        // adding a whole album to a secure gallery is one tap (#25).
+                        val ids = availablePhotos.mapNotNull { it.serverBlobId }.toSet()
+                        val allSelected = ids.isNotEmpty() && selectedBlobIds.containsAll(ids)
+                        selectedBlobIds = if (allSelected)
+                            selectedBlobIds - ids else selectedBlobIds + ids
                     },
                     onAdd = {
                         // Expand burst representatives to their full stack
@@ -367,6 +387,7 @@ private fun ColumnScope.AddPhotosPanel(
     onOpenAlbum: (String) -> Unit,
     onCloseAlbum: () -> Unit,
     onToggle: (String) -> Unit,
+    onSelectAll: () -> Unit,
     onAdd: () -> Unit,
     onCancel: () -> Unit,
 ) {
@@ -379,10 +400,22 @@ private fun ColumnScope.AddPhotosPanel(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(
-            "Select photos (${selectedBlobIds.size})",
-            style = MaterialTheme.typography.bodyMedium
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "Selected ${selectedBlobIds.size}",
+                style = MaterialTheme.typography.bodyMedium
+            )
+            // Select all / deselect all the current source's photos (#25).
+            val ids = availablePhotos.mapNotNull { it.serverBlobId }
+            val allSelected = ids.isNotEmpty() && selectedBlobIds.containsAll(ids)
+            TextButton(
+                onClick = onSelectAll,
+                enabled = ids.isNotEmpty(),
+                contentPadding = PaddingValues(horizontal = 8.dp)
+            ) {
+                Text(if (allSelected) "Deselect all" else "Select all")
+            }
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = onAdd, enabled = selectedBlobIds.isNotEmpty()) { Text("Add") }
             OutlinedButton(onClick = onCancel) { Text("Cancel") }

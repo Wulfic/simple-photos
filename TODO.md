@@ -51,19 +51,22 @@ Legend: 🔴 High · 🟡 Medium · 🟢 Low · ✨ Feature
 - [x] **Dependency for A1–A5 satisfied for web.** (Gallery.tsx/Search.tsx still
       have their own inline burst-collapse — follow-up dedup, not blocking.)
 
-### A1 — #12 🟢 Album photo counts missing (regular albums)
-- [ ] Root cause: regular albums don't populate `count` in the album list DTO
-      the way smart albums do. Wire regular albums to the shared count source
-      from A0.
-- [ ] Web + Android: render count badge on regular album tiles.
-- [ ] Test: fixture regular album with N members reports N.
+### A1 — #12 🟢 Album photo counts missing (regular albums) — ✅ DONE (5637fd0)
+- [x] Root cause: regular albums didn't populate `count` like smart albums.
+      Wired to the shared count source from A0.
+- [x] Web (`countRegularAlbum`) + Android (`AlbumCard` "N items") render the
+      secure-excluded count on regular album tiles.
+- [x] Tests: `useAlbumPhotos.test.ts` count===length + `SecureExclusionTest`.
 
-### A2 — #27 🔴 Album "add photos" has no photo selector (regular)
-- [ ] Regular "add to album" flow reports ~7000 photos exist but never shows a
-      picker like secure albums do. Reuse the **secure album picker component**
-      (shared selector from A0) for regular albums.
-- [ ] Verify selection → membership write goes through the unified resolver.
-- [ ] E2E: open regular album → Add → picker appears → select → members update.
+### A2 — #27 🔴 Album "add photos" has no photo selector (regular) — ✅ DONE (e3f7407)
+- [x] Root cause was NOT "no picker wired" — the picker fed the whole ~7000
+      photo library into `AddPhotosPanel` whose `ThumbnailImg` eagerly built an
+      object URL per tile at mount, freezing the tab so the picker never painted.
+- [x] Fix: `ThumbnailImg` now lazy-loads via IntersectionObserver (parity with
+      `ThumbnailTile`); `AddPhotosPanel` gained a filename search + select-all +
+      60vh area so the large list is navigable.
+- [x] Unit test: pure `filterPickerPhotos` (`pickerFilter.test.ts`). Browser E2E
+      pending (no web DOM harness).
 
 ### A3 — #20 🔴 Albums section glitch / count flicker (Android)
 - [ ] Symptom: album list "constantly refreshing", tiles reorder, count flashes
@@ -75,14 +78,16 @@ Legend: 🔴 High · 🟡 Medium · 🟢 Low · ✨ Feature
       library total as a placeholder.
 - [ ] Verify no infinite refresh via network log on the albums screen.
 
-### A4 — #25 🟢 Secure albums missing "Select all" button
-- [ ] Add Select-all control to secure album selection UI (parity with the
-      unified selection state).
-- [ ] Ties into #24 (day-level multi-select) — share the SelectAll action.
+### A4 — #25 🟢 Secure albums missing "Select all" button — ✅ DONE (pending commit)
+- [x] Added Select-all/Deselect-all to BOTH Android secure-album surfaces that
+      lacked it: the item-selection top bar (manage/remove) and the add-photos
+      picker header (secure a whole source in one tap). Web secure gallery has no
+      multi-select mode, so nothing to add there.
+- [x] Selection top bar toggles all `displayItems`; picker toggles the current
+      source's `availablePhotos` into the running selection.
 
-### A5 — #26 🟢 Regular album trash-can icon too small
-- [ ] Bump trash icon hit target / size on regular albums to match other
-      surfaces. Pure UI. (Also relevant to #23.)
+### A5 — #26 🟢 Regular album trash-can icon too small — ✅ DONE (5637fd0)
+- [x] Bumped trash + back icons 12dp→24dp on AlbumDetailScreen.
 
 ---
 
@@ -166,12 +171,16 @@ Legend: 🔴 High · 🟡 Medium · 🟢 Low · ✨ Feature
 - [ ] Search results render media WITH tag overlays; suppress tag overlay in
       search result tiles.
 
-### E5 — #16 🔴 Secure albums don't fully remove media from regular Gallery
-- [ ] Most items removed, some remain → membership/removal not atomic or a
-      second code path skips the exclusion. Tie into A0 unified resolver:
-      regular gallery query must exclude all secure blob IDs, no exceptions.
-- [ ] Audit the secure-add flow for partial-failure (batch that stops on error).
-- [ ] Test: bulk secure-add N items → assert 0 remain in regular gallery.
+### E5 — #16 🔴 Secure albums don't fully remove media from regular Gallery — ✅ DONE
+- [x] Read-side exclusion: Android album-detail/add-picker secure-excluded via
+      shared `excludeSecure` (5637fd0); web already filtered `secureBlobIds`.
+- [x] Root cause of "most but not all": the secure-ADD **batch aborted on the
+      first failure**, leaving every later photo un-secured yet still shown. Web
+      looped with no per-item catch; Android `async{}.awaitAll()` cancelled all
+      siblings on one throw. Both now secure each photo independently, log every
+      failure, clean up the succeeded set, and report partials (359fd8d).
+- [x] Unit tests: `runSecureAddBatch` resilience + `secureAddResultMessage`
+      (+10). Bulk-add device E2E pending (no automated device harness here).
 
 ---
 
