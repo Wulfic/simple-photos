@@ -1,259 +1,131 @@
-# TODO — Open Issue Resolution Plan
+# TODO — Google Photos Takeout album fidelity (investigated 2026-07-15)
 
-Generated from GitHub open issues (Wulfic/simple-photos) on 2026-07-13.
-18 open issues. Ordered by **priority**, then grouped by **subsystem** so shared
-root causes get fixed once, not three times.
+**Symptom:** Takeout imports do not faithfully recreate Google Photos albums —
+albums come out missing, partially populated, or wrongly named.
 
-Legend: 🔴 High · 🟡 Medium · 🟢 Low · ✨ Feature
+## How album recreation works today (for context)
 
----
+1. **Server captures membership at import** into `photo_source_albums`
+   (migration 027), keyed by `photo_id` + folder-derived `album_name`. Two
+   writers, both routed through the shared resolver `server/src/import/sidecar.rs`
+   (with the `is_takeout` gate so plain user folders never become albums):
+   - `POST /admin/import/google-photos` → `import::takeout::import_takeout`
+   - the auto-scan register path → `photos/scan.rs` walk → `photos/register.rs::register_native_file`
+2. **Clients materialize E2E album manifests** from `GET /api/photos/source-albums`:
+   web `web/src/utils/takeoutAlbums.ts` (debounced trigger in `pages/Albums.tsx`),
+   Android `AlbumRepository.recreateAlbumsFromServer`. Both bridge
+   `photo_id → blobId` via the synced local mirror and derive the deterministic
+   album id `"src-" + sha256(source + " " + name)` so platforms converge.
 
-## EPIC A — Album Path Unification (the root cause of ~6 issues)
+## Root causes found (ranked by impact)
 
-> **Fix this first.** Issues #12, #20, #25, #26, #27 are symptoms of three
-> divergent album implementations (smart / secure / regular). #16 leaks across
-> the same seam. Stop patching each surface — build the shared layer, then the
-> symptom tickets become trivial re-wires.
+### 1. PRIMARY — no backfill path for photos imported before the Jul 4 album-capture fixes
+- `photos/scan.rs:135`: any file whose `rel_path` is already in `photos`/`trash_items`
+  is skipped **before** the album-recording code in `register_native_file` can run.
+  So re-running a scan/ingest never backfills `photo_source_albums` for the
+  existing library.
+- The hash-duplicate backfill added Jul 4 (`register.rs` ~264–295) only fires for a
+  *new physical copy at a new path* — not for files already registered by path.
+- The one endpoint that DOES backfill existing photos by content hash
+  (`import_takeout` — its album-recording deliberately runs for deduped/existing
+  photos) is **unreachable from the UI**: zero callers of
+  `/admin/import/google-photos` in `web/src` (the Import page only calls
+  `/admin/import/ingest`).
+- Net effect: everything imported before the Jul 4 fixes (i.e. the whole live
+  library on CT132) has sparse/absent `photo_source_albums` rows → client
+  reconstruction builds partial or empty albums. **This alone explains the symptom.**
+- Note: those Jul 4 fixes live on `dev`; the live deployment may also predate them.
 
-### A0 — #28 🔴 Unify smart / secure / regular album functions — ⏳ WEB DONE
-> **PREMISE CORRECTION (2026-07-13):** A0 as generated assumed a server-side
-> `album_members(album_id)` resolver could unify all three. That is **infeasible**
-> — regular albums are E2E-encrypted manifests (`album_manifest` blobs); the
-> server only ever sees ciphertext and cannot read membership. Confirmed against
-> both clients + mem0 ("Albums stay real E2E, NOT virtual"). The unification is
-> therefore **client-side**, not server-side. Reframed accordingly below.
-- [x] **code-explore**: mapped all three album paths across server/web/Android.
-      Regular = E2E manifest resolved client-side (web: `db.albums.photoBlobIds`
-      filtered against `db.photos`; android: Room `PhotoAlbumXRef`). Smart = live
-      client filter (+ server clusters for people/pets/trips/memories). Secure =
-      `secure_gallery_items` server table, token-gated. Shared = `shared_album_photos`.
-- [x] Divergences found: (1) regular-album **count source** diverged from the
-      rendered grid — header showed raw `photoBlobIds.length` (secure-inclusive,
-      stale-inclusive) while the grid showed a secure-filtered list → #12/#20;
-      (2) burst-collapse re-implemented inline in 3 web surfaces; (3) Android
-      regular albums not secure-excluded in `getAlbumPhotos` (→ folded into #16).
-- [x] Shared contract (client-side):
-  - [x] Web: one `useAlbumPhotos(albumId)` hook (`hooks/useAlbumPhotos.ts`) with a
-        pure `resolveAlbumPhotos` core — single source for `photos` **and**
-        `count` (always `photos.length`), secure-excluded. Shared
-        `utils/burstCollapse.ts` + `gallery/smartAlbums.ts`. SmartAlbumView +
-        RegularAlbumView rewired onto it; header count bug fixed.
-  - [x] Android: `getAlbumPhotos` already the shared smart+regular resolver
-        (grid + viewer). Verified. Remaining divergence = regular-album
-        secure-exclusion → handled in **#16** (secure filtering lives at the
-        Android VM layer, added there with its exclusion test).
-  - [ ] `AlbumGrid` component consolidation deferred — SelectablePhotoGrid +
-        JustifiedGrid already shared by smart/people/pets/trips; RegularAlbumView
-        keeps its own grid for the manifest-CRUD affordances. Low value to merge.
-- [x] Unit tests: `useAlbumPhotos.test.ts` (10) + `burstCollapse.test.ts` (5) —
-      assert membership, secure-exclusion, ordering, limit, and the
-      count===length invariant. Added vitest to web (`npm run test`). Build green.
-- [x] **Dependency for A1–A5 satisfied for web.** (Gallery.tsx/Search.tsx still
-      have their own inline burst-collapse — follow-up dedup, not blocking.)
+### 2. Web "Local Upload" import captures no albums at all
+- `web/src/pages/Import.tsx` (local mode): file picker / drag-drop flatten folder
+  structure (no `webkitdirectory` / `webkitGetAsEntry`), `/api/photos/upload` has
+  no album field, and nothing server-side writes `photo_source_albums` for
+  uploads. Any Takeout imported through the browser loses 100% of album data.
 
-### A1 — #12 🟢 Album photo counts missing (regular albums) — ✅ DONE (5637fd0)
-- [x] Root cause: regular albums didn't populate `count` like smart albums.
-      Wired to the shared count source from A0.
-- [x] Web (`countRegularAlbum`) + Android (`AlbumCard` "N items") render the
-      secure-excluded count on regular album tiles.
-- [x] Tests: `useAlbumPhotos.test.ts` count===length + `SecureExclusionTest`.
+### 3. Album names are Takeout's sanitized folder names, not the real titles
+- The true album title lives in the album-level `metadata.json` (`"title"`).
+  `sidecar.rs::is_photo_sidecar` correctly rejects it as a photo sidecar — but
+  then nobody reads it. `derive_album_from_dir` uses the raw folder name, which
+  Takeout mangles (special characters → `_`, length truncation, `(1)` counters).
 
-### A2 — #27 🔴 Album "add photos" has no photo selector (regular) — ✅ DONE (e3f7407)
-- [x] Root cause was NOT "no picker wired" — the picker fed the whole ~7000
-      photo library into `AddPhotosPanel` whose `ThumbnailImg` eagerly built an
-      object URL per tile at mount, freezing the tab so the picker never painted.
-- [x] Fix: `ThumbnailImg` now lazy-loads via IntersectionObserver (parity with
-      `ThumbnailTile`); `AddPhotosPanel` gained a filename search + select-all +
-      60vh area so the large list is navigable.
-- [x] Unit test: pure `filterPickerPhotos` (`pickerFilter.test.ts`). Browser E2E
-      pending (no web DOM harness).
+### 4. User curation is overridden — zombie albums and members
+- No tombstone mechanism anywhere. Deleting a Takeout-derived album
+  (web `RegularAlbumView.deleteAlbum`, Android `AlbumRepository.deleteAlbum`) is
+  undone the next time reconstruction runs (fresh session → refs reset → album
+  recreated). Removing individual photos is undone too: the merge is a pure
+  union (`takeoutAlbums.ts:100`).
 
-### A3 — #20 🔴 Albums section glitch / count flicker (Android) — 🟡 CODE FIXES DONE, device verify pending
-- [x] Count flash ~7000→5645 (the quantified symptom): `loadSmartAlbumCounts`
-      wrote the server summary total (global, secure-INCLUSIVE) unconditionally,
-      then overrode it with the local secure-excluded count. Now reads the local
-      mirror FIRST and only falls back to the server summary on a cold/empty Room,
-      so warm starts publish one accurate value — no flash.
-- [x] "Constantly refreshing" churn: `syncAlbumsFromServer` called Room `update()`
-      on every album each resume even when nothing changed; Room invalidates the
-      `getAllAlbums()` Flow on ANY write, re-emitting an unchanged list. Now guards
-      with `if (updated != existing)` so no-op syncs don't churn the list.
-      (XRef rebuild left as-is — `getAllAlbums` = `SELECT * FROM albums`, doesn't
-      observe XRefs.)
-- [x] List keys already stable (`keyOf = { it.id }`).
-- [ ] DEVICE: confirm on-device the list no longer visibly refreshes and the count
-      no longer flashes (network log on the albums screen). Harness `.device-test\dev.ps1`.
+### 5. Manifest replace is delete-before-upload — data-loss window (both platforms)
+- Web `takeoutAlbums.ts::saveAlbumManifest` and Android `AlbumRepository`
+  (~line 90 delete, line 107 upload) delete the old manifest blob **first**, then
+  encrypt+upload the new one. A failure in between leaves no manifest server-side
+  → the album silently vanishes from every other device.
 
-### A4 — #25 🟢 Secure albums missing "Select all" button — ✅ DONE (pending commit)
-- [x] Added Select-all/Deselect-all to BOTH Android secure-album surfaces that
-      lacked it: the item-selection top bar (manage/remove) and the add-photos
-      picker header (secure a whole source in one tap). Web secure gallery has no
-      multi-select mode, so nothing to add there.
-- [x] Selection top bar toggles all `displayItems`; picker toggles the current
-      source's `availablePhotos` into the running selection.
+### 6. Minor issues
+- Re-running `import_takeout` inserts **duplicate `photo_metadata` rows** every
+  run (the metadata insert has no existence check, unlike the photo insert).
+- `scan_takeout` (the scan *report*) uses naive pairing instead of the shared
+  resolver — undercounts pairs (misses duplicate-counter/truncated names),
+  making the pre-import report misleading.
+- `fullyMaterializedRef` in `Albums.tsx` never latches when some photos will
+  never sync (moved to secure gallery / trashed) → reconstruction re-runs every
+  session; cheap but wasteful.
+- Stale doc comment in `sidecar.rs` pointing at a web allowlist in
+  `takeoutAlbums.ts` that no longer exists there.
 
-### A5 — #26 🟢 Regular album trash-can icon too small — ✅ DONE (5637fd0)
-- [x] Bumped trash + back icons 12dp→24dp on AlbumDetailScreen.
+## Plan
 
----
+### Phase 1 — restore membership for the already-imported library (fixes the symptom)
+- [ ] **Server: dedicated album backfill endpoint** —
+  `POST /admin/import/google-photos/backfill-albums { path }`. Re-walk the
+  Takeout tree with the existing `TakeoutDirContext`, match media files to
+  existing photos by `photo_hash` (fallback filename+size — same dedup keys as
+  `import_takeout`), `INSERT OR IGNORE` into `photo_source_albums`. No photo or
+  metadata inserts, so it is cheap and cannot duplicate anything. Factor the
+  membership-recording block out of `import_takeout` and share it.
+  (Rejected alternative: "just re-run `import_takeout`" — would work for
+  membership but currently duplicates `photo_metadata` rows every run; fix that
+  either way, see Phase 3.)
+- [ ] **Web: expose it** — button in Import page (server mode), e.g. "Rebuild
+  Takeout albums", reusing the path input; report `albums_recorded`.
+- [ ] **Tests**: backfill matches an existing plain photo, an encrypted photo
+  (photo_hash survives encryption), skips non-Takeout folders (`is_takeout`
+  gate), is idempotent on re-run.
+- [ ] **Ops**: deploy to CT132 and run against the Takeout directory (TEMP mount),
+  then let clients re-materialize; verify album counts vs Google Photos.
 
-## EPIC B — Google Takeout Import Correctness
+### Phase 2 — capture faithfully at import time
+- [ ] **Real album titles**: when recording membership (import + backfill), read
+  the album folder's `metadata.json` `"title"`. Keep the folder name as the
+  identity key (so the deterministic album id doesn't churn and duplicate
+  existing albums) and carry the title as a display name — new column
+  `photo_source_albums.album_title` + expose in `/api/photos/source-albums`;
+  clients use title for the manifest `name`, key stays folder-based.
+- [ ] **Web Local Upload albums** (lower priority — server-directory import is the
+  primary path): capture folder structure via `webkitdirectory` /
+  `webkitGetAsEntry` relative paths, filter with the same non-album rules as
+  `is_non_album_folder`, send an `X-Source-Album` header on `/api/photos/upload`,
+  and record it server-side (sanitized).
 
-> Recurring pain (see mem0: register-path-blind, dedup-drop, dates). These are
-> **High** and user-facing on every fresh import.
+### Phase 3 — respect curation + robustness
+- [ ] **Tombstones**: server table `dismissed_source_albums (user_id, source,
+  album_name)`; clients write a tombstone when the user deletes a
+  Takeout-derived (`src-…` id) album; reconstruction skips dismissed albums.
+  Album names are already plaintext server-side in `photo_source_albums`, so no
+  E2E regression. (Per-photo removal tombstones: follow-up, needs design —
+  blob-id keyed removals in the manifest itself may be simpler.)
+- [ ] **Fix manifest replace ordering on BOTH platforms**: upload new manifest →
+  persist new blob id locally → best-effort delete the old blob. Never
+  delete-first.
+- [ ] **Minor cleanups**: existence-check before `photo_metadata` insert in
+  `import_takeout`; route `scan_takeout` pairing through the shared resolver;
+  latch `fullyMaterializedRef` when `photosUnmatched` is stable across runs;
+  fix the stale allowlist comment in `sidecar.rs`.
 
-### B1 — #11 🔴 Google Photos imports still not recreating albums faithfully
-- [ ] Reproduce with a known Takeout sample; diff reconstructed albums vs
-      Takeout `metadata.json` album membership.
-- [ ] Verify the register-path (`register_native_file`) resolves sidecars +
-      album membership (mem0 says this was fixed — confirm it holds for ALL
-      entry paths, not just one).
-- [ ] Confirm dedup no longer drops album membership for duplicated copies
-      (mem0: dedup-drop root cause of empty albums).
-- [ ] Add integration test: import fixture Takeout → assert album count + per
-      album membership match manifest.
-
-### B2 — #13 🔴 Date/time import errors (wrong photo ordering)
-- [ ] Taken-at timestamps wrong → gallery order wrong.
-- [ ] Verify EXIF `DateTimeOriginal` + `OffsetTimeOriginal` parsing and the
-      `taken_at` / `taken_at_offset` write (migr 026).
-- [ ] Verify Takeout `photoTakenTime` JSON sidecar is preferred/merged correctly
-      when EXIF is missing.
-- [ ] Check timezone handling — offset-aware `taken_at` (mem0 note).
-- [ ] Test: fixtures with (a) EXIF only, (b) sidecar only, (c) both conflicting,
-      (d) neither → assert deterministic, correct ordering.
-
----
-
-## EPIC C — GIF Handling
-
-### C1 — #14 🟢 GIFs not detected → missed by smart album
-- [ ] Audit GIF detection (magic bytes / mime, not just extension).
-- [ ] Ensure detected GIFs get the subtype that the GIF smart album queries on.
-- [ ] Backfill: re-tag existing undetected GIFs.
-- [ ] Test: fixture set of GIFs (various sources) all land in the smart album.
-
-### C2 — #18 🟡 GIF crop-save doesn't regenerate thumbnail — ✅ DONE
-- [x] Root cause: in-place "Save" is metadata-only on both platforms; the tile
-      renders the crop via a live transform (web CSS / Android `graphicsLayer`).
-      That transform is unreliable for Coil's **animated-GIF** drawable, so the
-      GIF thumbnail kept the unedited frame even though the full viewer showed
-      the crop (matches the report; both transform fixes predate the issue).
-- [x] Fix (per user decision): **remove in-place "Save" for GIFs — Save Copy
-      only.** Save Copy already re-encodes the GIF via ffmpeg AND regenerates a
-      gif-aware, cropped thumbnail (`save_copy.rs`, copy has `crop_metadata=NULL`
-      → no transform, thumbnail is truly cropped). User can delete the original.
-- [x] Web: `ViewerEditPanel` hides Save for GIFs (Save Copy promoted to primary);
-      `useViewerActions.handleLeaveAndSave` routes GIF-with-edits → Save Copy.
-      Gated on new pure `supportsInPlaceEditSave(mediaType)` in `gifDetection.ts`.
-- [x] Android: `ViewerEditPanel.kt` hides Save for GIFs; `PhotoViewerScreen.saveEdit()`
-      defensively routes GIF-with-edits → `duplicatePhoto` (Save Copy).
-- [x] Tests: `gifDetection.test.ts` (+6, predicate). Web tsc + 40 vitest green;
-      Android `compileDebugKotlin` green. (No new ffmpeg E2E — GIF render already
-      covered by `ffmpeg.rs` arg-construction tests; full bake is Python-harness.)
-- [ ] FOLLOW-UP (optional, low): legacy GIFs already carrying `crop_metadata`
-      from a prior in-place save still rely on the Android transform → may still
-      look uncropped on-device. Not backfilled (clearing would drop their edit).
-
----
-
-## EPIC D — Video Playback
-
-### D1 — #17 🔴 Large videos fail to play / small videos buffer slowly (Android)
-- [ ] Reproduce large-file failure + small-file slow-buffer on Android.
-- [ ] Check server range-response handling (206/416 — `http_utils.rs`) under
-      large files; confirm chunk sizes + content-range correctness.
-- [ ] Check Android player buffering config + whether decrypt/stream is
-      blocking (blob_stream path).
-- [ ] Consider transcode/faststart (moov atom at front) for large source files.
-- [ ] Test: play a large (>1GB) and small (<20MB) video end-to-end on device.
-
-### D2 — #22 🟢 Videos should loop instead of stopping after one play — ✅ DONE
-- [x] Web (`Viewer.tsx` normal-mode `<video>`): added native `loop`; the
-      `onTimeUpdate` trim-end handler now seeks back to `trimStart` (was
-      pause+seek-to-end) so trimmed videos loop within [trimStart, trimEnd].
-- [x] Android main viewer (`PhotoViewerScreen.kt` shared ExoPlayer):
-      `repeatMode = REPEAT_MODE_ONE`. `VideoPlayer.kt` trim handler now loops
-      back to `trimStart` at `trimEnd` in normal viewing (keeps pause-at-end in
-      edit mode so the trim boundary stays scrubbable; `editMode` added to the
-      `LaunchedEffect` keys so the listener closure isn't stale).
-- [x] Android secure viewer (`SecurePhotoViewer.kt` main player):
-      `repeatMode = REPEAT_MODE_ALL` for parity (motion overlay already looped).
-- [x] Web tsc + 40 vitest green; Android `compileDebugKotlin` green. Player
-      config is declarative — on-device/browser playback verify is the E2E gate
-      (shares the device-pending bucket with #17/#20).
-
----
-
-## EPIC E — Selection & UI Polish
-
-### E1 — #24 🟢 Multi-select can't select a whole day at once
-- [ ] Add day-header "select all in day" action to gallery multi-select.
-- [ ] Reuse unified SelectionState; share the SelectAll action with #25.
-
-### E2 — #23 🟢 Delete button text wraps to 2 lines → use trash icon
-- [ ] Replace "Delete" text with trash-can icon (parity with #26 sizing).
-
-### E3 — #19 🟢 Rapid favoriting hides top bar; slow to reappear
-- [ ] Investigate top-bar auto-hide triggering on fast successive taps
-      (immersive/gesture sensitivity). Debounce or exempt favorite taps from the
-      auto-hide gesture detector.
-- [ ] Verify tap-to-reveal responds immediately after rapid favoriting.
-
-### E4 — #15 🟢 Search shows tags on media (shouldn't)
-- [ ] Search results render media WITH tag overlays; suppress tag overlay in
-      search result tiles.
-
-### E5 — #16 🔴 Secure albums don't fully remove media from regular Gallery — ✅ DONE
-- [x] Read-side exclusion: Android album-detail/add-picker secure-excluded via
-      shared `excludeSecure` (5637fd0); web already filtered `secureBlobIds`.
-- [x] Root cause of "most but not all": the secure-ADD **batch aborted on the
-      first failure**, leaving every later photo un-secured yet still shown. Web
-      looped with no per-item catch; Android `async{}.awaitAll()` cancelled all
-      siblings on one throw. Both now secure each photo independently, log every
-      failure, clean up the succeeded set, and report partials (359fd8d).
-- [x] Unit tests: `runSecureAddBatch` resilience + `secureAddResultMessage`
-      (+10). Bulk-add device E2E pending (no automated device harness here).
-
----
-
-## EPIC F — Feature Requests
-
-### F1 — #21 ✨ Split-screen: view 2 photos simultaneously — ✅ DONE (code)
-- [x] Design decisions (user's call): entry = gallery multi-select "Compare"
-      (shown only when exactly 2 selected); zoom/pan **independent** per pane;
-      media scope = **photos + GIFs + videos**.
-- [x] Shared pure gate — `canCompare(count)` + `compareTargets(ids)`: web
-      `utils/compare.ts`, Android co-located in `SelectionState.kt`. Both
-      unit-tested (web `compare.test.ts` +3; Android `SelectionStateTest` +3).
-- [x] Web: new `/compare` route (lazy `pages/Compare.tsx`) — adaptive layout
-      (`flex-col` portrait / `landscape:flex-row`). `components/compare/ComparePane.tsx`
-      reuses `useViewerMedia` (own per-pane preload cache) + self-contained
-      pointer/pinch/wheel/double-click zoom; video panes autoplay muted+loop.
-      Gallery selection bar gained a "Compare" button (2-selected gate).
-- [x] Android: new `Screen.Compare` route + NavGraph; `CompareScreen.kt` reuses
-      `PhotoPageContent` twice (each an always-active page with its OWN ExoPlayer,
-      so two videos play at once, muted+loop) — independent pinch-zoom for free.
-      Adaptive Row/Column by orientation. `GalleryScreen` "Compare" button
-      (2-selected gate) → `onCompareClick`. `PhotoViewerViewModel.loadPhotoByLocalId`
-      added for the two-photo fetch.
-- [x] Tests: web tsc + 43 vitest + prod build green; Android `compileDebugKotlin`
-      + full `testDebugUnitTest` green (SelectionStateTest 10/10). Split-screen is
-      largely declarative UI → on-device/browser visual verify is the E2E gate
-      (shares the device-pending bucket with #17/#20). NOT committed.
-
----
-
-## Suggested execution order
-1. **A0 (#28)** — unblocks A1–A5 and de-risks #16.
-2. **B1, B2 (#11, #13)** — High, hits every import.
-3. **D1 (#17)** — High, core playback broken.
-4. **A1–A5, #16** — clear the album symptom tickets on the new shared layer.
-5. **C1, C2, D2, E1–E4** — Low/Medium polish, batch them.
-6. **F1 (#21)** — feature, last.
-
-## Definition of done (per AGENTS.md — non-negotiable)
-- Unit tests AND E2E/device tests green before "done".
-- Logging on every new error path.
-- No `@ts-ignore` / `as any` / empty catch.
-- Conventional commit + updated mem0 memory per session.
+### Verification (end of each phase)
+- Unit: `cargo test --bin simple-photos-server` (crate is a binary) for
+  backfill/title/resolver tests; web `npm test` for takeoutAlbums changes.
+- E2E: import a synthetic Takeout fixture (album folders + `metadata.json` +
+  duplicate copies in `Photos from YYYY` + `-edited` pairs + `(1)` counters),
+  assert `photo_source_albums` contents, then assert client manifests match.
+- Live: CT132 backfill run; album count + membership spot-check vs Google Photos.
