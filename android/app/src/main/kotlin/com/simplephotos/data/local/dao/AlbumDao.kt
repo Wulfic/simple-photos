@@ -42,6 +42,19 @@ interface AlbumDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertXRef(xRef: PhotoAlbumXRef)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertXRefs(xRefs: List<PhotoAlbumXRef>)
+
+    /**
+     * Persist an album's visible member count, but only when it actually
+     * changed. The `AND cachedCount != :count` is load-bearing: Room's
+     * invalidation triggers fire per *changed row*, so an unconditional write of
+     * an identical value would re-emit `getAllAlbums()`, re-run the count, and
+     * write again — a self-sustaining refresh loop behind the album list.
+     */
+    @Query("UPDATE albums SET cachedCount = :count WHERE localId = :id AND cachedCount != :count")
+    suspend fun updateCachedCount(id: String, count: Int)
+
     @Query("DELETE FROM photo_album_xref WHERE photoLocalId = :photoId AND albumLocalId = :albumId")
     suspend fun deleteXRef(photoId: String, albumId: String)
 

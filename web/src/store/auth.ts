@@ -7,6 +7,7 @@
  */
 import { create } from "zustand";
 import { clearGalleryToken } from "../utils/galleryToken";
+import { clearMaterializedAt } from "../utils/takeoutLatch";
 import { clearKey } from "../crypto/crypto";
 
 interface AuthState {
@@ -38,9 +39,16 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   logout: () => {
+    // Read before the username is removed — the latch is keyed by it.
+    const user = localStorage.getItem("sp_username");
     localStorage.removeItem("sp_access_token");
     localStorage.removeItem("sp_refresh_token");
     localStorage.removeItem("sp_username");
+    // Logout wipes the local photo mirror, so the Takeout reconstruction latch
+    // ("already materialized at N photos") describes a library that no longer
+    // exists. Left in place, the rebuilt mirror could coincidentally reach N
+    // again and the pass would skip itself forever.
+    if (user) clearMaterializedAt(user);
     // Drop the persisted smart-album count summary (see usePhotoSummary) so the
     // next account on this browser never flashes the previous user's counts.
     localStorage.removeItem("sp_photo_summary_v1");

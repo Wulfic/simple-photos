@@ -8,6 +8,7 @@ import { useState, useCallback, useRef } from "react";
 import { useAppNavigate } from "./useAppNavigate";
 import { api } from "../api/client";
 import { db, type MediaType } from "../db";
+import { copyThumb, deleteThumbs, resolveThumb } from "../db/thumbs";
 import { useAuthStore } from "../store/auth";
 import { useBackupStore } from "../store/backup";
 import { useProcessingStore } from "../store/processing";
@@ -279,9 +280,11 @@ export default function useViewerActions({
               filename: copyFilename,
               cropData: metaJson ?? undefined,
               takenAt: original.takenAt,
-              thumbnailData: original.thumbnailData,
+              thumbnailData: undefined,
               serverPhotoId: undefined,
-            }).catch(() => { /* last resort */ });
+            })
+              .then(() => copyThumb(original, copyId))
+              .catch(() => { /* last resort */ });
           })
           .finally(() => {
             endTask("saveCopy");
@@ -297,9 +300,10 @@ export default function useViewerActions({
           filename: copyFilename,
           cropData: metaJson ?? undefined,
           takenAt: original.takenAt,
-          thumbnailData: original.thumbnailData,
+          thumbnailData: undefined,
           serverPhotoId: undefined,
         });
+        await copyThumb(original, copyId);
         console.log("[Viewer:saveCopy] Local-only copy saved to IDB:", {
           copyId, filename: copyFilename, originalBlobId: id,
         });
@@ -389,12 +393,15 @@ export default function useViewerActions({
           takenAt: cached.takenAt,
           deletedAt: Date.now(),
           expiresAt: trashResult.expires_at,
-          thumbnailData: cached.thumbnailData,
+          // The trash row keeps its own bytes — the photo row and its thumbs
+          // entry are about to go.
+          thumbnailData: (await resolveThumb(cached))?.data,
           duration: cached.duration,
           albumIds: cached.albumIds ?? [],
         });
       }
       await db.photos.delete(id);
+      await deleteThumbs([id]);
       navigate(backTo);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Delete failed");

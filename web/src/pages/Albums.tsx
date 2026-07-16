@@ -8,6 +8,7 @@ import { useAppNavigate } from "../hooks/useAppNavigate";
 import { api } from "../api/client";
 import { decrypt, encrypt, sha256Hex } from "../crypto/crypto";
 import { db, type CachedAlbum, type CachedPhoto } from "../db";
+import { resolveThumb } from "../db/thumbs";
 import { useLiveQuery } from "dexie-react-hooks";
 import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
@@ -16,11 +17,12 @@ import { randomUuid } from "../utils/uuid";
 import { toast } from "../store/toast";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
 import { usePhotoSummary } from "../hooks/usePhotoSummary";
-import { recreateAlbumsFromServer } from "../utils/takeoutAlbums";
+import { recreateAlbumsFromServer, takeoutSettled } from "../utils/takeoutAlbums";
+import { setMaterializedAt, shouldReconstruct } from "../utils/takeoutLatch";
 import { useAuthStore } from "../store/auth";
 import { useSecureAdd } from "../store/secureAdd";
 import { useSecureBlobFilter } from "../gallery/hooks/useSecureBlobFilter";
-import { countRegularAlbum } from "../hooks/useAlbumPhotos";
+import { countRegularAlbum, reconcileAlbumCount } from "../hooks/useAlbumPhotos";
 import type { FaceCluster, PetCluster } from "../api/ai";
 
 type SharedAlbumInfo = {
@@ -49,7 +51,11 @@ export default function Albums() {
     }
   }, [error]);
   const isBackupServer = useIsBackupServer();
-  const { accessToken } = useAuthStore();
+  const { accessToken, username } = useAuthStore();
+  // localStorage is already per-origin, so the origin *is* the server: scoping
+  // the Takeout latch by user is all that's left to keep two accounts sharing a
+  // browser from suppressing each other's reconstruction.
+  const latchScope = username;
   const [showCreate, setShowCreate] = useState(false);
   const [newAlbumName, setNewAlbumName] = useState("");
   const navigate = useAppNavigate();
@@ -129,46 +135,29 @@ export default function Albums() {
   // re-runs (each re-encrypting + re-uploading manifests), which is what made
   // reconstruction crawl on large libraries. We debounce on the local photo
   // count: when it holds steady for a beat the current sync pass is done, so we
-  // run a single reconstruction. It re-runs only if more photos have since
-  // synced in (to fill albums that were still unmatched) and stops for good once
-  // a run reports every photo matched. Idempotent + best-effort; the parallel,
-  // no-op-skipping reconstruction (utils/takeoutAlbums.ts) makes any redundant
-  // pass cheap. saveAlbumManifest writes to db.albums, so the reactive `albums`
-  // live query above picks up new albums on its own.
-  const lastMaterializedCountRef = useRef(-1);
+  // run a single reconstruction.
+  //
+  // The "already done" latch is persisted (see utils/takeoutLatch.ts) rather
+  // than held in a ref: refs reset on every mount, so simply navigating back to
+  // this page re-ran the whole pass. It re-opens on its own whenever the mirror
+  // size changes, so a premature stop still self-heals.
+  //
+  // Idempotent + best-effort; the parallel, no-op-skipping reconstruction
+  // (utils/takeoutAlbums.ts) makes any redundant pass cheap. saveAlbumManifest
+  // writes to db.albums, so the reactive `albums` live query above picks up new
+  // albums on its own.
   const lastUnmatchedRef = useRef(-1);
-  const fullyMaterializedRef = useRef(false);
   useEffect(() => {
-    if (fullyMaterializedRef.current) return;
     const count = encryptedPhotos?.length ?? 0;
-    if (count === 0) return;
-    if (count === lastMaterializedCountRef.current) return; // nothing new synced
+    if (count === 0 || !latchScope) return;
+    if (!shouldReconstruct(latchScope, count)) return;
     // Wait for the count to hold steady (~sync settled) before doing the work;
     // each new photo synced resets this timer via the effect cleanup.
     const timer = setTimeout(() => {
-      lastMaterializedCountRef.current = count;
       recreateAlbumsFromServer()
         .then((r) => {
-          if (r.photosUnmatched === 0) {
-            fullyMaterializedRef.current = true;
-            return;
-          }
-          // Some album members aren't in the local mirror. Normally they're
-          // still syncing and a later pass picks them up — but a photo that was
-          // trashed or moved to the secure gallery never syncs at all, so
-          // `photosUnmatched` can never reach 0 and this pass would keep firing
-          // for the rest of the session.
-          //
-          // Stop once a pass changed nothing AND left exactly the same gap as
-          // the one before it: more photos arrived, none of them were the
-          // missing ones. Deliberately conservative — latching early would mean
-          // silently incomplete albums, which is the whole bug being fixed — and
-          // deliberately session-scoped: these refs reset on reload, so a
-          // premature stop self-heals on the next visit rather than sticking.
-          const noop =
-            r.albumsCreated === 0 && r.albumsUpdated === 0 && r.photosAdded === 0;
-          if (noop && r.photosUnmatched === lastUnmatchedRef.current) {
-            fullyMaterializedRef.current = true;
+          if (takeoutSettled(r, lastUnmatchedRef.current)) {
+            setMaterializedAt(latchScope, count);
           }
           lastUnmatchedRef.current = r.photosUnmatched;
         })
@@ -177,7 +166,21 @@ export default function Albums() {
         );
     }, 4000);
     return () => clearTimeout(timer);
-  }, [encryptedPhotos]);
+  }, [encryptedPhotos, latchScope]);
+
+  // Reconcile every tile's persisted count once the mirror is loaded, so the
+  // next visit renders the right number before any of this work happens again.
+  useEffect(() => {
+    if (!albums || !encryptedPhotos || encryptedPhotos.length === 0) return;
+    void Promise.all(
+      albums.map((a) =>
+        reconcileAlbumCount(
+          a.albumId,
+          countRegularAlbum(a, encryptedPhotos, secureBlobIds),
+        ),
+      ),
+    );
+  }, [albums, encryptedPhotos, secureBlobIds]);
 
   async function loadPeopleClusters() {
     try {
@@ -218,9 +221,10 @@ export default function Albums() {
         if (!c.representative) continue;
         const photo = await db.photos.where("serverPhotoId").equals(c.representative).first();
         if (cancelled) return;
-        if (photo?.thumbnailData) {
-          const mime = photo.thumbnailMimeType || "image/jpeg";
-          const u = URL.createObjectURL(new Blob([photo.thumbnailData], { type: mime }));
+        const thumb = await resolveThumb(photo);
+        if (cancelled) return;
+        if (thumb) {
+          const u = URL.createObjectURL(new Blob([thumb.data], { type: thumb.mime }));
           created.push(u);
           urls[c.id] = u;
         } else {
@@ -248,9 +252,10 @@ export default function Albums() {
         if (!c.representative) continue;
         const photo = await db.photos.where("serverPhotoId").equals(c.representative).first();
         if (cancelled) return;
-        if (photo?.thumbnailData) {
-          const mime = photo.thumbnailMimeType || "image/jpeg";
-          const u = URL.createObjectURL(new Blob([photo.thumbnailData], { type: mime }));
+        const thumb = await resolveThumb(photo);
+        if (cancelled) return;
+        if (thumb) {
+          const u = URL.createObjectURL(new Blob([thumb.data], { type: thumb.mime }));
           created.push(u);
           urls[c.id] = u;
         } else {
@@ -275,9 +280,10 @@ export default function Albums() {
         if (!m.first_photo_id) continue;
         const photo = await db.photos.where("serverPhotoId").equals(m.first_photo_id).first();
         if (cancelled) return;
-        if (photo?.thumbnailData) {
-          const mime = photo.thumbnailMimeType || "image/jpeg";
-          const u = URL.createObjectURL(new Blob([photo.thumbnailData], { type: mime }));
+        const thumb = await resolveThumb(photo);
+        if (cancelled) return;
+        if (thumb) {
+          const u = URL.createObjectURL(new Blob([thumb.data], { type: thumb.mime }));
           created.push(u);
           urls[m.id] = u;
         } else if (m.first_photo_id) {
@@ -302,9 +308,10 @@ export default function Albums() {
         if (!t.first_photo_id) continue;
         const photo = await db.photos.where("serverPhotoId").equals(t.first_photo_id).first();
         if (cancelled) return;
-        if (photo?.thumbnailData) {
-          const mime = photo.thumbnailMimeType || "image/jpeg";
-          const u = URL.createObjectURL(new Blob([photo.thumbnailData], { type: mime }));
+        const thumb = await resolveThumb(photo);
+        if (cancelled) return;
+        if (thumb) {
+          const u = URL.createObjectURL(new Blob([thumb.data], { type: thumb.mime }));
           created.push(u);
           urls[t.id] = u;
         } else {
@@ -357,19 +364,22 @@ export default function Albums() {
 
   const encryptedPhotoCounts = localCounts ?? summaryCounts;
 
-  // Find the first photo with a thumbnail for each category (secure-excluded so
-  // a secured photo can't surface as a smart-album cover).
+  // Find the first photo for each category (secure-excluded so a secured photo
+  // can't surface as a smart-album cover). Note this no longer filters on the
+  // photo carrying thumbnail bytes — those live in the `thumbs` table now, so
+  // the card resolves them itself; requiring them here would have found no cover
+  // at all.
   function findCoverPhoto(filter: (p: CachedPhoto) => boolean): CachedPhoto | undefined {
     if (!visiblePhotos) return undefined;
-    return visiblePhotos.find(p => filter(p) && p.thumbnailData);
+    return visiblePhotos.find(filter);
   }
 
-  // Cover for "Recently Added" = the most-recently-imported item with a
-  // thumbnail (by addedAt, falling back to takenAt for un-backfilled entries).
+  // Cover for "Recently Added" = the most-recently-imported item (by addedAt,
+  // falling back to takenAt for un-backfilled entries).
   const recentCover = visiblePhotos
-    ? [...visiblePhotos]
-        .sort((a, b) => (b.addedAt ?? b.takenAt ?? 0) - (a.addedAt ?? a.takenAt ?? 0))
-        .find(p => p.thumbnailData)
+    ? [...visiblePhotos].sort(
+        (a, b) => (b.addedAt ?? b.takenAt ?? 0) - (a.addedAt ?? a.takenAt ?? 0),
+      )[0]
     : undefined;
 
   const smartAlbumCovers = {
@@ -387,13 +397,29 @@ export default function Albums() {
       const res = await api.blobs.list({ blob_type: "album_manifest" });
       const serverAlbumIds = new Set<string>();
 
+      // Manifest blobs are immutable — editing an album uploads a NEW blob id
+      // and drops the old one — so a blob id we already hold locally proves our
+      // cached copy is byte-for-byte the server's. Index what we have by blob id
+      // and skip those entirely: no download, no decrypt, no write. In the
+      // steady state this turns the whole page mount into one `list` call.
+      const cachedByBlobId = new Map<string, CachedAlbum>();
+      for (const a of await db.albums.toArray()) {
+        if (a.manifestBlobId) cachedByBlobId.set(a.manifestBlobId, a);
+      }
+
       for (const blob of res.blobs) {
+        const known = cachedByBlobId.get(blob.id);
+        if (known) {
+          serverAlbumIds.add(known.albumId);
+          continue;
+        }
         try {
           const encrypted = await api.blobs.download(blob.id);
           const decrypted = await decrypt(encrypted);
           const payload = JSON.parse(new TextDecoder().decode(decrypted));
 
           serverAlbumIds.add(payload.album_id);
+          const previous = await db.albums.get(payload.album_id);
           await db.albums.put({
             albumId: payload.album_id,
             manifestBlobId: blob.id,
@@ -401,6 +427,9 @@ export default function Albums() {
             createdAt: new Date(payload.created_at).getTime(),
             coverPhotoBlobId: payload.cover_photo_blob_id,
             photoBlobIds: payload.photo_blob_ids || [],
+            // Keep the last count so the tile keeps rendering a number while the
+            // live resolution catches up, instead of blanking on every sync.
+            cachedCount: previous?.cachedCount,
           });
         } catch {
           // Skip albums we can't decrypt
@@ -968,27 +997,22 @@ export default function Albums() {
 function AlbumCard({ album, count, onClick }: { album: CachedAlbum; count: number; onClick: () => void }) {
   const [thumbUrl, setThumbUrl] = useState<string | null>(null);
 
+  const firstBlobId = album.photoBlobIds[0];
   useEffect(() => {
     let cancelled = false;
-    if (album.photoBlobIds.length === 0) return;
-
-    // Use the first photo in the album as the cover
-    const firstBlobId = album.photoBlobIds[0];
+    if (!firstBlobId) return;
 
     (async () => {
-      // Try to load thumbnail from local IndexedDB first (encrypted mode)
+      // Use the first photo in the album as the cover.
       const localPhoto = await db.photos.get(firstBlobId);
       if (cancelled) return;
-      if (localPhoto?.thumbnailData) {
-        const mime = localPhoto.thumbnailMimeType || (localPhoto.mediaType === "gif" ? "image/gif" : "image/jpeg");
-        const blob = new Blob([localPhoto.thumbnailData], { type: mime });
-        setThumbUrl(URL.createObjectURL(blob));
-        return;
-      }
+      const thumb = await resolveThumb(localPhoto);
+      if (cancelled || !thumb) return;
+      setThumbUrl(URL.createObjectURL(new Blob([thumb.data], { type: thumb.mime })));
     })();
 
     return () => { cancelled = true; };
-  }, [album.photoBlobIds]);
+  }, [firstBlobId]);
 
   useEffect(() => {
     return () => {
@@ -1029,27 +1053,36 @@ function SmartAlbumCard({
   label: string;
   count: number;
   onClick: () => void;
-  /** The first matching CachedPhoto for this category (may have thumbnailData or serverPhotoId) */
+  /** The first matching CachedPhoto for this category — its thumbnail is
+   *  resolved from the thumbs cache here, not carried on the row. */
   coverPhoto?: CachedPhoto;
 }) {
   const [thumbUrl, setThumbUrl] = useState<string | null>(null);
 
+  const coverBlobId = coverPhoto?.blobId;
   useEffect(() => {
     let cancelled = false;
+    let url: string | null = null;
 
-    if (coverPhoto?.thumbnailData) {
-      // Encrypted thumbnail data already in IndexedDB
-      const mime = coverPhoto.thumbnailMimeType || (coverPhoto.mediaType === "gif" ? "image/gif" : "image/jpeg");
-      const blob = new Blob([coverPhoto.thumbnailData], { type: mime });
-      const url = URL.createObjectURL(blob);
-      if (!cancelled) setThumbUrl(url);
-      return () => { cancelled = true; URL.revokeObjectURL(url); };
-    }
+    void (async () => {
+      const thumb = await resolveThumb(coverPhoto);
+      if (cancelled) return;
+      if (!thumb) {
+        setThumbUrl(null);
+        return;
+      }
+      url = URL.createObjectURL(new Blob([thumb.data], { type: thumb.mime }));
+      setThumbUrl(url);
+    })();
 
-    // No thumbnail source — reset
-    if (!cancelled) setThumbUrl(null);
-    return () => { cancelled = true; };
-  }, [coverPhoto?.thumbnailData, coverPhoto?.thumbnailMimeType, coverPhoto?.mediaType]);
+    return () => {
+      cancelled = true;
+      if (url) URL.revokeObjectURL(url);
+    };
+    // The photo's identity is what decides the cover; `coverPhoto` itself is a
+    // fresh object on every live-query emission.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [coverBlobId, coverPhoto?.thumbnailMimeType, coverPhoto?.mediaType]);
 
   // Revoke previous object URL when thumbUrl changes
   useEffect(() => {

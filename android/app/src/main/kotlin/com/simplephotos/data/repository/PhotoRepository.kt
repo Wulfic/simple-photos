@@ -175,6 +175,9 @@ class PhotoRepository @Inject constructor(
 
     suspend fun getPhoto(id: String): PhotoEntity? = db.photoDao().getById(id)
 
+    /** How many photos the local mirror currently holds. */
+    suspend fun countPhotos(): Int = db.photoDao().countAll()
+
     /** Items still queued for upload on this device — fed to the server's unified
      *  encryption banner as this device's contribution (TODO #2/#5). */
     suspend fun countPendingUploads(): Int = db.photoDao().countPendingUploads()

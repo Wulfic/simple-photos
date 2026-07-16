@@ -151,9 +151,7 @@ class AlbumDetailViewModel @Inject constructor(
     fun confirmAdd() {
         viewModelScope.launch {
             try {
-                selectedToAdd.forEach { photoId ->
-                    albumRepository.addPhotoToAlbum(photoId, albumId)
-                }
+                albumRepository.addPhotosToAlbum(selectedToAdd.toList(), albumId)
                 // Only sync album manifest in encrypted mode
                 try {
                     album?.let { albumRepository.syncAlbum(it) }
@@ -204,9 +202,7 @@ class AlbumDetailViewModel @Inject constructor(
     fun removeSelectedFromAlbum() {
         viewModelScope.launch {
             try {
-                for (id in selectedIds) {
-                    albumRepository.removePhotoFromAlbum(id, albumId)
-                }
+                albumRepository.removePhotosFromAlbum(selectedIds.toList(), albumId)
                 try {
                     album?.let { albumRepository.syncAlbum(it) }
                 } catch (_: Exception) {}

@@ -9,6 +9,7 @@ import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } fr
 import { useParams, useLocation } from "react-router-dom";
 import { useAppNavigate } from "../hooks/useAppNavigate";
 import { db } from "../db";
+import { resolveThumb } from "../db/thumbs";
 import { useLiveQuery } from "dexie-react-hooks";
 import PhotoInfoPanel from "../components/viewer/PhotoInfoPanel";
 import TagPanel from "../components/viewer/TagPanel";
@@ -430,10 +431,10 @@ export default function Viewer() {
       setLoading(true);
       setError("");
       setVideoError(false);
-      db.photos.get(id).then((dbCached) => {
-        if (dbCached?.thumbnailData) {
-          const mime = dbCached.thumbnailMimeType || (dbCached.mediaType === "gif" ? "image/gif" : "image/jpeg");
-          const url = URL.createObjectURL(new Blob([dbCached.thumbnailData], { type: mime }));
+      db.photos.get(id).then(async (dbCached) => {
+        const thumb = await resolveThumb(dbCached);
+        if (thumb) {
+          const url = URL.createObjectURL(new Blob([thumb.data], { type: thumb.mime }));
           setPreviewUrl(url);
         }
         // Use storageBlobId for copies that reference the original's server blob

@@ -153,6 +153,12 @@ dependencies {
 
     // Local unit tests
     testImplementation("junit:junit:4.13.2")
+    // org.json ships in android.jar as stubs that throw when called from a JVM
+    // unit test, so the album-manifest format — the entire cross-platform
+    // contract with the web client — would be untestable without a real
+    // implementation on the test classpath. Test-only: the device uses the
+    // platform's.
+    testImplementation("org.json:json:20240303")
 
     // Testing
     androidTestImplementation(platform(libs.compose.bom))

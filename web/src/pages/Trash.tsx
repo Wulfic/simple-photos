@@ -6,6 +6,7 @@ import { useEffect, useState, useCallback } from "react";
 import { api } from "../api/client";
 import { useAuthStore } from "../store/auth";
 import { db, type CachedTrashItem } from "../db";
+import { putThumb } from "../db/thumbs";
 import AppHeader from "../components/AppHeader";
 import { formatBytes, getErrorMessage } from "../utils/formatters";
 import AppIcon from "../components/AppIcon";
@@ -152,10 +153,19 @@ export default function Trash() {
             width: localTrash.width,
             height: localTrash.height,
             takenAt: localTrash.takenAt,
-            thumbnailData: localTrash.thumbnailData,
             duration: localTrash.duration,
             albumIds: localTrash.albumIds ?? [],
           });
+          // Photo rows never carry thumbnail bytes — restoring one has to put
+          // the trash row's copy into the thumbs table, not back onto the row.
+          if (localTrash.thumbnailData) {
+            await putThumb(
+              localTrash.blobId,
+              localTrash.thumbnailData,
+              undefined,
+              localTrash.mediaType,
+            );
+          }
           await db.trash.delete(id);
         }
         // Revoke the local thumbnail URL
@@ -241,10 +251,18 @@ export default function Trash() {
               width: localTrash.width,
               height: localTrash.height,
               takenAt: localTrash.takenAt,
-              thumbnailData: localTrash.thumbnailData,
               duration: localTrash.duration,
               albumIds: localTrash.albumIds ?? [],
             });
+            // See the single-item restore above: bytes go to the thumbs table.
+            if (localTrash.thumbnailData) {
+              await putThumb(
+                localTrash.blobId,
+                localTrash.thumbnailData,
+                undefined,
+                localTrash.mediaType,
+              );
+            }
             await db.trash.delete(id);
           }
           if (item._localThumbUrl) URL.revokeObjectURL(item._localThumbUrl);

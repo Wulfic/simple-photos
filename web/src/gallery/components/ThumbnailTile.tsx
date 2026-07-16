@@ -250,16 +250,16 @@ export default function ThumbnailTile({
         </>
       ) : (
         <div className="w-full h-full flex flex-col items-center justify-center gap-1.5 px-1 text-center">
-          {thumb.state === "loading" || thumb.state === "placeholder" ? (
-            !source.thumbnailData ? (
-              <>
-                <div className="w-5 h-5 border-2 border-edge-strong border-t-accent-500 dark:border-t-accent-400 rounded-full animate-spin" />
-                <span className="text-[10px] font-medium text-fg-muted uppercase tracking-wide">Queued</span>
-              </>
-            ) : (
-              <span className="text-fg-muted text-xs">{filename}</span>
-            )
-          ) : thumb.state === "error" ? (
+          {/* "placeholder" means there is nothing to load yet (off-screen, or no
+              thumbnail exists) — say so. "loading" is now the brief IDB read
+              every on-screen tile does, so it stays on the neutral tile and lets
+              the image fade in, rather than flashing a spinner at each one. */}
+          {thumb.state === "placeholder" ? (
+            <>
+              <div className="w-5 h-5 border-2 border-edge-strong border-t-accent-500 dark:border-t-accent-400 rounded-full animate-spin" />
+              <span className="text-[10px] font-medium text-fg-muted uppercase tracking-wide">Queued</span>
+            </>
+          ) : thumb.state === "loading" ? null : thumb.state === "error" ? (
             <div className="text-center text-fg-muted">
               <span className="text-2xl block mb-1">🔐</span>
               <span className="text-xs">Encrypted</span>

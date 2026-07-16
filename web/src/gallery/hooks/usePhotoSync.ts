@@ -14,6 +14,7 @@ import {
   type MediaType,
   mediaTypeFromMime,
 } from "../../db";
+import { putThumb, resolveThumb, startThumbBackfill } from "../../db/thumbs";
 import { base64ToArrayBuffer } from "../../utils/media";
 import { fetchAllPages } from "../../utils/gallery";
 import { decodeThumbnailDimensions } from "../utils/thumbnailGenerate";
@@ -59,6 +60,14 @@ export function usePhotoSync(): PhotoSyncResult {
   // on *every* open even though the persisted data was right there. `undefined`
   // now means only "the Dexie query hasn't resolved yet" (near-instant).
   const encryptedPhotos = rawEncryptedPhotos;
+
+  // ── Legacy thumbnail migration ────────────────────────────────────────
+  // Move any thumbnail bytes still sitting inline on photo rows into the
+  // `thumbs` table (see db/thumbs.ts). Runs once per session, in the
+  // background, and is a cheap no-op after the first pass has drained.
+  useEffect(() => {
+    startThumbBackfill();
+  }, []);
 
   // ── Periodic re-sync ──────────────────────────────────────────────────
   useEffect(() => {
@@ -182,8 +191,7 @@ export function usePhotoSync(): PhotoSyncResult {
               const thumbDec = await decrypt(thumbEnc);
               const thumbPayload: ThumbnailPayload = JSON.parse(new TextDecoder().decode(thumbDec));
               const freshData = base64ToArrayBuffer(thumbPayload.data);
-              updates.thumbnailData = freshData;
-              updates.thumbnailMimeType = thumbPayload.mime_type;
+              await putThumb(idbKey, freshData, thumbPayload.mime_type, existing.mediaType);
               const curW = updates.width ?? existing.width;
               const curH = updates.height ?? existing.height;
               if (curW > 0 && curH > 0) {
@@ -199,15 +207,19 @@ export function usePhotoSync(): PhotoSyncResult {
             } catch {
               // Download failed — leave existing thumbnail
             }
-          } else if (!existing.thumbnailData) {
+          } else if (!(await resolveThumb(existing))) {
             const retryThumbId = existing.thumbnailBlobId ?? photo.encrypted_thumb_blob_id;
             if (retryThumbId) {
               try {
                 const thumbEnc = await api.blobs.download(retryThumbId);
                 const thumbDec = await decrypt(thumbEnc);
                 const thumbPayload: ThumbnailPayload = JSON.parse(new TextDecoder().decode(thumbDec));
-                updates.thumbnailData = base64ToArrayBuffer(thumbPayload.data);
-                updates.thumbnailMimeType = thumbPayload.mime_type;
+                await putThumb(
+                  idbKey,
+                  base64ToArrayBuffer(thumbPayload.data),
+                  thumbPayload.mime_type,
+                  existing.mediaType,
+                );
               } catch { /* retry next sync */ }
             }
           }
@@ -266,8 +278,6 @@ export function usePhotoSync(): PhotoSyncResult {
           height: displayHeight,
           duration: photo.duration_secs ?? undefined,
           albumIds: [],
-          thumbnailData,
-          thumbnailMimeType,
           contentHash: photo.photo_hash ?? undefined,
           cropData: photo.crop_metadata ?? undefined,
           isFavorite: photo.is_favorite ?? false,
@@ -281,6 +291,11 @@ export function usePhotoSync(): PhotoSyncResult {
           burstId: photo.burst_id ?? undefined,
           motionVideoBlobId: photo.motion_video_blob_id ?? undefined,
         });
+        // Thumbnail bytes go to their own table — keeping them on the photo row
+        // is what made every count query deserialize the whole library.
+        if (thumbnailData) {
+          await putThumb(idbKey, thumbnailData, thumbnailMimeType, photo.media_type ?? undefined);
+        }
       }
 
       // Phase 4: Handle directly-uploaded encrypted blobs not in photos table.
@@ -324,10 +339,11 @@ export function usePhotoSync(): PhotoSyncResult {
             latitude: payload.latitude,
             longitude: payload.longitude,
             albumIds: payload.album_ids ?? [],
-            thumbnailData,
-            thumbnailMimeType: unsyncedThumbMime,
             contentHash: blob.content_hash ?? undefined,
           });
+          if (thumbnailData) {
+            await putThumb(blob.id, thumbnailData, unsyncedThumbMime, payload.media_type);
+          }
         } catch {
           // Skip undecryptable items
         }

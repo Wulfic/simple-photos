@@ -8,6 +8,7 @@
 import { useEffect, useState, useRef } from "react";
 import { api } from "../../api/client";
 import { db } from "../../db";
+import { resolveThumb } from "../../db/thumbs";
 import { decryptPhotoBlob } from "../../crypto/blobEnvelope";
 
 interface BurstFrame {
@@ -84,10 +85,12 @@ export default function BurstStrip({ burstId, currentPhotoId, onSelectFrame, vis
           await Promise.all(
             secureFrames.map(async (sf) => {
               try {
-                const cached = await db.photos.get(sf.blob_id);
-                if (cached?.thumbnailData) {
-                  const mime = cached.thumbnailMimeType || "image/jpeg";
-                  patchThumb(sf.blob_id, URL.createObjectURL(new Blob([cached.thumbnailData], { type: mime })));
+                const cachedThumb = await resolveThumb(await db.photos.get(sf.blob_id));
+                if (cachedThumb) {
+                  patchThumb(
+                    sf.blob_id,
+                    URL.createObjectURL(new Blob([cachedThumb.data], { type: cachedThumb.mime })),
+                  );
                   return;
                 }
                 if (sf.encrypted_thumb_blob_id) {
@@ -112,10 +115,12 @@ export default function BurstStrip({ burstId, currentPhotoId, onSelectFrame, vis
           setLoading(false);
           await Promise.all(
             burstPhotos.map(async (bp) => {
-              const cached = await db.photos.get(bp.id);
-              if (cached?.thumbnailData) {
-                const mime = cached.thumbnailMimeType || "image/jpeg";
-                patchThumb(bp.id, URL.createObjectURL(new Blob([cached.thumbnailData], { type: mime })));
+              const cachedThumb = await resolveThumb(await db.photos.get(bp.id));
+              if (cachedThumb) {
+                patchThumb(
+                  bp.id,
+                  URL.createObjectURL(new Blob([cachedThumb.data], { type: cachedThumb.mime })),
+                );
               } else if (bp.thumb_path) {
                 // Server thumbnail endpoint — a plain URL, no object URL to revoke.
                 if (!cancelled) setFrames((prev) => prev.map((f) => (f.id === bp.id ? { ...f, thumbUrl: api.photos.thumbUrl(bp.id) } : f)));

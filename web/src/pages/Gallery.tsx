@@ -14,6 +14,7 @@ import { useAppNavigate } from "../hooks/useAppNavigate";
 import { useScrollMemory } from "../hooks/useScrollMemory";
 import { api } from "../api/client";
 import { type CachedPhoto, ACCEPTED_MIME_TYPES, db } from "../db";
+import { deleteThumbs, resolveThumb } from "../db/thumbs";
 import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
 import AddToAlbumModal from "../components/AddToAlbumModal";
@@ -201,13 +202,16 @@ export default function Gallery() {
             takenAt: cached.takenAt,
             deletedAt: Date.now(),
             expiresAt: result.expires_at,
-            thumbnailData: cached.thumbnailData,
+            // The trash row keeps its own bytes — the photo row and its thumbs
+            // entry are about to go.
+            thumbnailData: (await resolveThumb(cached))?.data,
             duration: cached.duration,
             albumIds: cached.albumIds ?? [],
           });
         }
         // Remove immediately from local IDB so the gallery updates at once
         await db.photos.delete(id);
+        await deleteThumbs([id]);
       }
       await loadEncryptedPhotos();
     } catch (err: unknown) {
@@ -705,7 +709,6 @@ export default function Gallery() {
                     storageBlobId: photo.storageBlobId,
                     serverPhotoId: photo.serverPhotoId,
                     serverSide: photo.serverSide,
-                    thumbnailData: photo.thumbnailData,
                     thumbnailMimeType: photo.thumbnailMimeType,
                     encryptedThumbBlobId: photo.thumbnailBlobId,
                   };

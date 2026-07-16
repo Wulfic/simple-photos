@@ -193,7 +193,13 @@ fun AlbumListScreen(
                                 is AlbumGridItem.UserAlbum -> {
                                     AlbumCard(
                                         album = item.album,
-                                        count = viewModel.albumCounts[item.album.localId],
+                                        // Fall back to the last count we computed and
+                                        // persisted: on a cold start the mirror hasn't
+                                        // loaded, so the live count isn't available yet
+                                        // and the tile would otherwise flash 0 before
+                                        // settling on the real number.
+                                        count = viewModel.albumCounts[item.album.localId]
+                                            ?: item.album.cachedCount,
                                         coverPhoto = viewModel.albumCoverPhotos[item.album.localId],
                                         serverBaseUrl = viewModel.serverBaseUrl,
                                         onClick = { onAlbumClick(item.album.localId) }

@@ -103,22 +103,48 @@ export function resolveAlbumPhotos(params: {
  * missing/wrong counts, #20 flicker). Raw `photoBlobIds.length` must never be
  * shown as the count — it includes secure-hidden and stale (deleted) ids.
  *
- * When the mirror hasn't loaded yet (cold cache) we fall back to the raw
- * manifest size rather than flashing 0; once the mirror holds photos the
- * accurate secure-excluded intersection takes over.
+ * When the mirror hasn't loaded yet (cold cache) this falls back to the count we
+ * last persisted, so a tile opens on its previous stable number. Only if there
+ * has never been one does it fall back to the raw manifest size (still better
+ * than flashing 0). Either way the accurate intersection takes over the moment
+ * the mirror holds photos.
  */
 export function countRegularAlbum(
-  album: Pick<CachedAlbum, "photoBlobIds">,
+  album: Pick<CachedAlbum, "photoBlobIds" | "cachedCount">,
   allPhotos: CachedPhoto[] | undefined,
   secureBlobIds: Set<string>
 ): number {
-  if (!allPhotos || allPhotos.length === 0) return album.photoBlobIds.length;
+  if (!allPhotos || allPhotos.length === 0) {
+    return album.cachedCount ?? album.photoBlobIds.length;
+  }
   const mirror = new Set(allPhotos.map((p) => p.blobId));
   let n = 0;
   for (const id of album.photoBlobIds) {
     if (mirror.has(id) && !secureBlobIds.has(id)) n++;
   }
   return n;
+}
+
+/**
+ * Persist an album's freshly-resolved count so the next mount can render it
+ * before the mirror has loaded.
+ *
+ * The `cachedCount === count` guard is load-bearing, not an optimisation: every
+ * album tile is driven by a Dexie live query, so an unconditional write would
+ * re-emit the album list, re-run this reconciliation, and write again — forever.
+ */
+export async function reconcileAlbumCount(
+  albumId: string,
+  count: number
+): Promise<void> {
+  try {
+    const album = await db.albums.get(albumId);
+    if (!album || album.cachedCount === count) return;
+    await db.albums.update(albumId, { cachedCount: count });
+  } catch (e) {
+    // A render hint failing to persist must never break the view.
+    console.warn(`[useAlbumPhotos] could not cache count for album ${albumId}`, e); // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
+  }
 }
 
 export function useAlbumPhotos(
@@ -177,6 +203,15 @@ export function useAlbumPhotos(
     prevListRef.current = next;
     return next;
   }, [allPhotos, album, kind, smartDef, secureBlobIds]);
+
+  // Feed the resolved count back into the cache: this hook *is* the album's
+  // authoritative count, so opening an album is what teaches its tile the right
+  // number to show next time.
+  const albumIdForCache = album?.albumId;
+  useEffect(() => {
+    if (loading || kind !== "regular" || !albumIdForCache) return;
+    void reconcileAlbumCount(albumIdForCache, photos.length);
+  }, [loading, kind, albumIdForCache, photos.length]);
 
   return {
     photos,

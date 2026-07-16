@@ -85,6 +85,41 @@ export function resolveAlbumDisplayName(
 }
 
 /**
+ * Whether a reconstruction pass proved there is nothing left to materialize, so
+ * it can stop re-running.
+ *
+ * **Must stay identical to Android's `AlbumRepository.takeoutSettled`** — both
+ * platforms run this same pass against the same server mapping, so a rule that
+ * differs means one device keeps re-uploading manifests the other considers
+ * finished, which is half of the churn this file's callers are trying to avoid.
+ *
+ * Normally settled means every source photo matched. But a photo that was
+ * trashed or moved to the secure gallery never syncs into the mirror at all, so
+ * `photosUnmatched` can never reach 0 and the pass would re-run forever. The
+ * second clause catches that: a pass that changed nothing AND left exactly the
+ * same gap as the one before it has proved the gap is permanent — more photos
+ * arrived, none of them were the missing ones. Deliberately conservative;
+ * latching early means silently incomplete albums, which is the bug this whole
+ * path exists to fix.
+ *
+ * @param previousUnmatched the previous pass's gap, or -1 if there was none.
+ */
+export function takeoutSettled(
+  result: Pick<
+    ServerRecreateResult,
+    "albumsCreated" | "albumsUpdated" | "photosAdded" | "photosUnmatched"
+  >,
+  previousUnmatched: number,
+): boolean {
+  if (result.photosUnmatched === 0) return true;
+  const noop =
+    result.albumsCreated === 0 &&
+    result.albumsUpdated === 0 &&
+    result.photosAdded === 0;
+  return noop && result.photosUnmatched === previousUnmatched;
+}
+
+/**
  * Recreate (or merge into) local albums from the server's **authoritative**
  * source-album mapping (`GET /api/photos/source-albums`), keyed by photo id.
  *

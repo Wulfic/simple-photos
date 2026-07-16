@@ -9,6 +9,7 @@
  */
 import { useEffect, useRef, useState, useCallback } from "react";
 import { db } from "../../db";
+import { resolveThumb } from "../../db/thumbs";
 import useViewerMedia from "../../hooks/useViewerMedia";
 import type { PreloadEntry } from "../../types/media";
 import { diagnosticLogger } from "../../utils/diagnosticLogger";
@@ -65,9 +66,10 @@ export default function ComparePane({ photoId, badge }: ComparePaneProps) {
     (async () => {
       const cached = await db.photos.get(photoId).catch(() => undefined);
       if (cancelled) return;
-      if (cached?.thumbnailData) {
-        const mime = cached.thumbnailMimeType || (cached.mediaType === "gif" ? "image/gif" : "image/jpeg");
-        setPreviewUrl(URL.createObjectURL(new Blob([cached.thumbnailData], { type: mime })));
+      const thumb = await resolveThumb(cached);
+      if (cancelled) return;
+      if (thumb) {
+        setPreviewUrl(URL.createObjectURL(new Blob([thumb.data], { type: thumb.mime })));
       }
       // Copies reference the original's server blob via storageBlobId.
       const fetchId = cached?.storageBlobId || photoId;

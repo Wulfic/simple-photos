@@ -172,6 +172,32 @@ describe("countRegularAlbum — album-list badge source (#12)", () => {
     expect(countRegularAlbum(album(["a", "b", "c"]), undefined, new Set())).toBe(3);
     expect(countRegularAlbum(album(["a", "b", "c"]), [], new Set())).toBe(3);
   });
+
+  it("prefers the persisted count over the manifest size while cold", () => {
+    // The raw manifest size counts secure-hidden and stale ids, so a cold cache
+    // showed one number and then visibly corrected itself once sync filled the
+    // mirror in. The last count we resolved is the better guess by definition —
+    // it *is* what the mirror last produced.
+    const cached = { ...album(["a", "b", "secret", "c", "gone"]), cachedCount: 3 };
+    expect(countRegularAlbum(cached, undefined, new Set())).toBe(3);
+    expect(countRegularAlbum(cached, [], new Set())).toBe(3);
+  });
+
+  it("lets the live count override a stale persisted one", () => {
+    // cachedCount is only ever a render hint; the mirror always wins.
+    const stale = { ...album(["a", "b", "gone"]), cachedCount: 99 };
+    expect(countRegularAlbum(stale, mirror, new Set())).toBe(2);
+  });
+
+  it("caches a count that a later cold start reproduces exactly", () => {
+    // The round trip that makes the badge stable across a restart: what the
+    // mirror resolves now must be what the next cold mount renders.
+    const a = album(["a", "b", "secret", "c", "gone"]);
+    const secure = new Set(["secret"]);
+    const live = countRegularAlbum(a, mirror, secure);
+    const persisted = { ...a, cachedCount: live };
+    expect(countRegularAlbum(persisted, undefined, secure)).toBe(live);
+  });
 });
 
 describe("resolveAlbumPhotos — count invariant", () => {

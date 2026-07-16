@@ -213,8 +213,13 @@ class GalleryViewModel @Inject constructor(
                 // Expand any collapsed burst representative to its full stack so
                 // the whole burst is added, not just the cover frame.
                 val ids = withContext(Dispatchers.IO) { photoRepository.expandBurstSelection(selectedIds) }
-                for (id in ids) {
-                    withContext(Dispatchers.IO) { albumRepository.addPhotoToAlbum(id, albumId) }
+                withContext(Dispatchers.IO) {
+                    albumRepository.addPhotosToAlbum(ids.toList(), albumId)
+                    // Publish the new membership. Without this the photos joined
+                    // the album on this device only — every other device kept the
+                    // old manifest, and the album's own next manifest sync would
+                    // eventually overwrite the local addition away.
+                    albumRepository.getAlbum(albumId)?.let { albumRepository.syncAlbum(it) }
                 }
                 clearSelection()
             } catch (e: Exception) {
@@ -229,8 +234,11 @@ class GalleryViewModel @Inject constructor(
                 val album = withContext(Dispatchers.IO) { albumRepository.createAlbum(name) }
                 // Expand burst representatives so the entire stack is added.
                 val ids = withContext(Dispatchers.IO) { photoRepository.expandBurstSelection(selectedIds) }
-                for (id in ids) {
-                    withContext(Dispatchers.IO) { albumRepository.addPhotoToAlbum(id, album.localId) }
+                withContext(Dispatchers.IO) {
+                    albumRepository.addPhotosToAlbum(ids.toList(), album.localId)
+                    // A brand-new album exists only locally until its manifest is
+                    // uploaded — see addSelectedToAlbum.
+                    albumRepository.getAlbum(album.localId)?.let { albumRepository.syncAlbum(it) }
                 }
                 clearSelection()
             } catch (e: Exception) {

@@ -20,6 +20,11 @@ interface PhotoDao {
     @Query("SELECT * FROM photos")
     suspend fun getAllPhotosSnapshot(): List<PhotoEntity>
 
+    /** How many photos the local mirror holds. Counts in SQLite rather than
+     *  materialising every row, so it stays cheap on large libraries. */
+    @Query("SELECT COUNT(*) FROM photos")
+    suspend fun countAll(): Int
+
     @Query("SELECT * FROM photos WHERE localId = :id")
     suspend fun getById(id: String): PhotoEntity?
 
@@ -112,9 +117,15 @@ interface PhotoDao {
     @Query("SELECT * FROM photos WHERE serverPhotoId = :photoId LIMIT 1")
     suspend fun getByServerPhotoId(photoId: String): PhotoEntity?
 
-    /** Batch lookup: get all photos whose serverPhotoId is in the given list. */
+    /** Batch lookup: get all photos whose serverPhotoId is in the given list.
+     *  Callers must chunk — see [com.simplephotos.data.repository.SQLITE_VARIABLE_CHUNK]. */
     @Query("SELECT * FROM photos WHERE serverPhotoId IN (:photoIds)")
     suspend fun getByServerPhotoIds(photoIds: List<String>): List<PhotoEntity>
+
+    /** Batch lookup: get all photos whose serverBlobId is in the given list.
+     *  Callers must chunk — see [com.simplephotos.data.repository.SQLITE_VARIABLE_CHUNK]. */
+    @Query("SELECT * FROM photos WHERE serverBlobId IN (:blobIds)")
+    suspend fun getByServerBlobIds(blobIds: List<String>): List<PhotoEntity>
 
     /** Batch lookup: get all photos whose localId is in the given list. */
     @Query("SELECT * FROM photos WHERE localId IN (:ids)")

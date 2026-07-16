@@ -1,5 +1,19 @@
 # TODO — Album photo counts: slow on web, unstable on Android (investigated 2026-07-15)
 
+> **Status (2026-07-16): all four phases implemented; device verification still
+> outstanding.** Unit tests are green on both platforms (`npm test` 106 passing,
+> `gradlew testDebugUnitTest` passing). No server changes were needed, as
+> predicted. The E2E churn test and the on-device checks under "Verification"
+> below are the remaining work — they need two real clients and a real library,
+> so they can't be closed from the code side.
+>
+> One deliberate deviation from the plan, in Phase 3: the thumbnail split does
+> **not** copy bytes inside the Dexie upgrade. That would put hundreds of MB in
+> one IndexedDB transaction and leave a DB that won't open if it throws part-way.
+> The v10 upgrade is schema-only and `db/thumbs.ts::backfillThumbs` moves the
+> bytes chunked, in the background, with `resolveThumb` still reading the legacy
+> field until each row's turn comes.
+
 **Symptoms reported:**
 1. Web: counts aren't cached — opening the Albums page / an album visibly
    re-counts the items every time.
@@ -124,82 +138,99 @@ TODO.md Phase 3, but it belongs here too since both loops hammer it).
 
 ### Phase 1 — stop the manifest ping-pong (correctness; do this first, it's the actual data bug)
 
-- [ ] **Android: store manifest membership verbatim.** Add a
-  `photoBlobIds: List<String>` (JSON TypeConverter) column to `AlbumEntity`
-  (Room migration). `syncAlbumsFromServer` writes the decrypted list as-is;
-  xrefs remain a *derived* view for detail-grid queries. Unsynced members are
-  no longer lost.
-- [ ] **Android: build uploads from the stored list, never from the mirror.**
-  `syncAlbum()` manifest payload = stored `photoBlobIds` (plus/minus explicit
-  user add/removes), NOT `getPhotoIdsForAlbum → serverBlobId`. A
-  partially-synced device can then never shrink a server manifest.
-- [ ] **Both platforms: upload-then-delete manifest replacement.** Upload new
-  manifest → persist new blob id locally → best-effort delete old blob.
-  Web `takeoutAlbums.ts::saveAlbumManifest`, Android `AlbumRepository.syncAlbum`
-  + `deleteAlbum`. (Supersedes/absorbs TODO.md Phase 3 bullet.)
-- [ ] **Both platforms: skip unchanged manifests.** Blob ids are immutable ⇒
-  if a listed blob id equals the locally stored `manifestBlobId` /
-  `serverManifestBlobId`, skip download + decrypt + xref rewrite entirely.
-  This makes the steady-state ON_RESUME / page-mount sync a no-op (one
-  `listBlobs` call) and kills most Room Flow churn as a side effect.
-- [ ] **Tests:** manifest round-trip with members missing from the mirror
-  (must survive); shrink-regression test (sync down manifest with N ids while
-  mirror holds N−k → re-upload still contains N); unchanged-blob-id
-  short-circuit does zero downloads.
+- [x] **Android: store manifest membership verbatim.** `AlbumEntity.photoBlobIds`
+  (`List<String>` via `data/local/Converters.kt`, JSON — blob ids are opaque, so
+  a delimiter would be an assumption about their alphabet). DB version 10 → 11;
+  the existing `fallbackToDestructiveMigration` handles it (the DB is a cache).
+  `syncAlbumsFromServer` writes the decrypted list as-is; xrefs are now a
+  *derived* projection (`reconcileXRefs`). Unsynced members are no longer lost.
+- [x] **Android: build uploads from the stored list, never from the mirror.**
+  `AlbumManifest.payloadFor(album, cover)` takes `album.photoBlobIds` and nothing
+  else; `syncAlbum` re-reads the entity first, because callers routinely hold one
+  captured before their own edit landed. `addPhotosToAlbum`/`removePhotosFromAlbum`
+  maintain the stored list (batched — per-photo writes fired one Room
+  invalidation each). Also fixed: `GalleryViewModel` added photos to albums
+  without ever uploading a manifest.
+- [x] **Both platforms: upload-then-delete manifest replacement.** Already landed
+  with the uncommitted Takeout work — web `utils/albumManifest.ts::saveAlbumManifest`
+  (the single writer for all 5 call sites), Android `AlbumRepository.syncAlbum`.
+- [x] **Both platforms: skip unchanged manifests.** Android `syncAlbumsFromServer`
+  short-circuits on `getByManifestBlobId`; web `loadAlbums()` indexes
+  `db.albums` by `manifestBlobId` and skips matches. The xref projection tracks
+  the *mirror*, not the manifest, so it can't ride on the same check — it's gated
+  separately on `AlbumRepository.xrefMirrorSize`, which is what keeps the
+  steady-state resume to one `listBlobs` call.
+- [x] **Tests:** `AlbumManifestTest` — round-trip with members missing from the
+  mirror (`keeps members that are missing from the local mirror`), shrink
+  regression (`a partially-synced device cannot shrink an album`: N=5 manifest
+  onto a 2-photo mirror → re-upload still carries 5), and cross-platform format
+  parity in both directions. `ConvertersTest` covers ids containing separator
+  characters.
 
 ### Phase 2 — Android count stability
 
-- [ ] Wrap each album's xref rewrite (`deleteAllXRefsForAlbum` + inserts) in a
-  single Room `@Transaction` DAO method so observers never see the half-empty
-  state. (Mostly moot after the Phase 1 short-circuit, but required for the
-  cases that do rewrite.)
-- [ ] Sequence `refresh()`: secure-ids fetch → server sync → Takeout pass →
-  ONE count recompute at the end. Remove the `albums.first()` pre-sync
-  snapshot race; let `LaunchedEffect(albums)` remain the only other trigger.
-- [ ] Compute counts from the new stored `photoBlobIds ∩ mirror − secure`
-  (same predicate as web's `countRegularAlbum`) and only publish
-  `albumCounts` when the map actually changed (value-equality guard) so
-  Compose doesn't re-render identical numbers.
-- [ ] Persist the last computed count per album (column `cachedCount` on
-  `AlbumEntity`) so a cold start renders the previous stable number instantly
-  instead of 0 → summary → local churn.
-- [ ] **Tests:** count unchanged across a full refresh with no server-side
-  changes; secure-exclusion; no intermediate emission during a manifest
-  rewrite (Room transaction test).
+- [x] xref rewrites run inside `db.withTransaction { }` (room-ktx) rather than a
+  `@Transaction` DAO method — Room defers invalidation to commit either way, and
+  this avoids converting the DAO interface to an abstract class. `reconcileXRefs`
+  also diffs first and writes nothing when the projection already matches, so the
+  common case emits nothing at all.
+- [x] `refresh()` is now one strictly ordered coroutine: secure ids → server sync
+  → Takeout pass → one count recompute. The `albums.first()` snapshot is read
+  *after* the sync instead of racing it.
+- [x] Counts come from `AlbumRepository.visibleMemberCount(photoBlobIds, mirror,
+  secure)` — the same predicate as web's `countRegularAlbum`. No value-equality
+  guard was needed: `mutableStateOf` already compares structurally, so
+  re-publishing an identical map is a no-op for Compose. The guard that *did*
+  matter is on the DB write (`AlbumDao.updateCachedCount`'s `AND cachedCount !=
+  :count`), without which the write would invalidate the albums Flow and loop.
+- [x] `AlbumEntity.cachedCount` persists the last count; `AlbumListScreen` renders
+  `albumCounts[id] ?: album.cachedCount`. `loadCoverPhotos` returns early on an
+  empty mirror so a cold start can't overwrite good counts with zeros.
+- [x] **Tests:** `VisibleMemberCountTest` — stability across repeated recomputes,
+  secure exclusion, unsynced members, and parity with web's suite. The Room
+  transaction ordering is structural (Room's own guarantee) rather than
+  unit-tested; observing intermediate emissions needs an instrumented test.
 
 ### Phase 3 — Web: cached counts + stop the full-table scans
 
-- [ ] **Persist `cachedCount` on `CachedAlbum`** (Dexie schema bump). Update
-  it wherever resolution already happens (`useAlbumPhotos`,
-  `countRegularAlbum` call sites, `takeoutAlbums` writes). Albums tiles
-  render `cachedCount` immediately and reconcile in the background —
-  perceived "counting on open" disappears.
-- [ ] **Split thumbnails out of the `photos` rows** (new Dexie table
-  `thumbs {blobId, data, mime}` + migration copying existing bytes).
-  Membership/count queries then hydrate lean metadata rows only; the grid
-  fetches thumbs per-tile (most tile components already go through helpers,
-  so the touch points are bounded: `usePhotoSync` writer, tile/cover readers).
-  This is the single biggest perf lever for large libraries — counting and
-  album-open stop deserializing every thumbnail in the library.
-  (Fallback if the migration is deemed too risky for one pass: keep bytes but
-  switch count paths to `db.photos.orderBy("takenAt").primaryKeys()` +
-  a lean index; still fixes counting, not album-open.)
-- [ ] **`loadAlbums()` short-circuit** (same as Phase 1 bullet): only
-  download/decrypt manifests whose blob id isn't already in `db.albums`;
-  stale-album cleanup can run off the listing alone.
-- [ ] **Tests:** `countRegularAlbum` + cachedCount reconciliation; Dexie
-  migration test (thumbs copied, photos still resolve); manifest
-  short-circuit fetch-count assertion.
+- [x] **`cachedCount` on `CachedAlbum`** (Dexie v10). `countRegularAlbum` prefers
+  it over the raw manifest size while the mirror is cold; `reconcileAlbumCount`
+  (guarded against the write→live-query→recount loop) is called from
+  `useAlbumPhotos` for the open album and from `Albums.tsx` for every tile.
+- [x] **Thumbnails split into `thumbs {blobId, data, mime}`** — see the status
+  note at the top for why the copy is a background backfill rather than a Dexie
+  upgrade function. `db/thumbs.ts` is now the only door: `putThumb` (writer),
+  `resolveThumb`/`getThumb` (readers, legacy-aware), `copyThumb`, `deleteThumbs`,
+  `backfillThumbs`. `useThumbnailLoader` reads the table itself, so
+  `ThumbnailSource` carries ids only — passing bytes through it was what made
+  every list hydrate the whole library before rendering one tile.
+  `thumbnailMimeType` deliberately stays on the photo row: it's a short string,
+  and the tile needs it synchronously to decide GIF autoplay.
+- [x] **`loadAlbums()` short-circuit** — done, see Phase 1.
+- [x] **Tests:** `useAlbumPhotos.test.ts` extended with cachedCount preference,
+  live-count override, and the persist→cold-start round trip. `db/thumbs.test.ts`
+  (23 tests) runs against real in-memory IndexedDB via `fake-indexeddb`
+  (new devDependency) and covers the backfill: bytes moved, rows leaned, other
+  fields preserved, idempotent, resumable after interruption, and >1 chunk.
+  The short-circuit's "zero downloads" is asserted structurally (the cached
+  branch `continue`s before any `api.blobs.download`) — a fetch-count assertion
+  would need the whole api client mocked, which these suites don't set up.
 
 ### Phase 4 — kill the re-materialization churn
 
-- [ ] Persist the Takeout "fully materialized" latch (web: `localStorage`
-  keyed by server + user; Android: DataStore) including the
-  `photosUnmatched`-stable heuristic from TODO.md, instead of per-session
-  refs that reset on every mount/process. Reconstruction then runs only when
-  the source-albums response or mirror size actually changed.
-- [ ] Re-check the 5 s secure polling interval after Phases 2–3; with cheap
-  counting it can stay, otherwise widen to 30 s + refresh-on-focus.
+- [x] The latch is persisted as **the mirror size at the moment a pass settled**,
+  not a bare "done" flag — that's what makes it self-healing (the instant the
+  mirror grows, the recorded size no longer matches and reconstruction runs
+  again). Web: `utils/takeoutLatch.ts` (localStorage, keyed by user — the origin
+  already scopes it to the server; cleared on logout, since logout wipes the
+  mirror the latch describes). Android: DataStore int key, cleared with every
+  other preference on logout. The `photosUnmatched`-stable heuristic is now a
+  shared, tested rule on both platforms (`takeoutSettled`), where before only web
+  had it.
+- [x] Re-checked the 5 s secure poll: left at 5 s. It was only ever painful
+  because each change re-derived every count over fat rows; with `cachedCount`
+  and lean rows the recount is trivial, and widening it would delay reflecting a
+  photo secured on another device for no benefit.
 
 ### Explicit non-goals
 
@@ -214,13 +245,18 @@ TODO.md Phase 3, but it belongs here too since both loops hammer it).
 
 ### Verification (end state)
 
-- Unit: web `npm test` (useAlbumPhotos/countRegularAlbum/migration), Android
-  JVM tests for repository logic; `cargo test --bin simple-photos-server`
-  untouched (no server changes expected).
-- E2E churn test: simulate two clients with disjoint partial mirrors
+- [x] Unit: web `npm test` — 106 passing (useAlbumPhotos/countRegularAlbum,
+  thumbs backfill, takeoutLatch, takeoutSettled). `npx tsc -b` and
+  `npm run build` clean. Android `gradlew testDebugUnitTest` passing, including
+  23 new tests. No server changes were needed, so `cargo test` is untouched.
+- [ ] E2E churn test: simulate two clients with disjoint partial mirrors
   alternately syncing — assert server manifest membership is monotonically
   the union and blob ids stop churning after both settle.
-- Device: open Albums on Android, background/foreground 5×, assert badge
+- [ ] Device: open Albums on Android, background/foreground 5×, assert badge
   values never change absent real edits; web Albums page open on a >5k
   library renders badges instantly (cachedCount) with no long task in the
   Performance tab.
+- [ ] Device: watch the first web load on the real library — `backfillThumbs`
+  drains in the background, so confirm the gallery stays responsive while it
+  runs and that thumbnails keep rendering throughout (the legacy read path is
+  what should make that invisible).

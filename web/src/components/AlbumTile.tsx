@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import type { CachedPhoto } from "../db";
+import { resolveThumb } from "../db/thumbs";
 import { formatDuration } from "../utils/gallery";
 
 // ── Thumbnail helper ──────────────────────────────────────────────────────────
@@ -38,18 +39,27 @@ export function ThumbnailImg({ photo }: { photo: CachedPhoto }) {
   }, [visible]);
 
   useEffect(() => {
-    if (!visible || !photo.thumbnailData) {
+    if (!visible) {
       setSrc(null);
       return;
     }
-    // Encrypted thumbnail stored in IndexedDB
-    const mime = photo.thumbnailMimeType || (photo.mediaType === "gif" ? "image/gif" : "image/jpeg");
-    const url = URL.createObjectURL(
-      new Blob([photo.thumbnailData], { type: mime })
-    );
-    setSrc(url);
-    return () => URL.revokeObjectURL(url);
-  }, [visible, photo.thumbnailData, photo.thumbnailMimeType, photo.mediaType]);
+    let cancelled = false;
+    let url: string | null = null;
+    void (async () => {
+      const thumb = await resolveThumb(photo);
+      if (cancelled) return;
+      if (!thumb) {
+        setSrc(null);
+        return;
+      }
+      url = URL.createObjectURL(new Blob([thumb.data], { type: thumb.mime }));
+      setSrc(url);
+    })();
+    return () => {
+      cancelled = true;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [visible, photo.blobId, photo.thumbnailMimeType, photo.mediaType]);
 
   return (
     <div ref={containerRef} className="w-full h-full">

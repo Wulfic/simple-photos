@@ -10,6 +10,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { db } from "../db";
+import { resolveThumb } from "../db/thumbs";
 
 export interface IdbThumbnailItem<K extends string | number> {
   /** Map key (cluster/album id). */
@@ -49,9 +50,10 @@ export function useIdbThumbnailMap<K extends string | number>(
           (await db.photos.where("serverPhotoId").equals(item.photoId).first()) ??
           (await db.photos.get(item.photoId));
         if (cancelled) return;
-        if (photo?.thumbnailData) {
-          const mime = photo.thumbnailMimeType || "image/jpeg";
-          const url = URL.createObjectURL(new Blob([photo.thumbnailData], { type: mime }));
+        const thumb = await resolveThumb(photo);
+        if (cancelled) return;
+        if (thumb) {
+          const url = URL.createObjectURL(new Blob([thumb.data], { type: thumb.mime }));
           created.push(url);
           next[item.key] = url;
         } else if (fallbackRef.current) {

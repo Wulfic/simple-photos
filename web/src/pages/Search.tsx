@@ -9,6 +9,7 @@ import { useScrollMemory } from "../hooks/useScrollMemory";
 import { api } from "../api/client";
 import { useAuthStore } from "../store/auth";
 import { db } from "../db";
+import { resolveThumb } from "../db/thumbs";
 import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
 import JustifiedGrid from "../components/gallery/JustifiedGrid";
@@ -238,10 +239,11 @@ export default function Search() {
 
             if (fuzzyMatch(searchableText, trimmed)) {
               let localThumbUrl: string | undefined;
-              if (photo.thumbnailData) {
-                const mime = photo.thumbnailMimeType || (photo.mediaType === "gif" ? "image/gif" : "image/jpeg");
-                const blob = new Blob([photo.thumbnailData], { type: mime });
-                localThumbUrl = URL.createObjectURL(blob);
+              const thumb = await resolveThumb(photo);
+              if (thumb) {
+                localThumbUrl = URL.createObjectURL(
+                  new Blob([thumb.data], { type: thumb.mime }),
+                );
               }
               matches.push({
                 id: photo.blobId,

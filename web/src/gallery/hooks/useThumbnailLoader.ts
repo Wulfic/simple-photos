@@ -4,9 +4,15 @@
  *
  * Fallback chain (single implementation):
  *  1. Unified cache (hit → return immediately)
- *  2. IDB `photo.thumbnailData` → create blob URL → cache
+ *  2. IDB `thumbs` table → create blob URL → cache
  *  3. Encrypted thumb blob download → decrypt → blob URL → cache
  *  4. Server API fallback `/api/photos/{id}/thumbnail`
+ *
+ * Step 2 reads the cache itself rather than taking bytes through
+ * `ThumbnailSource`. Callers used to pass `photo.thumbnailData` straight from a
+ * mirror row, which is exactly what forced every list rendering tiles to hydrate
+ * every thumbnail in the library up-front. Now they pass ids, and each tile
+ * fetches only its own bytes, only once it's on screen.
  *
  * Returns `{ url, mimeType, state, retry }`.
  */
@@ -14,6 +20,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { thumbnailCache } from "../cache/thumbnailCache";
 import { blobUrlManager } from "../cache/blobUrlManager";
 import { blobsApi } from "../../api/blobs";
+import { getThumb } from "../../db/thumbs";
 import { decryptPhotoBlob } from "../../crypto/blobEnvelope";
 import { useAuthStore } from "../../store/auth";
 import { appendGalleryTokenParam } from "../../utils/galleryToken";
@@ -57,19 +64,6 @@ export function useThumbnailLoader(
       return;
     }
 
-    // 2. IDB thumbnail data (passed in via source)
-    if (source.thumbnailData && source.thumbnailData.byteLength > 0) {
-      const mime = source.thumbnailMimeType || "image/jpeg";
-      const thumbUrl = blobUrlManager.acquire(
-        `thumb:${blobId}`,
-        source.thumbnailData,
-        mime,
-      );
-      thumbnailCache.set(blobId, thumbUrl, mime);
-      resolve(thumbUrl, mime);
-      return;
-    }
-
     // 3. Server-side photo — use server thumbnail API directly
     if (source.serverSide && source.serverPhotoId) {
       const token = useAuthStore.getState().accessToken;
@@ -80,13 +74,30 @@ export function useThumbnailLoader(
       return;
     }
 
-    // 4. Encrypted thumbnail blob — download + decrypt
-    if (source.encryptedThumbBlobId) {
-      setState("loading");
-      let cancelled = false;
-      (async () => {
+    setState("loading");
+    let cancelled = false;
+    (async () => {
+      // 2. Cached thumbnail bytes (thumbs table, or a not-yet-backfilled row).
+      try {
+        const cachedThumb = await getThumb(blobId);
+        if (cancelled) return;
+        if (cachedThumb && cachedThumb.data.byteLength > 0) {
+          const mime = source.thumbnailMimeType || cachedThumb.mime;
+          const thumbUrl = blobUrlManager.acquire(`thumb:${blobId}`, cachedThumb.data, mime);
+          thumbnailCache.set(blobId, thumbUrl, mime);
+          resolve(thumbUrl, mime);
+          return;
+        }
+      } catch (err) {
+        // Fall through to the network paths — a cache read failing is not fatal.
+        console.warn(`[THUMB_LOADER] IDB thumb lookup failed for ${blobId}:`, err); // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
+        if (cancelled) return;
+      }
+
+      // 4. Encrypted thumbnail blob — download + decrypt
+      if (source.encryptedThumbBlobId) {
         try {
-          const encData = await blobsApi.download(source.encryptedThumbBlobId!);
+          const encData = await blobsApi.download(source.encryptedThumbBlobId);
           if (cancelled) return;
           const { payload, bytes } = await decryptPhotoBlob(encData);
           if (cancelled) return;
@@ -103,13 +114,16 @@ export function useThumbnailLoader(
           console.warn(`[THUMB_LOADER] Encrypted thumb download failed for ${blobId}:`, err); // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
           if (!cancelled) _tryServerFallback();
         }
-      })();
-      return () => { cancelled = true; };
-    }
+        return;
+      }
 
-    // 5. No thumbnail data available yet — show placeholder
-    setState("placeholder");
-    setUrl(null);
+      // 5. No thumbnail data available yet — show placeholder
+      if (!cancelled) {
+        setState("placeholder");
+        setUrl(null);
+      }
+    })();
+    return () => { cancelled = true; };
 
     function _tryServerFallback() {
       // Last resort: try the server photos API directly
@@ -126,7 +140,6 @@ export function useThumbnailLoader(
   }, [
     enabled,
     source.blobId,
-    source.thumbnailData,
     source.thumbnailMimeType,
     source.serverSide,
     source.serverPhotoId,
