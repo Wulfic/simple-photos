@@ -32,7 +32,6 @@ import { toast } from "../store/toast";
 import { useSecureAdd } from "../store/secureAdd";
 import { addPhotosToSecureGallery, secureAddResultMessage } from "../utils/secureAdd";
 import { getErrorMessage } from "../utils/formatters";
-import { canCompare, compareTargets } from "../utils/compare";
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -391,22 +390,6 @@ export default function Gallery() {
               <span className="text-sm font-medium text-fg-muted">{selectedIds.size} selected</span>
             </div>
             <div className="flex items-center gap-2">
-              {/* Compare — only when exactly two photos are selected (#21) */}
-              {canCompare(selectedIds.size) && (
-                <button
-                  onClick={() => {
-                    const pair = compareTargets(selectedIds);
-                    if (pair) navigate("/compare", { state: { ids: pair, backTo: "/gallery" } });
-                  }}
-                  className="btn btn-secondary btn-md inline-flex items-center"
-                  title="Compare side by side"
-                >
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 4.5v15m6-15v15M4.5 4.5h15a0 0 0 010 0v15a0 0 0 01-15 0z" />
-                  </svg>
-                  Compare
-                </button>
-              )}
               <button
                 onClick={() => setShowAddToAlbum(true)}
                 disabled={selectedIds.size === 0}

@@ -2,7 +2,9 @@ import { useEffect, useState, lazy, Suspense } from "react";
 import { BrowserRouter, Routes, Route, Navigate, Outlet } from "react-router-dom";
 import { useAuthStore } from "./store/auth";
 import { useThemeStore } from "./store/theme";
-import { hasCryptoKey, loadKeyFromSession } from "./crypto/crypto";
+import { hasCryptoKey } from "./crypto/crypto";
+import { startKeySessionResponder } from "./crypto/keySession";
+import { restoreKeyOnBoot } from "./crypto/restoreKey";
 import RouteFallback from "./components/RouteFallback";
 
 // Route pages are code-split with React.lazy so the initial bundle only ships
@@ -16,7 +18,6 @@ const Gallery = lazy(() => import("./pages/Gallery"));
 const Albums = lazy(() => import("./pages/Albums"));
 const AlbumDetail = lazy(() => import("./pages/AlbumDetail"));
 const Viewer = lazy(() => import("./pages/Viewer"));
-const Compare = lazy(() => import("./pages/Compare"));
 const Settings = lazy(() => import("./pages/Settings"));
 const Welcome = lazy(() => import("./pages/Welcome"));
 const Trash = lazy(() => import("./pages/Trash"));
@@ -208,6 +209,10 @@ function RootRedirect() {
   return <Navigate to={target} replace />;
 }
 
+/** How long boot waits for the encryption key to be restored from the keystore
+ *  before giving up and rendering anyway (see the restore in [App]). */
+const KEY_RESTORE_TIMEOUT_MS = 3000;
+
 /** Minimal full-screen fallback for the outer Suspense boundary (public/guard
  * route chunks). Mirrors the existing setup-check spinner. */
 function BootFallback() {
@@ -221,6 +226,7 @@ function BootFallback() {
 export default function App() {
   const { loadFromStorage } = useAuthStore();
   const { theme } = useThemeStore();
+  const [keyReady, setKeyReady] = useState(false);
 
   // Apply dark class to <html> element
   useEffect(() => {
@@ -234,8 +240,51 @@ export default function App() {
 
   useEffect(() => {
     loadFromStorage();
-    loadKeyFromSession();
+
+    // Vouch for this tab's session while it holds the key, so a tab opened
+    // later can adopt it rather than re-deriving from the password (#21).
+    const stopResponder = startKeySessionResponder(hasCryptoKey);
+
+    // A reload — or a window.open'd tab, which inherits a copy of
+    // sessionStorage — still has the key flag and loads the key directly. A
+    // hand-opened tab has no flag: the key is in IndexedDB, but adopting it
+    // needs a live peer to confirm the session is still running.
+    const restore = restoreKeyOnBoot({
+      isAuthenticated: useAuthStore.getState().isAuthenticated,
+    });
+
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+
+    // The restore reads IndexedDB, and it now gates the first render — so a
+    // keystore that never answers (corrupt IDB, a blocked upgrade) must not
+    // mean a permanent spinner. On timeout we render anyway and degrade to the
+    // previous behavior: the sessionStorage flag decides what the pages do, and
+    // encrypt/decrypt re-await the load on demand.
+    const bootGuard = new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
+        console.error("Encryption-key restore timed out on boot — rendering without it");
+        resolve();
+      }, KEY_RESTORE_TIMEOUT_MS);
+    });
+
+    Promise.race([restore, bootGuard]).finally(() => {
+      clearTimeout(timer);
+      if (!cancelled) setKeyReady(true);
+    });
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      stopResponder();
+    };
   }, []);
+
+  // Pages decide whether to bounce to /setup by reading the key synchronously
+  // (hasCryptoKey), so nothing may render until the restore above settles —
+  // otherwise a tab adopting a peer's key would race its own gallery to the
+  // password screen.
+  if (!keyReady) return <BootFallback />;
 
   return (
     <BrowserRouter>
@@ -273,7 +322,6 @@ export default function App() {
           <Route path="/albums/:albumId" element={<AlbumDetail />} />
           <Route path="/albums/:albumId/:subId" element={<AlbumDetail />} />
           <Route path="/photo/:id" element={<Viewer />} />
-          <Route path="/compare" element={<Compare />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/trash" element={<Trash />} />
           <Route path="/shared/:albumId" element={<SharedAlbumDetail />} />

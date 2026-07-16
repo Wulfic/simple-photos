@@ -44,8 +44,10 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import com.simplephotos.data.repository.BackupFolderRepository
+import com.simplephotos.security.UnlockSession
 import com.simplephotos.ui.navigation.NavGraph
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_BIOMETRIC_ENABLED
+import com.simplephotos.ui.navigation.startRouteFromIntent
 import com.simplephotos.ui.theme.SimplePhotosTheme
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.flow.first
@@ -65,9 +67,18 @@ class MainActivity : FragmentActivity() {
     @Inject
     lateinit var dataStore: DataStore<Preferences>
 
+    /** Process-scoped app-lock — shared by every window (#21). */
+    @Inject
+    lateinit var unlockSession: UnlockSession
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        // Deep-link for a second window opened via openInNewWindow(). Read (and
+        // validated) once here; the gates below still run first — the extra can
+        // never jump the app-lock or the login screen.
+        val startRoute = startRouteFromIntent(intent)
 
         // Allowed authenticators for the app-lock. On API 30+ we add
         // DEVICE_CREDENTIAL so a biometric lockout (after repeated failed
@@ -112,7 +123,13 @@ class MainActivity : FragmentActivity() {
                     return@SimplePhotosTheme
                 }
 
-                var authenticated by remember { mutableStateOf(!biometricEnabled || !biometricAvailable) }
+                // `unlockSession.isUnlocked` is what makes split-screen bearable:
+                // the second window of the same process inherits window #1's
+                // unlock instead of demanding a fingerprint again (#21). Process
+                // death clears it, so a cold start still locks.
+                var authenticated by remember {
+                    mutableStateOf(!biometricEnabled || !biometricAvailable || unlockSession.isUnlocked)
+                }
                 var authFailed by remember { mutableStateOf(false) }
 
                 if (!authenticated) {
@@ -120,7 +137,7 @@ class MainActivity : FragmentActivity() {
                     LaunchedEffect(Unit) {
                         showBiometricPrompt(
                             authenticators = lockAuthenticators,
-                            onSuccess = { authenticated = true },
+                            onSuccess = { unlockSession.markUnlocked(); authenticated = true },
                             onFail = { authFailed = true }
                         )
                     }
@@ -153,7 +170,7 @@ class MainActivity : FragmentActivity() {
                                 authFailed = false
                                 showBiometricPrompt(
                                     authenticators = lockAuthenticators,
-                                    onSuccess = { authenticated = true },
+                                    onSuccess = { unlockSession.markUnlocked(); authenticated = true },
                                     onFail = { authFailed = true }
                                 )
                             }) {
@@ -164,7 +181,7 @@ class MainActivity : FragmentActivity() {
                 } else {
                     // Gate on media permissions before entering the app
                     PermissionGate {
-                        NavGraph()
+                        NavGraph(startRoute = startRoute)
                     }
                 }
             }

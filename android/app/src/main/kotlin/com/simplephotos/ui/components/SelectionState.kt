@@ -29,7 +29,11 @@ fun toggleGroupSelection(current: Set<String>, group: Set<String>): Set<String> 
     return if (allSelected) current - group else current + group
 }
 
-/** Split-screen Compare shows exactly two photos side by side (#21). */
+/**
+ * Compare opens exactly two photos side by side (#21) — as two windows of the
+ * app, one photo each. Split-screen is Android-only: on a desktop browser the
+ * user just opens the page twice.
+ */
 const val COMPARE_SELECTION_SIZE = 2
 
 /** True when the current selection can enter Compare (exactly two items). */
@@ -37,7 +41,8 @@ fun canCompare(count: Int): Boolean = count == COMPARE_SELECTION_SIZE
 
 /**
  * Resolve a selection into the ordered pair Compare needs, or null when the
- * selection isn't exactly two items. Mirrors the web `compareTargets`.
+ * selection isn't exactly two items. The first goes to this window, the second
+ * to the one [openInNewWindow] launches.
  */
 fun compareTargets(ids: Collection<String>): Pair<String, String>? {
     val list = ids.toList()

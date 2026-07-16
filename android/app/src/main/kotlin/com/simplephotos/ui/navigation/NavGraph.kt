@@ -4,6 +4,7 @@
 package com.simplephotos.ui.navigation
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -23,7 +24,6 @@ import com.simplephotos.ui.screens.setup.ServerSetupScreen
 import com.simplephotos.ui.screens.trash.TrashScreen
 import com.simplephotos.ui.screens.twofactor.TwoFactorSetupScreen
 import com.simplephotos.ui.screens.viewer.PhotoViewerScreen
-import com.simplephotos.ui.screens.viewer.CompareScreen
 import com.simplephotos.ui.screens.search.SearchScreen
 import com.simplephotos.ui.screens.diagnostics.DiagnosticsScreen
 import com.simplephotos.ui.screens.securegallery.SecureGalleryScreen
@@ -41,9 +41,14 @@ import com.simplephotos.ui.screens.library.TripDetailScreen
  * Top-level navigation host. Routes are defined in [Screen].
  * The start destination is resolved at runtime by [NavViewModel]
  * (server setup → login → gallery).
+ *
+ * @param startRoute Optional deep-link for a window opened by
+ *   [openInNewWindow] (#21). Already validated by [startRouteFromIntent]; it is
+ *   pushed on top of the gallery (so Back still returns there) and only once
+ *   the user is actually past login.
  */
 @Composable
-fun NavGraph() {
+fun NavGraph(startRoute: String? = null) {
     val navController = rememberNavController()
     val viewModel: NavViewModel = hiltViewModel()
     val startDestination by viewModel.startDestination.collectAsState()
@@ -83,10 +88,7 @@ fun NavGraph() {
                 onSharedAlbumsClick = { navController.navigate(Screen.SharedAlbums.route) },
                 onDiagnosticsClick = { navController.navigate(Screen.Diagnostics.route) },
                 onLogout = { navController.navigate(Screen.Login.route) { popUpTo(0) } },
-                isAdmin = isAdmin,
-                onCompareClick = { firstId, secondId ->
-                    navController.navigate(Screen.Compare.createRoute(firstId, secondId))
-                }
+                isAdmin = isAdmin
             )
         }
         composable(Screen.AlbumList.route) {
@@ -161,19 +163,6 @@ fun NavGraph() {
                 onSelectPerson = { photoId, detectionId ->
                     navController.navigate(Screen.People.createAssignRoute(photoId, detectionId))
                 },
-            )
-        }
-        composable(
-            route = Screen.Compare.route,
-            arguments = listOf(
-                navArgument("firstId") { type = NavType.StringType },
-                navArgument("secondId") { type = NavType.StringType },
-            )
-        ) { backStackEntry ->
-            CompareScreen(
-                firstId = backStackEntry.arguments?.getString("firstId") ?: "",
-                secondId = backStackEntry.arguments?.getString("secondId") ?: "",
-                onBack = { navController.popBackStack() },
             )
         }
         composable(Screen.Settings.route) {
@@ -285,6 +274,17 @@ fun NavGraph() {
                 onBack = { navController.popBackStack() },
                 onPhotoClick = { photoId -> navController.navigate(Screen.PhotoViewer.createRoute(photoId)) },
             )
+        }
+    }
+
+    // A second window's deep-link (#21). Pushed on top of the resolved start
+    // destination rather than replacing it, so Back leaves the user in the
+    // gallery instead of closing the window. Gated on the gallery being the
+    // start destination: if the user isn't logged in (or the server isn't set
+    // up), the extra is dropped rather than navigated past the auth screens.
+    LaunchedEffect(startRoute, startDestination) {
+        if (startRoute != null && startDestination == Screen.Gallery.route) {
+            navController.navigate(startRoute)
         }
     }
 }

@@ -1,5 +1,16 @@
 # TODO 2 — Replace bespoke Compare with true "open the app twice" split-screen (#21 follow-up)
 
+> **STATUS (Jul 16): CODE COMPLETE on `dev`, uncommitted.** Phase 1 (Android) built in
+> full. Phase 2 (web) built to the *scoped* extent — see the scope note below. Only the
+> on-device verify (3.2) is outstanding; it needs the S21+ and is batched with #17/#20.
+>
+> **SCOPE CALL (user, Jul 16): split-screen is a PHONE feature only.** On a PC you just
+> open the browser page twice, so the web side ships no split-screen UI at all: no
+> `window.open` shell, no tiling, and the bespoke Compare page is simply deleted (2.1/2.2
+> dropped, 2.5 moot — there is no web split UI to E2E, and no browser harness exists;
+> `tests/` is API-level Python, not Playwright). What the web DID need was 2.3: a
+> hand-opened second tab used to bounce to the password screen. That now works.
+
 **Goal:** the split-screen feature should let the user literally run the app twice on
 their device — two fully independent windows of the SAME app, each with the complete
 experience (gallery, viewer, editing, info panel, albums, search — everything). No
@@ -10,9 +21,10 @@ Status: **INVESTIGATION DONE — NOT IMPLEMENTED.** Findings below, then the pla
 
 ---
 
-## 1. Findings — what exists today (commit `06a1f2e` "spilitscreeeen view")
+## 1. Findings — what USED to exist (commit `06a1f2e` "spilitscreeeen view")
 
-The current implementation is a **bespoke two-pane Compare viewer**, not multi-instance:
+⚠️ **HISTORICAL — every file in this table is now deleted** (D1). Kept as the record of
+what was replaced. The implementation was a **bespoke two-pane Compare viewer**:
 
 | Piece | File | Notes |
 |---|---|---|
@@ -118,78 +130,121 @@ Intent(context, MainActivity::class.java).apply {
 
 ## 4. The plan
 
-### Phase 0 — decisions (pick before coding)
-- [ ] **D1: Delete the bespoke Compare viewer or keep both?**
-      Recommendation: DELETE (Compare.tsx, ComparePane.tsx, CompareScreen.kt,
-      Screen.Compare/NavGraph wiring, `/compare` route). It's uncommitted-to-main-yet
-      dead weight the moment multi-window ships, and it's only on `dev`. Keep the
-      `canCompare`/`compareTargets` helpers + tests on both platforms — the gallery
-      button still gates on "exactly 2 selected".
-- [ ] **D2: Biometric on window #2** — recommendation: suppress via process-scoped
-      unlock session (same process = same trust boundary; process death still re-locks).
-- [ ] **D3: iframe split on web** — recommendation: NO (keep `frame-ancestors 'none'`).
+### Phase 0 — decisions (DECIDED)
+- [x] **D1: DELETE the bespoke Compare viewer.** Done on both platforms.
+      Android keeps `canCompare`/`compareTargets` + tests — the gallery button still
+      gates on "exactly 2 selected", it just opens two windows now. Web deleted
+      `utils/compare.ts` + its test TOO (deviation from the original note): with no web
+      split UI, the helpers had zero callers. Dead code, not a "shared helper".
+- [x] **D2: Biometric on window #2 — suppressed** via a process-scoped
+      `@Singleton UnlockSession` (`security/UnlockSession.kt`). Same process = same trust
+      boundary; process death still re-locks, preserving the #17 contract.
+- [x] **D3: iframe split on web — NO.** `frame-ancestors 'none'` / `X-Frame-Options: DENY`
+      stay exactly as they are (`server/src/security.rs`). Nothing in this work touched
+      them, and nothing should: OS windows do the splitting.
+- [x] **D4 (new, user-decided Jul 16): how a fresh web tab gets the E2E key.**
+      Item 2.3 as originally written ("the flag is a cache, IndexedDB is the truth")
+      would have silently destroyed the key's session scoping — the keystore also
+      survives a browser restart, so a blind probe means the app decrypts everything
+      days later with no password. CHOSEN: adopt the key **only while another tab is
+      alive and unlocked**, confirmed over a BroadcastChannel handshake. Restart still
+      requires the password. See `web/src/crypto/keySession.ts`.
 
-### Phase 1 — Android multi-instance
-- [ ] 1.1 Manifest: declare `android:resizeableActivity="true"` on MainActivity with a
-      comment explaining multi-window is a feature, not an accident.
-- [ ] 1.2 New `openInNewWindow(context, route: String?)` helper (e.g. in `ui/navigation/`):
-      builds the NEW_TASK|MULTIPLE_TASK|LAUNCH_ADJACENT intent, optional
-      `EXTRA_START_ROUTE` extra. Log the launch (error-path logging rule applies).
-- [ ] 1.3 MainActivity → NavGraph: honor `EXTRA_START_ROUTE` as the start destination
-      AFTER the biometric + permission gates. Validate the route string against known
-      `Screen` routes — never navigate to an arbitrary extra (exported activity!).
-- [ ] 1.4 Process-scoped `UnlockSession` (per D2): first successful biometric unlock
-      marks the process unlocked; `MainActivity` consults it before prompting.
-      Cleared on process death by construction. Unit-test the holder.
-- [ ] 1.5 Rewire gallery Compare button (`GalleryScreen.kt` `onCompareClick`):
-      selection of exactly 2 → navigate THIS window to `photo_viewer/{a}` +
-      `openInNewWindow(photo_viewer/{b})`. If `!isInMultiWindowMode`, toast the
-      Recents hint (see gotcha #1). Also add a general "New window" overflow action
-      in the gallery top bar (the feature is useful beyond comparing).
-- [ ] 1.6 Delete `CompareScreen.kt`, `Screen.Compare`, NavGraph compare wiring (per D1).
-- [ ] 1.7 Unit tests: route-validation for EXTRA_START_ROUTE (reject unknown/garbage),
-      UnlockSession semantics, intent-flag builder.
+### Phase 1 — Android multi-instance — **DONE (code)**
+- [x] 1.1 Manifest: `android:resizeableActivity="true"` on MainActivity + a comment
+      saying resizeable/`standard` launchMode are load-bearing, not leftovers.
+- [x] 1.2 `ui/navigation/NewWindow.kt`: `openInNewWindow(context, route?)` builds the
+      NEW_TASK|MULTIPLE_TASK|LAUNCH_ADJACENT intent + optional `EXTRA_START_ROUTE`;
+      returns success and logs every failure path. Also `findActivity()` (for
+      `isInMultiWindowMode`) and `startRouteFromIntent()`.
+- [x] 1.3 MainActivity reads+validates the extra, passes it to `NavGraph(startRoute=)`,
+      which pushes it on top of the gallery ONLY once the start destination resolves to
+      the gallery — so it can't jump the login gate. Back still returns to the gallery.
+- [x] 1.4 `security/UnlockSession.kt` — `@Singleton`, `isUnlocked`/`markUnlocked()`.
+      Deliberately has no reset: the singleton dies with the process, which IS the
+      intended lifetime.
+- [x] 1.5 Gallery Compare button → `openInNewWindow(photo_viewer/{b})` + this window
+      navigates to `photo_viewer/{a}`; toasts the Recents hint when
+      `!isInMultiWindowMode`, and toasts on launch failure. "New Window" added to the
+      header overflow menu (`HeaderNavigation.onNewWindowClick`, null ⇒ item omitted,
+      so only the gallery shows it).
+- [x] 1.6 Deleted `CompareScreen.kt`, `Screen.Compare`, the NavGraph wiring, and
+      `PhotoViewerViewModel.loadPhotoByLocalId` (orphaned with it).
+- [x] 1.7 Unit tests green: `StartRouteValidationTest` (whitelist; rejects
+      `secure_gallery`/`settings`/traversal/extra-query smuggling/over-long ids),
+      `NewWindowFlagsTest` (each flag present; CLEAR_TOP/SINGLE_TOP absent),
+      `UnlockSessionTest`.
 
-### Phase 2 — Web second window
-- [ ] 2.1 New `openInNewWindow(path, tile: "left"|"right"|null)` util (`utils/window.ts`):
-      `window.open(origin + path, "_blank", features)` — WITHOUT `noopener` (see §3);
-      compute tiling features from `screen.availWidth/Height` when `tile` is set.
-      Unit-test the feature-string/URL building.
-- [ ] 2.2 Rewire gallery Compare button (`Gallery.tsx:391`): pair → navigate current
-      window to `/photo/{a}`, `openInNewWindow("/photo/{b}", "right")` (and optionally
-      re-tile self to the left half via `window.resizeTo/moveTo` — best-effort, browsers
-      may deny; ignore failures silently but log). Popup blockers: this runs in the
-      click handler (user gesture) so it opens; if `window.open` returns null, toast
-      the user to allow popups — that's an error path, log it.
-- [ ] 2.3 Hardening: `loadKeyFromSession()` — when the sessionStorage flag is absent,
-      probe IndexedDB for the key anyway before declaring "no key" (flag is a cache,
-      IndexedDB is the truth). Makes manually-opened second tabs work too. Add a test.
-- [ ] 2.4 Delete `/compare` route, `Compare.tsx`, `ComparePane.tsx` (per D1); keep
-      `utils/compare.ts` + test.
-- [ ] 2.5 E2E (playwright): select 2 → Compare → assert second page opens, is
-      authenticated without login redirect, and renders the target photo. Assert the
-      secure-gallery token copy behavior (unlock in window 1 → open window 2 → still unlocked).
+### Phase 2 — Web second window — **DONE, as scoped (see scope call at top)**
+- [x] ~~2.1 `openInNewWindow(path, tile)` util~~ **DROPPED.** No web split UI: the user
+      opens the browser page twice themselves, and the OS/browser tiles it.
+- [x] ~~2.2 Rewire the web gallery Compare button~~ **DROPPED** — button deleted (2.4).
+- [x] 2.3 **Done, but NOT as originally written** (see D4). `loadKeyFromSession()` is
+      unchanged: no flag still means no key, which is what keeps the key scoped to a
+      browser session. Instead:
+      - `crypto/keySession.ts` — BroadcastChannel ping/pong. A tab holding the key
+        answers "yes, the session is live". No key material ever crosses the channel;
+        the asking tab reads its own IndexedDB. A tab can't vouch for itself (both
+        channel objects in one tab DO hear each other — the tabId guard is load-bearing
+        and tested).
+      - `crypto/crypto.ts` — new `adoptKeyFromKeystore()`: reads the CryptoKey and
+        restores the `sp_key` flag. Documented as safe ONLY behind a peer's say-so.
+      - `crypto/restoreKey.ts` — `restoreKeyOnBoot()`, the whole boot decision tree,
+        extracted from App.tsx so it's testable without a DOM (this repo has no
+        jsdom/testing-library, and adding one for a 5-line component wasn't worth it).
+        Skips the handshake entirely when logged out so the login page pays nothing.
+      - `App.tsx` — starts the responder, gates first render on the restore, and
+        **bounds it at 3s**: the restore now reads IndexedDB before rendering, so a
+        hung keystore must degrade to today's behavior, not a permanent spinner.
+      - Tests: `keySession.test.ts` (10, real BroadcastChannels), `crypto.test.ts` (7,
+        real WebCrypto + fake-indexeddb, incl. tab-1-encrypts → tab-2-decrypts),
+        `restoreKey.test.ts` (6, incl. "restart still asks for the password").
+- [x] 2.4 Deleted `/compare` route, `Compare.tsx`, `ComparePane.tsx` — **and**
+      `utils/compare.ts` + test (zero callers left on web; see D1).
+- [x] ~~2.5 E2E (playwright)~~ **MOOT.** There is no web split UI to drive, and no
+      browser harness exists (`tests/` is API-level Python; no Playwright anywhere in
+      the repo). The behavior that mattered — tab 2 authenticates and decrypts without
+      a login bounce — is covered by the unit tests above against real IndexedDB, real
+      WebCrypto and real BroadcastChannels.
 
 ### Phase 3 — verify & close out
-- [ ] 3.1 Web: vitest green, `tsc` clean, E2E green.
-- [ ] 3.2 Android: unit tests green; **ON-DEVICE VERIFY (S21+)**: split-screen with two
-      instances, drag divider (no re-lock, no recreation), two videos playing at once,
-      delete-in-one-window reflects in the other (shared Room), Recents shows sane tasks,
-      memory stays under control. Batch with the outstanding #17/#20 device verifies.
-- [ ] 3.3 Update TODO.md (#21 entry) — bespoke Compare replaced by multi-window; note
-      the header decision (D3) explicitly so nobody relaxes frame-ancestors later
-      without reading this.
-- [ ] 3.4 Conventional commit on `dev`, reference #21.
+- [x] 3.1 Web: vitest green (126/126, 12 files), `tsc -b` clean, `vite build` clean.
+      E2E: n/a, see 2.5.
+- [ ] 3.2 Android: unit tests green (`gradlew testDebugUnitTest` BUILD SUCCESSFUL, main
+      sources compile). **ON-DEVICE VERIFY (S21+) STILL OUTSTANDING** — the only thing
+      left in this file. Batch with the #17/#20 device verifies:
+      - two instances side by side; drag the divider → no re-lock, no recreation
+      - biometric prompts ONCE across both windows (UnlockSession), but a cold start
+        after swiping both away still prompts
+      - Compare on 2 selected → this window shows A, second window shows B
+      - "New Window" from the overflow menu; toast appears when launching from
+        fullscreen (stock behavior — LAUNCH_ADJACENT only tiles from multi-window)
+      - two videos playing at once; delete in one window reflects in the other (shared
+        Room); Recents shows two sane tasks (if they coalesce → try
+        `FLAG_ACTIVITY_NEW_DOCUMENT`, gotcha #3); memory sane (~2× Coil working set)
+- [x] 3.3 Docs updated: this file. **D3 stands — do NOT relax `frame-ancestors 'none'` /
+      `X-Frame-Options: DENY` in `server/src/security.rs` for a layout convenience.**
+      (There is no repo-root TODO.md tracking #21; `todo1.md`/this file are the live
+      lists, and the #21 history is in mem0.)
+- [ ] 3.4 Conventional commit on `dev`, reference #21. **NOT DONE — deliberately.** The
+      branch already carries a large pile of unrelated uncommitted work (album counts,
+      Takeout albums); committing here would sweep it in. Stage this feature's files
+      explicitly when committing.
 
 ---
 
 ## 5. Risks / open questions
 
 - Stock-Android fullscreen launch won't auto-enter split-screen (gotcha #1) — UX is
-  "second window appears, user snaps it". Samsung devices (our test hardware) behave better.
+  "second window appears, user snaps it". Samsung devices (our test hardware) behave
+  better. Handled: toast tells the user where the window went.
 - OEM Recents/launcher variance for same-app multi-task — device verify, fall back to
   `FLAG_ACTIVITY_NEW_DOCUMENT` if tasks coalesce.
-- Browser popup-blocker or COOP changes could break window.open inheritance in the
-  future — 2.3's IndexedDB fallback is the safety net.
+- ~~Browser popup-blocker / COOP breaking window.open inheritance~~ — no longer a risk:
+  the web ships no `window.open`, and the BroadcastChannel handshake doesn't care how
+  the second tab was opened (2.3 / D4).
 - Both Android windows editing the SAME photo simultaneously: last-write-wins at the
   server, same as web+Android today. Not new, not a blocker.
+- Two Android windows = two of anything that was implicitly "once per activity". Audited:
+  the data layer is all Hilt singletons and ExoPlayer was already per-screen. Android has
+  no SSE client (#11 deferred), so nothing doubles there either.

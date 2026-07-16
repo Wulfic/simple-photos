@@ -269,6 +269,41 @@ export async function loadKeyFromSession(): Promise<boolean> {
   return true;
 }
 
+/**
+ * Adopt the key straight from the keystore, without a sessionStorage flag.
+ *
+ * This BYPASSES the session scoping that the flag provides, so it is only safe
+ * once a live peer window has vouched that the session is still running — see
+ * `keySession.ts`, which is the only intended caller. Never call it on the
+ * strength of IndexedDB alone: the keystore also survives a browser restart,
+ * and adopting from it unconditionally would let the app decrypt everything
+ * days later with no password.
+ *
+ * Restores the flag on success so the rest of this module (and the synchronous
+ * [`hasCryptoKey`] gates) behave exactly as they do in the window we adopted
+ * from.
+ */
+export async function adoptKeyFromKeystore(): Promise<boolean> {
+  if (cachedNativeKey || cachedRawKey) return true;
+  // The keystore only ever holds a CryptoKey; without SubtleCrypto there is
+  // nothing here we could use.
+  if (!hasSubtle) return false;
+
+  try {
+    const key = await idbGetKey();
+    if (!key) {
+      console.error("Key session: a peer vouched for the session but the keystore is empty");
+      return false;
+    }
+    cachedNativeKey = key;
+    sessionStorage.setItem(KEY_FLAG, "present");
+    return true;
+  } catch (err) {
+    console.error("Key session: failed to adopt the key from the keystore", err);
+    return false;
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /*  Encrypt / Decrypt                                                  */
 /* ------------------------------------------------------------------ */

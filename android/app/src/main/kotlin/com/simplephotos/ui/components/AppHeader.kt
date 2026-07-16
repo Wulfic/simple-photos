@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -57,6 +59,12 @@ data class HeaderNavigation(
     val onLogout: () -> Unit = {},
     val onToggleTheme: () -> Unit = {},
     val isAdmin: Boolean = false,
+    /**
+     * Opens a second window of the app for split-screen (#21). Null on screens
+     * that don't offer it — the menu item is then omitted entirely rather than
+     * showing a dead entry.
+     */
+    val onNewWindowClick: (() -> Unit)? = null,
 )
 
 /**
@@ -204,7 +212,8 @@ fun AppHeader(
                     onDiagnosticsClick = navigation.onDiagnosticsClick,
                     isAdmin = navigation.isAdmin,
                     onLogout = navigation.onLogout,
-                    onToggleTheme = navigation.onToggleTheme
+                    onToggleTheme = navigation.onToggleTheme,
+                    onNewWindowClick = navigation.onNewWindowClick
                 )
             }
             // Bottom border
@@ -288,6 +297,7 @@ private fun UserMenu(
     isAdmin: Boolean = false,
     onLogout: () -> Unit,
     onToggleTheme: () -> Unit = {},
+    onNewWindowClick: (() -> Unit)? = null,
 ) {
     var expanded by remember { mutableStateOf(false) }
 
@@ -372,6 +382,22 @@ private fun UserMenu(
             )
             // Shared Albums are now shown inline at the bottom of the Albums
             // page (matching the web layout) rather than in this dropdown.
+            if (onNewWindowClick != null) {
+                DropdownMenuItem(
+                    text = { Text("New Window") },
+                    onClick = {
+                        expanded = false
+                        onNewWindowClick()
+                    },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Default.OpenInNew,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                )
+            }
             DropdownMenuItem(
                 text = { Text("Settings") },
                 onClick = {
