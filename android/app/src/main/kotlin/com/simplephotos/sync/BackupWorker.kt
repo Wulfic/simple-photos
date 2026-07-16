@@ -138,7 +138,18 @@ class BackupWorker @AssistedInject constructor(
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val prefs = dataStore.data.first()
-        val loggingEnabled = prefs[KEY_DIAGNOSTIC_LOGGING] ?: false
+        // The server is the authority for client diagnostics (admins toggle it
+        // centrally and SettingsViewModel mirrors it locally). Query it at backup
+        // start so diagnostics enabled server-side take effect even if the user
+        // never opened the Android Settings screen to seed the local pref.
+        // Best-effort: fall back to the last-known local pref when offline.
+        val localPref = prefs[KEY_DIAGNOSTIC_LOGGING] ?: false
+        val loggingEnabled = try {
+            api.getDiagnosticsConfig().clientDiagnosticsEnabled
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not fetch diagnostics config, using local pref: ${e.message}")
+            localPref
+        }
         val diag = DiagnosticLogger(api, loggingEnabled)
         try {
             diag.info(TAG, "Backup worker started", mapOf(

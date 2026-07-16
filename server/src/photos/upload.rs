@@ -258,6 +258,19 @@ pub async fn upload_photo(
                     "Converted upload to browser-native format"
                 );
 
+                crate::audit::log(
+                    &state,
+                    crate::audit::AuditEvent::MediaConvert,
+                    Some(&auth.user_id),
+                    &headers,
+                    Some(serde_json::json!({
+                        "filename": filename,
+                        "converted": new_filename,
+                        "category": conversion::media_type_str(target.category),
+                    })),
+                )
+                .await;
+
                 (Bytes::from(converted_bytes), new_filename, new_mime)
             }
             Err(e) => {

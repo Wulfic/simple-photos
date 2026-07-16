@@ -15,10 +15,23 @@
 use axum::http::HeaderMap;
 use serde_json::Value as JsonValue;
 use sqlx::SqlitePool;
+use std::sync::OnceLock;
 use uuid::Uuid;
 
 use crate::state::AppState;
 use crate::state::AuditBroadcast;
+
+/// Process-wide handle to the SSE broadcast channel, registered once at startup
+/// via [`register_broadcast`]. This lets background-task audit writes (which
+/// only have a pool, not an `AppState`) still stream live to the Server Logs
+/// tab instead of only appearing on the next page fetch.
+static AUDIT_TX: OnceLock<tokio::sync::broadcast::Sender<AuditBroadcast>> = OnceLock::new();
+
+/// Register the global broadcast sender. Call once at startup with
+/// `state.audit_tx.clone()`. Idempotent — later calls are ignored.
+pub fn register_broadcast(tx: tokio::sync::broadcast::Sender<AuditBroadcast>) {
+    let _ = AUDIT_TX.set(tx);
+}
 
 /// All auditable event types.
 #[derive(Debug, Clone, Copy)]
@@ -59,6 +72,8 @@ pub enum AuditEvent {
     BlobUpload,
     /// Blob deleted
     BlobDelete,
+    /// Media file transcoded to a browser-native format (image/video/audio)
+    MediaConvert,
 
     // ── Photos ───────────────────────────────────────────────────────
     /// Photo registered from disk
@@ -158,6 +173,7 @@ impl AuditEvent {
             // Blobs
             AuditEvent::BlobUpload => "blob_upload",
             AuditEvent::BlobDelete => "blob_delete",
+            AuditEvent::MediaConvert => "media_convert",
             // Photos
             AuditEvent::PhotoRegister => "photo_register",
             AuditEvent::PhotoFavorite => "photo_favorite",
@@ -260,11 +276,17 @@ pub async fn log(
         if let Err(e) = result {
             tracing::error!(event = event_str.as_str(), error = %e, "Failed to write audit log");
         } else {
+            // Resolve the display name so live SSE rows show the real username
+            // instead of the raw UUID. The paginated fetch does this via a JOIN;
+            // the broadcast has to do it explicitly. Best-effort — a lookup
+            // failure just leaves `username` None (UI falls back to the UUID).
+            let username = resolve_username(&pool, user_id_owned.as_deref()).await;
             // Broadcast to SSE subscribers — ignore send errors (no receivers = ok)
             let _ = audit_tx.send(AuditBroadcast {
                 id: id.clone(),
                 event_type: event_str.clone(),
                 user_id: user_id_owned.clone(),
+                username,
                 ip_address: ip.clone(),
                 user_agent: user_agent.clone(),
                 details: details_str.clone(),
@@ -297,7 +319,9 @@ pub fn log_background_with_tx(
 
     let pool = pool.clone();
     let event_str = event.as_str().to_string();
-    let audit_tx = audit_tx.cloned();
+    // Prefer an explicitly-passed sender; otherwise fall back to the globally
+    // registered one so background events still stream live to the log tab.
+    let audit_tx = audit_tx.cloned().or_else(|| AUDIT_TX.get().cloned());
 
     tokio::spawn(async move {
         let result = sqlx::query(
@@ -318,6 +342,7 @@ pub fn log_background_with_tx(
                 id: id.clone(),
                 event_type: event_str.clone(),
                 user_id: None,
+                username: None,
                 ip_address: "background".to_string(),
                 user_agent: "system".to_string(),
                 details: details_str.clone(),
@@ -326,6 +351,20 @@ pub fn log_background_with_tx(
             });
         }
     });
+}
+
+/// Resolve a user's display name from their id for the SSE broadcast.
+///
+/// Returns `None` when `user_id` is absent, the user no longer exists, or the
+/// query fails — callers treat a missing name as "fall back to the UUID".
+async fn resolve_username(pool: &SqlitePool, user_id: Option<&str>) -> Option<String> {
+    let uid = user_id?;
+    sqlx::query_scalar::<_, String>("SELECT username FROM users WHERE id = ?")
+        .bind(uid)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
 }
 
 /// Extract the client IP address from request headers.
@@ -362,4 +401,32 @@ fn extract_ip(headers: &HeaderMap, trust_proxy: bool) -> String {
         }
     }
     "unknown".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn media_convert_event_string_is_stable() {
+        // The web EVENT_COLORS map and any log filters key off this exact
+        // string — changing it silently would break the Server Logs tab.
+        assert_eq!(AuditEvent::MediaConvert.as_str(), "media_convert");
+    }
+
+    #[test]
+    fn resolve_username_is_none_without_user_id() {
+        // Background/system events pass no user_id; the resolver must short
+        // out before touching the pool (the pool arg is never used here).
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            // A pool is required by the signature; an in-memory DB with no
+            // `users` table proves the None arm never queries it.
+            let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+            assert_eq!(resolve_username(&pool, None).await, None);
+        });
+    }
 }

@@ -246,6 +246,10 @@ async fn main() -> anyhow::Result<()> {
         summary_cache: Arc::new(crate::gallery::summary::SummaryCache::default()),
     };
 
+    // Register the broadcast sender globally so background-task audit writes
+    // (conversions, autoscan, housekeeping) stream live to the Server Logs tab.
+    crate::audit::register_broadcast(state.audit_tx.clone());
+
     let mut app = Router::new()
         .route("/health", get(health::handlers::health))
         .route("/api/discover/info", get(health::handlers::discover_info))

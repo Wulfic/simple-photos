@@ -244,6 +244,20 @@ async fn process_candidate(
                 "[INGEST] Converted file to browser-native format"
             );
 
+            // Audit the conversion so it's visible in the Server Logs tab.
+            // Streams live via the globally-registered broadcast sender.
+            crate::audit::log_background(
+                pool,
+                crate::audit::AuditEvent::MediaConvert,
+                Some(serde_json::json!({
+                    "filename": candidate.name,
+                    "converted": new_name,
+                    "category": conversion::media_type_str(candidate.target.category),
+                    "size_bytes": candidate.size,
+                    "elapsed_ms": file_start.elapsed().as_millis() as u64,
+                })),
+            );
+
             // ── Register the converted file in the DB ────
             let photo_id = Uuid::new_v4().to_string();
             let now = utc_now_iso();

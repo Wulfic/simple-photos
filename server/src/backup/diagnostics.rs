@@ -165,6 +165,9 @@ pub async fn receive_forwarded_logs(
                     id: local_id,
                     event_type: entry.event_type.clone(),
                     user_id: entry.user_id.clone(),
+                    // Forwarded from a peer server whose users table isn't local,
+                    // so we can't resolve a name here — UI falls back to the UUID.
+                    username: None,
                     ip_address: entry.ip_address.clone(),
                     user_agent: entry.user_agent.clone(),
                     details: entry.details.clone(),

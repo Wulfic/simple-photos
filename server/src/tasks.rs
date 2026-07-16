@@ -99,14 +99,15 @@ pub fn spawn_all(
 // ── Individual task spawners ─────────────────────────────────────────
 
 /// Hourly housekeeping: purge expired refresh tokens, trim audit log
-/// (90 days) and client diagnostic logs (14 days) in a single transaction.
+/// (30 days) and client diagnostic logs (14 days) in a single transaction.
+/// Runs every hour, so the 30-day audit cutoff is enforced well within a day.
 fn spawn_housekeeping(pool: SqlitePool) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
         loop {
             interval.tick().await;
             let now = chrono::Utc::now().to_rfc3339();
-            let audit_cutoff = (chrono::Utc::now() - chrono::Duration::days(90)).to_rfc3339();
+            let audit_cutoff = (chrono::Utc::now() - chrono::Duration::days(30)).to_rfc3339();
             let log_cutoff = (chrono::Utc::now() - chrono::Duration::days(14)).to_rfc3339();
 
             match pool.begin().await {
@@ -138,7 +139,7 @@ fn spawn_housekeeping(pool: SqlitePool) {
                     {
                         Ok(r) if r.rows_affected() > 0 => {
                             tracing::info!(
-                                "Cleaned up {} old audit log entries (> 90 days)",
+                                "Cleaned up {} old audit log entries (> 30 days)",
                                 r.rows_affected()
                             );
                         }

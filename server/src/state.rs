@@ -85,6 +85,10 @@ pub struct AuditBroadcast {
     pub id: String,
     pub event_type: String,
     pub user_id: Option<String>,
+    /// Resolved display name for `user_id` (from `users.username`), filled in at
+    /// broadcast time so live SSE rows show the real name instead of the UUID.
+    /// `None` for background/system events and users that no longer exist.
+    pub username: Option<String>,
     pub ip_address: String,
     pub user_agent: String,
     pub details: String,

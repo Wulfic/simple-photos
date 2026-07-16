@@ -26,6 +26,7 @@ const EVENT_COLORS: Record<string, string> = {
   // Blobs
   blob_upload: "text-cyan-600 dark:text-cyan-400",
   blob_delete: "text-red-500 dark:text-red-400",
+  media_convert: "text-lime-600 dark:text-lime-400",
   // Photos
   photo_register: "text-cyan-600 dark:text-cyan-400",
   photo_favorite: "text-pink-500 dark:text-pink-400",
