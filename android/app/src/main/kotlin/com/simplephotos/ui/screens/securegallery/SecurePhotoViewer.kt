@@ -1,11 +1,13 @@
 package com.simplephotos.ui.screens.securegallery
 
+import android.app.Activity
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -25,15 +27,20 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import coil.compose.AsyncImage
 import coil.compose.AsyncImagePainter
 import com.simplephotos.ui.components.rememberThumbnailRequest
 import com.simplephotos.data.remote.dto.SecureGalleryItem
 import com.simplephotos.ui.screens.viewer.MAX_PANO_DECODE_PX
 import com.simplephotos.ui.screens.viewer.PanoramaOverlay
+import com.simplephotos.ui.screens.viewer.VideoControlsOverlay
 import com.simplephotos.ui.screens.viewer.describeImageBytes
 import android.net.Uri
 import androidx.compose.ui.viewinterop.AndroidView
@@ -43,6 +50,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -72,6 +80,24 @@ internal fun SecurePhotoViewer(
     // whenever the page changes so a swipe away always re-enables paging.
     var panoLive by remember { mutableStateOf(false) }
     LaunchedEffect(pagerState.currentPage) { panoLive = false }
+
+    // Immersive full-screen parity with the regular viewer
+    // (PhotoViewerScreen): hide the system bars so the video controls (and the
+    // back/remove buttons) aren't overlapped by the phone's on-screen nav bar.
+    // Bars return transiently on swipe; controls carry navigationBarsPadding so
+    // they stay reachable then (todo1 issue 1).
+    val view = LocalView.current
+    DisposableEffect(Unit) {
+        val activity = view.context as? Activity ?: return@DisposableEffect onDispose {}
+        val window = activity.window
+        val controller = WindowCompat.getInsetsController(window, view)
+        controller.hide(WindowInsetsCompat.Type.systemBars())
+        controller.systemBarsBehavior =
+            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        onDispose {
+            controller.show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
 
     // Per-burst selected frame (cover-itemId → frame-itemId). The pager swipes
     // between burst covers; selecting a frame in the filmstrip swaps the image
@@ -445,15 +471,58 @@ private fun SecureVideoPage(
         when {
             loading -> CircularProgressIndicator(color = Color.White)
             failed || player == null -> Text("Unable to play this video", color = Color.White)
-            else -> AndroidView(
-                modifier = Modifier.fillMaxSize(),
-                factory = { ctx ->
-                    PlayerView(ctx).apply {
-                        this.player = player
-                        useController = true
+            else -> {
+                val activePlayer = player
+                // Custom controls parity with the regular viewer
+                // (VideoPlayer.kt): a raw TextureView + the shared
+                // VideoControlsOverlay instead of media3's stock controller,
+                // whose settings-gear button rendered under the on-screen nav
+                // bar and was unclickable (todo1 issue 1). TextureView also
+                // avoids SurfaceView's transform issues.
+                var showControls by remember { mutableStateOf(true) }
+                val playerIsPlaying = remember { mutableStateOf(activePlayer.isPlaying) }
+                DisposableEffect(activePlayer) {
+                    val listener = object : Player.Listener {
+                        override fun onIsPlayingChanged(playing: Boolean) {
+                            playerIsPlaying.value = playing
+                        }
+                    }
+                    activePlayer.addListener(listener)
+                    onDispose { activePlayer.removeListener(listener) }
+                }
+                // Auto-hide the controls 3s after they appear while playing.
+                LaunchedEffect(showControls, playerIsPlaying.value) {
+                    if (showControls && playerIsPlaying.value) {
+                        delay(3000)
+                        showControls = false
                     }
                 }
-            )
+
+                AndroidView(
+                    modifier = Modifier.fillMaxSize(),
+                    factory = { ctx -> android.view.TextureView(ctx) },
+                    update = { v -> activePlayer.setVideoTextureView(v) }
+                )
+
+                // Tap catcher toggles the controls (sits above the video,
+                // below the controls overlay so its widgets stay tappable).
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { showControls = !showControls }
+                )
+
+                VideoControlsOverlay(
+                    player = activePlayer,
+                    visible = showControls,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .navigationBarsPadding()
+                )
+            }
         }
     }
 }
@@ -510,8 +579,13 @@ private fun SecureMotionOverlay(
                 factory = { ctx -> PlayerView(ctx).apply { useController = false; this.player = player } }
             )
         }
-        // LIVE toggle pill (mirrors the main viewer's MotionPhotoOverlay)
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+        // LIVE toggle pill (mirrors the main viewer's MotionPhotoOverlay).
+        // navigationBarsPadding keeps it clear of transient bars now that the
+        // secure viewer runs immersive (todo1 issue 1).
+        Box(
+            modifier = Modifier.fillMaxSize().navigationBarsPadding(),
+            contentAlignment = Alignment.BottomCenter
+        ) {
             Surface(
                 modifier = Modifier
                     .padding(bottom = 80.dp)
