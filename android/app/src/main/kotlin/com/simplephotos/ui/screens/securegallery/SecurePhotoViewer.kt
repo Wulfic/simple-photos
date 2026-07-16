@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -75,6 +76,7 @@ internal fun SecurePhotoViewer(
         pageCount = { items.size }
     )
     var confirmRemove by remember { mutableStateOf(false) }
+    var overflowOpen by remember { mutableStateOf(false) }
     // When a panorama / 360 page enters Live (pan) mode we must stop the pager
     // from stealing the horizontal drag (otherwise panning flips pages). Reset
     // whenever the page changes so a swipe away always re-enables paging.
@@ -176,20 +178,47 @@ internal fun SecurePhotoViewer(
             )
         }
 
-        // Remove-from-album overlay (mirrors web's per-item removal)
+        // Overflow (⋮) menu — currently just "Remove from secure album", but a
+        // menu (not a bare trash) matches the regular/web viewers and pre-cleans
+        // the header for future secure actions like download (todo1 #3).
         if (onRemove != null && items.isNotEmpty()) {
-            IconButton(
-                onClick = { confirmRemove = true },
+            Box(
                 modifier = Modifier
                     .statusBarsPadding()
                     .padding(8.dp)
                     .align(Alignment.TopEnd)
             ) {
-                Icon(
-                    Icons.Default.Delete,
-                    contentDescription = "Remove from album",
-                    tint = Color.White
-                )
+                IconButton(onClick = { overflowOpen = true }) {
+                    Icon(
+                        Icons.Default.MoreVert,
+                        contentDescription = "More options",
+                        tint = Color.White
+                    )
+                }
+                MaterialTheme(
+                    shapes = MaterialTheme.shapes.copy(extraSmall = RoundedCornerShape(16.dp))
+                ) {
+                    DropdownMenu(
+                        expanded = overflowOpen,
+                        onDismissRequest = { overflowOpen = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Remove from secure album", color = MaterialTheme.colorScheme.error) },
+                            onClick = {
+                                overflowOpen = false
+                                confirmRemove = true
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Default.Delete,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        )
+                    }
+                }
             }
         }
 

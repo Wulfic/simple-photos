@@ -28,6 +28,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.*
@@ -279,6 +280,8 @@ fun PhotoViewerScreen(
     // ── Info panel state ─────────────────────────────────────────────
     var showInfoPanel by remember { mutableStateOf(false) }
     var showTagPanel by remember { mutableStateOf(false) }
+    // Top-bar overflow (⋮) menu: tags · download · delete/remove (todo1 #3).
+    var showOverflow by remember { mutableStateOf(false) }
 
     // ── Download state ───────────────────────────────────────────────
     val scope = rememberCoroutineScope()
@@ -1074,22 +1077,6 @@ fun PhotoViewerScreen(
                                 modifier = Modifier.size(20.dp)
                             )
                         }
-                        // Tag button
-                        if (currentPhoto.serverPhotoId != null) {
-                            IconButton(onClick = {
-                                showTagPanel = !showTagPanel
-                                if (showTagPanel) {
-                                    viewModel.loadTagsForPhoto(currentPhoto.serverPhotoId)
-                                }
-                            }, modifier = Modifier.size(40.dp)) {
-                                Icon(
-                                    painter = painterResource(R.drawable.ic_tag),
-                                    contentDescription = "Tags",
-                                    tint = if (showTagPanel) Violet.v400 else Color.White,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        }
                         // Edit button — available for photos, GIFs, videos, and audio
                         if (currentPhoto.mediaType == "photo" || currentPhoto.mediaType == "gif" || currentPhoto.mediaType == "video" || currentPhoto.mediaType == "audio") {
                             TextButton(
@@ -1110,44 +1097,112 @@ fun PhotoViewerScreen(
                                 )
                             }
                         }
-                        // Download button — converted files prompt original-vs-converted
-                        IconButton(modifier = Modifier.size(40.dp), onClick = {
-                            val photo = currentPhoto ?: return@IconButton
-                            // Converted files keep their pre-conversion original — let the
-                            // user pick which to save. Edits download the displayed file, so
-                            // only offer the choice outside edit mode.
-                            if (photo.sourcePath != null && !editMode) {
-                                showDownloadChoice = photo
-                            } else {
-                                runConvertedDownload(photo)
-                            }
-                        }) {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_download),
-                                contentDescription = "Download",
-                                tint = Color.White,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                        if (viewModel.albumId != null) {
-                            // Album context: remove from album only (don't delete the photo)
-                            IconButton(onClick = { viewModel.removeFromAlbum(currentPhoto, onBack) }, modifier = Modifier.size(40.dp)) {
+                        // ── Overflow (⋮): tags · download · delete/remove ───────
+                        Box {
+                            IconButton(
+                                onClick = {
+                                    // Keep the top bar alive while the menu is open,
+                                    // same anti-race trick as favorite (#19).
+                                    overlayInteraction++
+                                    showOverflow = true
+                                },
+                                modifier = Modifier.size(40.dp)
+                            ) {
                                 Icon(
-                                    painter = painterResource(R.drawable.ic_trashcan),
-                                    contentDescription = "Remove from album",
-                                    tint = Color(0xFFFFA500),
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        } else {
-                            // Gallery context: delete the photo
-                            IconButton(onClick = { viewModel.deletePhoto(currentPhoto, onBack) }, modifier = Modifier.size(40.dp)) {
-                                Icon(
-                                    painter = painterResource(R.drawable.ic_trashcan),
-                                    contentDescription = "Delete",
+                                    imageVector = Icons.Default.MoreVert,
+                                    contentDescription = "More options",
                                     tint = Color.White,
-                                    modifier = Modifier.size(20.dp)
+                                    modifier = Modifier.size(22.dp)
                                 )
+                            }
+                            MaterialTheme(
+                                shapes = MaterialTheme.shapes.copy(extraSmall = RoundedCornerShape(16.dp))
+                            ) {
+                                DropdownMenu(
+                                    expanded = showOverflow,
+                                    onDismissRequest = { showOverflow = false }
+                                ) {
+                                    if (currentPhoto.serverPhotoId != null) {
+                                        DropdownMenuItem(
+                                            text = { Text("Tags") },
+                                            onClick = {
+                                                showOverflow = false
+                                                overlayInteraction++
+                                                showTagPanel = !showTagPanel
+                                                if (showTagPanel) {
+                                                    viewModel.loadTagsForPhoto(currentPhoto.serverPhotoId)
+                                                }
+                                            },
+                                            leadingIcon = {
+                                                Icon(
+                                                    painter = painterResource(R.drawable.ic_tag),
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+                                        )
+                                    }
+                                    // Download — converted files prompt original-vs-converted.
+                                    DropdownMenuItem(
+                                        text = { Text("Download") },
+                                        onClick = {
+                                            showOverflow = false
+                                            val photo = currentPhoto
+                                            // Converted files keep their pre-conversion
+                                            // original — let the user pick which to save.
+                                            // Edits download the displayed file, so only
+                                            // offer the choice outside edit mode.
+                                            if (photo.sourcePath != null && !editMode) {
+                                                showDownloadChoice = photo
+                                            } else {
+                                                runConvertedDownload(photo)
+                                            }
+                                        },
+                                        leadingIcon = {
+                                            Icon(
+                                                painter = painterResource(R.drawable.ic_download),
+                                                contentDescription = null,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    )
+                                    HorizontalDivider()
+                                    if (viewModel.albumId != null) {
+                                        // Album context: remove from album, don't delete.
+                                        DropdownMenuItem(
+                                            text = { Text("Remove from album", color = Color(0xFFFFA500)) },
+                                            onClick = {
+                                                showOverflow = false
+                                                viewModel.removeFromAlbum(currentPhoto, onBack)
+                                            },
+                                            leadingIcon = {
+                                                Icon(
+                                                    painter = painterResource(R.drawable.ic_trashcan),
+                                                    contentDescription = null,
+                                                    tint = Color(0xFFFFA500),
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+                                        )
+                                    } else {
+                                        // Gallery context: delete the photo.
+                                        DropdownMenuItem(
+                                            text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                                            onClick = {
+                                                showOverflow = false
+                                                viewModel.deletePhoto(currentPhoto, onBack)
+                                            },
+                                            leadingIcon = {
+                                                Icon(
+                                                    painter = painterResource(R.drawable.ic_trashcan),
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.error,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
