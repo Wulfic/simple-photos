@@ -7,7 +7,7 @@
  */
 import { api } from "../api/client";
 import { db } from "../db";
-import { encrypt, sha256Hex } from "../crypto/crypto";
+import { saveAlbumManifest } from "./albumManifest";
 import { expandBurstSelection } from "./burstExpand";
 
 /** Outcome of a secure-add batch. `failed` photos stayed in the regular gallery. */
@@ -160,34 +160,12 @@ export async function removePhotosFromRegularAlbums(blobIds: Set<string>): Promi
         ? updated[0] || undefined
         : album.coverPhotoBlobId;
 
-    // Delete old manifest blob from server
-    if (album.manifestBlobId) {
-      try {
-        await api.blobs.delete(album.manifestBlobId);
-      } catch {
-        /* ok */
-      }
-    }
-
-    // Upload a new manifest with the blob IDs removed
-    const payload = JSON.stringify({
-      v: 1,
-      album_id: album.albumId,
-      name: album.name,
-      created_at: new Date(album.createdAt).toISOString(),
-      cover_photo_blob_id: cover || null,
-      photo_blob_ids: updated,
-    });
-    const encrypted = await encrypt(new TextEncoder().encode(payload));
-    const hash = await sha256Hex(new Uint8Array(encrypted));
-    const res = await api.blobs.upload(encrypted, "album_manifest", hash);
-
-    // Update local cache
-    await db.albums.put({
+    // Write the manifest with the blob IDs removed (upload-then-delete, so a
+    // failure can never leave the album with no manifest at all).
+    await saveAlbumManifest({
       ...album,
       photoBlobIds: updated,
       coverPhotoBlobId: cover,
-      manifestBlobId: res.blob_id,
     });
   }
 

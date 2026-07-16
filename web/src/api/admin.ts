@@ -235,6 +235,32 @@ export const adminApi = {
     );
   },
 
+  /**
+   * Rebuild Google Takeout album membership for photos that are ALREADY
+   * imported. Album membership is only captured at import time, so a library
+   * imported before that existed reconstructs partial or empty albums — and no
+   * other path repairs it (a re-scan skips already-registered files before the
+   * album code runs). Re-walks the Takeout tree under `path`, matches files to
+   * existing photos by content hash, and records the membership. Writes nothing
+   * else, and is idempotent — safe to re-run.
+   */
+  backfillTakeoutAlbums: (path: string) =>
+    request<{
+      directory: string;
+      albums_seen: number;
+      albums_recorded: number;
+      /** Albums whose real Google Photos name was recovered from metadata.json. */
+      albums_retitled: number;
+      photos_matched: number;
+      photos_unmatched: number;
+      shadowed_skipped: number;
+      errors: string[];
+      errors_total: number;
+    }>("/admin/import/google-photos/backfill-albums", {
+      method: "POST",
+      body: JSON.stringify({ path }),
+    }),
+
   getPort: () =>
     request<{ port: number; suggested_port: number; external_port?: number; message: string }>("/admin/port"),
 

@@ -10,6 +10,11 @@ use crate::sanitize;
 
 use super::models::{GooglePhotosMetadata, PhotoMetadataRecord};
 
+/// `photo_metadata.source` for anything derived from a Google Photos sidecar.
+/// Shared so the importer's "did I already store this sidecar?" check can't
+/// drift from the value [`normalise`] actually writes.
+pub const SOURCE: &str = "google_photos";
+
 /// Parse a Google Photos JSON sidecar file from raw bytes.
 pub fn parse_sidecar(data: &[u8]) -> Result<GooglePhotosMetadata, String> {
     serde_json::from_slice(data).map_err(|e| format!("Invalid Google Photos JSON: {e}"))
@@ -61,7 +66,7 @@ pub fn normalise(
         user_id,
         photo_id,
         blob_id,
-        source: "google_photos".to_string(),
+        source: SOURCE.to_string(),
         title: meta
             .title
             .as_deref()

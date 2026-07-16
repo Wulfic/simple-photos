@@ -246,6 +246,10 @@ fn import_routes() -> Router<AppState> {
             post(crate::import::takeout::import_takeout),
         )
         .route(
+            "/admin/import/google-photos/backfill-albums",
+            post(crate::import::takeout::backfill_takeout_albums),
+        )
+        .route(
             "/photos/{id}/metadata",
             get(crate::import::handlers::get_photo_metadata),
         )
@@ -267,6 +271,10 @@ fn photo_routes() -> Router<AppState> {
         .route(
             "/photos/source-albums",
             get(crate::import::takeout::list_source_albums),
+        )
+        .route(
+            "/photos/source-albums/dismiss",
+            post(crate::import::takeout::dismiss_source_album),
         )
         .route(
             "/photos/summary",

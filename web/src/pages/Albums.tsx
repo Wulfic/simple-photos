@@ -136,6 +136,7 @@ export default function Albums() {
   // pass cheap. saveAlbumManifest writes to db.albums, so the reactive `albums`
   // live query above picks up new albums on its own.
   const lastMaterializedCountRef = useRef(-1);
+  const lastUnmatchedRef = useRef(-1);
   const fullyMaterializedRef = useRef(false);
   useEffect(() => {
     if (fullyMaterializedRef.current) return;
@@ -148,7 +149,28 @@ export default function Albums() {
       lastMaterializedCountRef.current = count;
       recreateAlbumsFromServer()
         .then((r) => {
-          if (r.photosUnmatched === 0) fullyMaterializedRef.current = true;
+          if (r.photosUnmatched === 0) {
+            fullyMaterializedRef.current = true;
+            return;
+          }
+          // Some album members aren't in the local mirror. Normally they're
+          // still syncing and a later pass picks them up — but a photo that was
+          // trashed or moved to the secure gallery never syncs at all, so
+          // `photosUnmatched` can never reach 0 and this pass would keep firing
+          // for the rest of the session.
+          //
+          // Stop once a pass changed nothing AND left exactly the same gap as
+          // the one before it: more photos arrived, none of them were the
+          // missing ones. Deliberately conservative — latching early would mean
+          // silently incomplete albums, which is the whole bug being fixed — and
+          // deliberately session-scoped: these refs reset on reload, so a
+          // premature stop self-heals on the next visit rather than sticking.
+          const noop =
+            r.albumsCreated === 0 && r.albumsUpdated === 0 && r.photosAdded === 0;
+          if (noop && r.photosUnmatched === lastUnmatchedRef.current) {
+            fullyMaterializedRef.current = true;
+          }
+          lastUnmatchedRef.current = r.photosUnmatched;
         })
         .catch((e) =>
           console.error("[Albums] automatic Takeout album recreation failed", e),

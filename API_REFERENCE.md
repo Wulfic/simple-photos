@@ -65,7 +65,7 @@ All endpoints are prefixed with `/api` unless noted. Auth = `Authorization: Bear
 |--------|------|------|----------------------|----------|
 | `GET` | `/api/photos` | Bearer | Query: `after`, `limit`, `media_type`, `favorites_only` | `{ photos: [PhotoRecord], next_cursor? }` |
 | `POST` | `/api/photos/register` | Bearer | `{ filename, file_path, mime_type, media_type?, size_bytes, width?, height?, duration_secs?, taken_at?, latitude?, longitude? }` | **201** `{ photo_id, thumb_path, photo_hash }` |
-| `POST` | `/api/photos/upload` | Bearer | raw bytes; Headers: `X-Filename`, `X-Mime-Type` | **201** `{ photo_id, filename, file_path, size_bytes, photo_hash }` (or **200** with existing record if hash dedup matches) |
+| `POST` | `/api/photos/upload` | Bearer | raw bytes; Headers: `X-Filename`, `X-Mime-Type`, optional `X-Source-Album`, `X-Source-Album-Title` | **201** `{ photo_id, filename, file_path, size_bytes, photo_hash }` (or **200** with existing record if hash dedup matches) |
 | `GET` | `/api/photos/{id}/file` | Bearer | — | streaming file; supports Range, ETag, 304 |
 | `GET` | `/api/photos/{id}/thumb` | Bearer | — | `image/jpeg` stream; or **202** `{ status: "pending" }` |
 | `GET` | `/api/photos/{id}/web` | Bearer | — | streaming file (same as `/file` — only browser-native formats are stored) |
@@ -74,6 +74,46 @@ All endpoints are prefixed with `/api` unless noted. Auth = `Authorization: Bear
 | `DELETE` | `/api/photos/{id}` | Bearer | — | **204** (soft-deletes to trash) |
 
 **PhotoRecord fields:** `id, filename, file_path, mime_type, media_type, size_bytes, width, height, duration_secs, taken_at, latitude, longitude, thumb_path, created_at, is_favorite, crop_metadata, camera_model, photo_hash`
+
+**Upload album headers:** a client that can see the folder a file came from (the
+web Import page's folder picker) declares its Google Takeout album with
+`X-Source-Album` (the folder name) and optionally `X-Source-Album-Title` (the real
+title from that folder's `metadata.json`). Both values are **percent-encoded** —
+header values are bytes, so a non-Latin-1 album name cannot be sent raw. The
+server percent-decodes, sanitises them like any user-typed album name, and
+rejects Google's date/container folders. Membership is recorded even when the
+upload hash-dedups to an existing photo, because Takeout ships the same bytes in
+every album folder a photo belongs to. An upload carrying `X-Source-Album` is
+never deferred for background conversion (there would be no photo row to attach
+the membership to).
+
+### Takeout Source Albums
+
+| Method | Path | Auth | Request Body | Response |
+|--------|------|------|-------------|----------|
+| `GET` | `/api/photos/source-albums` | Bearer | — | `{ albums: [{ name, title, source, photo_ids: [string] }] }` |
+| `POST` | `/api/photos/source-albums/dismiss` | Bearer | `{ album_id }` | `{ dismissed: bool, name: string \| null }` |
+
+The authoritative `album → [photo_id]` mapping captured at import time, keyed by
+photo id (so it survives filename collisions and `-edited` dedup). Not
+admin-gated — each user reads only their own. Regular albums are end-to-end
+encrypted manifests the server cannot build, so clients materialize them from
+this mapping; see the album-name/title semantics under **Admin — Import**.
+
+Clients derive each album's local id deterministically as
+`"src-" + sha256_hex("<source> <name>")` — from `name` (the folder), never
+`title` — so web and Android converge on one album instead of two.
+
+`dismiss` tombstones an album the user deleted. Reconstruction is otherwise
+unstoppable: deleting a reconstructed album removes it locally, and the next
+rebuild recreates it from this same untouched mapping, on every device. The
+tombstone filters the album out of `GET /source-albums`, so every client honours
+the deletion without knowing tombstones exist. `album_id` is the local `src-…`
+id; the server recomputes the hash over the caller's own albums to resolve it
+back to `(source, name)`, which is why a retitle can't resurrect a dismissed
+album and one user can never dismiss another's. `dismissed: false` means the id
+matched no source album (an ordinary user-created album) — not an error.
+Membership and photos are untouched.
 
 ### Encrypted Sync
 
@@ -305,7 +345,27 @@ All endpoints are prefixed with `/api` unless noted. Auth = `Authorization: Bear
 | `POST` | `/api/admin/photos/scan` | Admin | — | `{ registered, metadata_updated, skipped_audio, message }` |
 | `POST` | `/api/admin/photos/auto-scan` | Admin | — | `{ message: "Scan complete", new_count }` |
 | `GET` | `/api/admin/import/google-photos/scan` | Admin | Query: `path` | `{ directory, media_files, sidecar_files, paired, unpaired_media: [string], unpaired_sidecars: [string] }` |
-| `POST` | `/api/admin/import/google-photos` | Admin | `{ path }` | `{ photos_imported, metadata_imported, errors: [string] }` |
+| `POST` | `/api/admin/import/google-photos` | Admin | `{ path }` | `{ photos_imported, metadata_imported, albums_recorded, errors: [string] }` |
+| `POST` | `/api/admin/import/google-photos/backfill-albums` | Admin | `{ path }` | `{ directory, albums_seen, albums_recorded, albums_retitled, photos_matched, photos_unmatched, shadowed_skipped, errors: [string], errors_total }` |
+
+Album membership is captured at import time into `photo_source_albums`, which
+clients read from `GET /api/photos/source-albums` to rebuild album manifests. A
+library imported before that capture existed has no membership rows, and
+re-scanning cannot repair it — the scan skips already-registered files before the
+album code runs. `backfill-albums` is that repair: it re-walks a Takeout tree,
+matches files to existing photos by content hash, and records only membership —
+no photo or metadata inserts. It is idempotent and safe to re-run.
+
+Each membership carries two names. `album_name` is the Takeout **folder** name
+and is the album's identity: clients derive the deterministic album id
+`"src-" + sha256(source + " " + album_name)` from it, so it must stay stable even
+though Google mangles it on export (special characters → `_`, truncation, `(1)`
+collision counters). `album_title` is the album's real Google Photos name, read
+from the album folder's own `metadata.json`; it is a **display** name only and is
+`null` for older exports that ship no album metadata (clients then fall back to
+the folder name). `albums_retitled` counts distinct albums whose title this run
+filled in or corrected on rows that already existed — re-running a backfill is how
+a library backfilled before titles shipped acquires them.
 
 ---
 

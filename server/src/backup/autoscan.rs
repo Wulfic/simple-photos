@@ -409,6 +409,9 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
             let ctx = crate::import::sidecar::TakeoutDirContext::new(json_names, &dir);
             (shadowed, ctx)
         };
+        // The album's real title, read once per directory (and only for genuine
+        // album directories) rather than per file.
+        let album_title = takeout_ctx.resolve_album_title(&dir).await;
 
         let mut entries = match tokio::fs::read_dir(&dir).await {
             Ok(e) => e,
@@ -495,6 +498,7 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
                 modified,
                 sidecar_abs,
                 album_name,
+                album_title: album_title.clone(),
             });
         }
     }

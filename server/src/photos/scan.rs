@@ -169,6 +169,7 @@ pub async fn scan_and_register(
                         modified,
                         sidecar_abs: None,
                         album_name: None,
+                        album_title: None,
                     });
                 }
             }
@@ -178,9 +179,12 @@ pub async fn scan_and_register(
         if !json_names.is_empty() {
             let ctx = crate::import::sidecar::TakeoutDirContext::new(json_names, &dir);
             let album = ctx.album_name().map(|s| s.to_string());
+            // One read per album directory, and only when this dir is an album.
+            let album_title = ctx.resolve_album_title(&dir).await;
             for cand in &mut candidates[dir_start..] {
                 cand.sidecar_abs = ctx.resolve_sidecar(&cand.name).map(|j| dir.join(j));
                 cand.album_name = album.clone();
+                cand.album_title = album_title.clone();
             }
         }
     }

@@ -10,6 +10,7 @@ import com.simplephotos.data.local.entities.AlbumEntity
 import com.simplephotos.data.local.entities.PhotoAlbumXRef
 import com.simplephotos.data.local.entities.SyncStatus
 import com.simplephotos.data.remote.ApiService
+import com.simplephotos.data.remote.dto.DismissSourceAlbumRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -21,6 +22,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.security.MessageDigest
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -52,6 +54,14 @@ class AlbumRepository @Inject constructor(
     }
 
     suspend fun deleteAlbum(album: AlbumEntity) {
+        // Tombstone FIRST for a Takeout-reconstructed album, otherwise this
+        // delete is undone: the next rebuild recreates the album from the
+        // untouched server-side membership, on this device and every other.
+        // Doing it before the local delete means a failure here leaves the album
+        // intact rather than deleting it locally only for it to reappear.
+        if (album.localId.startsWith(SOURCE_ALBUM_ID_PREFIX)) {
+            api.dismissSourceAlbum(DismissSourceAlbumRequest(album.localId))
+        }
         // Delete manifest blob from server
         album.serverManifestBlobId?.let { blobId ->
             try { api.deleteBlob(blobId) } catch (_: Exception) {}
@@ -86,11 +96,6 @@ class AlbumRepository @Inject constructor(
             db.photoDao().getById(localId)?.serverBlobId
         }
 
-        // Delete old manifest if exists
-        album.serverManifestBlobId?.let { oldBlobId ->
-            try { api.deleteBlob(oldBlobId) } catch (_: Exception) {}
-        }
-
         // Build manifest payload
         val payload = JSONObject().apply {
             put("v", 1)
@@ -113,6 +118,23 @@ class AlbumRepository @Inject constructor(
                 syncStatus = SyncStatus.SYNCED
             )
         )
+
+        // Only now is the old manifest unreferenced. This MUST come after the
+        // upload: deleting first (as this used to) meant any failure in between
+        // left the album with no manifest on the server at all, so it silently
+        // vanished from every other device and no retry could recover it — the
+        // bytes were already gone. An orphaned blob is the far cheaper failure.
+        val oldBlobId = album.serverManifestBlobId
+        if (oldBlobId != null && oldBlobId != res.blobId) {
+            try {
+                api.deleteBlob(oldBlobId)
+            } catch (e: Exception) {
+                android.util.Log.w(
+                    "AlbumRepository",
+                    "could not delete replaced manifest blob for '${album.name}': ${e.message}",
+                )
+            }
+        }
     }
 
     /**
@@ -220,6 +242,8 @@ class AlbumRepository @Inject constructor(
         val albumsCreated: Int = 0,
         val albumsUpdated: Int = 0,
         val photosAdded: Int = 0,
+        /** Albums re-titled from the Takeout folder name to their real name. */
+        val albumsRenamed: Int = 0,
         /** Albums whose photos aren't in the local mirror yet (still syncing). */
         val albumsUnmatched: Int = 0,
         /** Individual photo ids not yet synced locally (skipped, re-run to fill). */
@@ -246,6 +270,7 @@ class AlbumRepository @Inject constructor(
         var created = 0
         var updated = 0
         var photosAdded = 0
+        var renamedCount = 0
         var albumsUnmatched = 0
         var photosUnmatched = 0
 
@@ -266,16 +291,14 @@ class AlbumRepository @Inject constructor(
                 continue
             }
 
-            // Deterministic id — MUST match web (utils/takeoutAlbums.ts):
-            // "src-" + sha256Hex(utf8("<source> <name>")).
-            val albumId = "src-" + crypto.sha256Hex("${album.source} ${album.name}".toByteArray())
+            val albumId = sourceAlbumId(album.source, album.name)
 
             val existing = db.albumDao().getById(albumId)
             if (existing == null) {
                 db.albumDao().insert(
                     AlbumEntity(
                         localId = albumId,
-                        name = album.name,
+                        name = resolveAlbumDisplayName(album.name, album.title, null),
                         coverPhotoLocalId = localPhotoIds.first(),
                         syncStatus = SyncStatus.PENDING,
                     )
@@ -289,11 +312,25 @@ class AlbumRepository @Inject constructor(
                 // the composite-key row (idempotent merge).
                 val alreadyIn = db.albumDao().getPhotoIdsForAlbum(albumId).toSet()
                 val toAdd = localPhotoIds.filter { it !in alreadyIn }
-                if (toAdd.isEmpty()) continue // no-op: nothing new, skip the upload
+                val name = resolveAlbumDisplayName(album.name, album.title, existing.name)
+                val renamed = name != existing.name
+                // No-op: nothing new, skip the upload. The rename is checked too,
+                // because an album materialized under the mangled folder name by
+                // an earlier run adds no photos — a photos-only check would leave
+                // it wrongly named forever.
+                if (toAdd.isEmpty() && !renamed) continue
                 for (id in toAdd) db.albumDao().insertXRef(PhotoAlbumXRef(id, albumId))
+                // Persist the rename before the upload, so a failed manifest sync
+                // doesn't lose it (a later pass retries the upload).
+                val entity = if (renamed) {
+                    existing.copy(name = name).also { db.albumDao().update(it) }
+                } else {
+                    existing
+                }
                 updated++
                 photosAdded += toAdd.size
-                toSync.add(existing)
+                if (renamed) renamedCount++
+                toSync.add(entity)
             }
         }
 
@@ -324,6 +361,66 @@ class AlbumRepository @Inject constructor(
             }
         }
 
-        return SourceAlbumRebuildResult(created, updated, photosAdded, albumsUnmatched, photosUnmatched)
+        return SourceAlbumRebuildResult(
+            created,
+            updated,
+            photosAdded,
+            renamedCount,
+            albumsUnmatched,
+            photosUnmatched,
+        )
+    }
+
+    companion object {
+        /** Marks an album as reconstructed from Takeout rather than user-created. */
+        const val SOURCE_ALBUM_ID_PREFIX = "src-"
+
+        /**
+         * The deterministic local id for a Takeout source album.
+         *
+         * `"src-" + sha256Hex(utf8("<source> <folderName>"))` — **must** match
+         * web (`utils/takeoutAlbums.ts::sourceAlbumId`) and the server
+         * (`import/takeout.rs::source_album_id`), which recomputes it to resolve
+         * a deleted album back to its identity. All three are pinned to one
+         * shared test vector, because every way they can disagree is silent:
+         * albums duplicate instead of converging into one, and delete tombstones
+         * stop matching so deleted albums come back.
+         *
+         * Keyed on the Takeout folder name, never the title — identity must
+         * survive a retitle.
+         */
+        fun sourceAlbumId(source: String, folderName: String): String {
+            val digest = MessageDigest.getInstance("SHA-256")
+                .digest("$source $folderName".toByteArray())
+            return SOURCE_ALBUM_ID_PREFIX + digest.joinToString("") { "%02x".format(it) }
+        }
+
+        /**
+         * The name to show for a Takeout source album, given the local album it
+         * maps onto (`existingName` — null when it's about to be created).
+         *
+         * **Must stay identical to the web rule** (`utils/takeoutAlbums.ts`
+         * `resolveAlbumDisplayName`): both platforms rebuild the same albums from
+         * the same server mapping, so a divergence here means the two devices
+         * fight over an album's name on every sync.
+         *
+         * Takeout folder names are mangled ("Mum & Dad's 40th" exports as
+         * "Mum _ Dad_s 40th"), so the real title from the album's `metadata.json`
+         * wins for display. The folder name remains the album's *identity* (it
+         * derives the deterministic album id), so renaming is purely cosmetic.
+         *
+         * The rename only ever supersedes a name **we** wrote (i.e. still exactly
+         * the raw folder name). Any other name means the user renamed it — leave
+         * their curation alone rather than stomping it on every rebuild.
+         */
+        fun resolveAlbumDisplayName(
+            folderName: String,
+            title: String?,
+            existingName: String?,
+        ): String {
+            val display = title?.trim()?.takeIf { it.isNotEmpty() } ?: folderName
+            if (existingName == null) return display
+            return if (existingName == folderName) display else existingName
+        }
     }
 }

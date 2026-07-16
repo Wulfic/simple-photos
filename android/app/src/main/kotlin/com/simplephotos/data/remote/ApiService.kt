@@ -74,6 +74,13 @@ interface ApiService {
     @GET("api/photos/source-albums")
     suspend fun sourceAlbums(): SourceAlbumsResponse
 
+    /** Tombstone a Takeout-reconstructed album the user deleted, so no device
+     *  recreates it on the next rebuild. Photos are unaffected. */
+    @POST("api/photos/source-albums/dismiss")
+    suspend fun dismissSourceAlbum(
+        @Body request: DismissSourceAlbumRequest
+    ): DismissSourceAlbumResponse
+
     @GET("api/photos/crop-sync")
     suspend fun cropSync(): List<CropSyncRecord>
 

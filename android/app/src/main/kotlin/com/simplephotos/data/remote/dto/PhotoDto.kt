@@ -114,13 +114,38 @@ data class PhotoSummaryDto(
 // rebuild album manifests deterministically and cross-platform.
 
 data class SourceAlbumDto(
+    /**
+     * The Takeout folder name — the album's identity (the deterministic album id
+     * derives from it), so it stays stable even though Google mangles it on
+     * export ("Mum & Dad's 40th" ships as "Mum _ Dad_s 40th").
+     */
     val name: String,
+    /**
+     * The album's real Google Photos title, read server-side from the album
+     * folder's `metadata.json`. Display this in preference to [name]; null on
+     * older exports that carry no album metadata — then fall back to [name].
+     */
+    val title: String? = null,
     val source: String,
     @SerializedName("photo_ids") val photoIds: List<String>,
 )
 
 data class SourceAlbumsResponse(
     val albums: List<SourceAlbumDto>
+)
+
+// POST /api/photos/source-albums/dismiss — tombstone a reconstructed album the
+// user deleted, so reconstruction stops recreating it on every device. Keyed by
+// the local album id; the server resolves it back to the album identity.
+
+data class DismissSourceAlbumRequest(
+    @SerializedName("album_id") val albumId: String,
+)
+
+data class DismissSourceAlbumResponse(
+    /** False when the id wasn't a source album (an ordinary user album). */
+    val dismissed: Boolean,
+    val name: String? = null,
 )
 
 // ── Crop-metadata sync (lightweight delta for non-destructive edits) ─────────

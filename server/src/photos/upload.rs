@@ -20,11 +20,74 @@ use super::thumbnail::generate_thumbnail_file;
 use super::utils::{audio_backup_enabled, compute_photo_hash, utc_now_iso};
 use chrono::Utc;
 
+/// Read and sanitise a Takeout source-album header (`X-Source-Album` /
+/// `X-Source-Album-Title`).
+///
+/// The value is percent-encoded by the client because HTTP header values are
+/// bytes, not text: a Latin-1-unsafe album name ("Trip to 東京") cannot be put in
+/// a raw header at all — `fetch` throws on it — and anything above ASCII would
+/// otherwise arrive mojibake'd.
+///
+/// The result is sanitised exactly like a user-typed album name (dangerous
+/// codepoints stripped, whitespace collapsed, length capped).
+fn source_album_header(headers: &HeaderMap, name: &str) -> Option<String> {
+    let raw = headers.get(name)?.to_str().ok()?;
+    let decoded = percent_encoding::percent_decode_str(raw)
+        .decode_utf8()
+        .ok()?;
+    sanitize::sanitize_display_name(&decoded, MAX_SOURCE_ALBUM_LEN).ok()
+}
+
+/// The Takeout album *folder* an upload declares, or `None`.
+///
+/// Google's date / container folders are rejected here as well as in the browser
+/// (`isNonAlbumFolder` in `web/src/utils/uploadAlbums.ts`): the header is
+/// client-supplied, and a buggy or hostile client must not be able to turn
+/// "Photos from 2021" — which holds a copy of the user's entire library — into an
+/// album.
+///
+/// Deliberately not applied to the *title*: that rule is about folder names, and
+/// an album is free to be titled anything.
+fn upload_album_name(headers: &HeaderMap) -> Option<String> {
+    let album = source_album_header(headers, "X-Source-Album")?;
+    if crate::import::sidecar::is_non_album_folder(&album) {
+        tracing::debug!(album = %album, "Ignoring non-album Takeout folder from upload header");
+        return None;
+    }
+    Some(album)
+}
+
+/// Album names/titles are capped exactly like a user-created album's name.
+const MAX_SOURCE_ALBUM_LEN: usize = 200;
+
+/// Record the Takeout album membership an upload declared, if any, through the
+/// same shared writer every other import path uses. A failed membership must
+/// never fail the upload itself — the photo is already safely stored, and a
+/// re-run of the import (or the album backfill) repairs the membership.
+async fn record_upload_album(state: &AppState, user_id: &str, photo_id: &str, headers: &HeaderMap) {
+    let Some(album) = upload_album_name(headers) else {
+        return;
+    };
+    let title = source_album_header(headers, "X-Source-Album-Title");
+    let now = utc_now_iso();
+    let _ = crate::import::takeout::record_source_album(
+        &state.pool,
+        user_id,
+        photo_id,
+        &album,
+        title.as_deref(),
+        &now,
+    )
+    .await;
+}
+
 /// POST /api/photos/upload
 /// Upload a photo/video/GIF file from a mobile client.
 /// The file body is sent as raw bytes with metadata in custom headers:
 ///   X-Filename: original filename
 ///   X-Mime-Type: MIME type (e.g., image/jpeg)
+///   X-Source-Album: percent-encoded Takeout album folder name (optional)
+///   X-Source-Album-Title: percent-encoded real album title (optional)
 ///
 /// The server stores the file in the storage root and registers it as a photo.
 pub async fn upload_photo(
@@ -87,11 +150,17 @@ pub async fn upload_photo(
     //     metadata from the file and can't replay sidecar values, so Google
     //     Photos Takeout uploads stay on the inline path. X-File-Modified-At
     //     is preserved by stamping the written file's mtime.
+    //   • no X-Source-Album — same reason: album membership is client-derived
+    //     (the browser saw the folder structure; the server only gets loose
+    //     bytes), and deferring returns before any photo row exists to hang the
+    //     membership off. A convertible file in a Takeout album folder therefore
+    //     stays inline so its album survives.
     if conversion::conversion_target(&filename).is_some()
         && header_truthy(&headers, "X-Defer-Conversion")
         && headers.get("X-Taken-At").is_none()
         && headers.get("X-Latitude").is_none()
         && headers.get("X-Longitude").is_none()
+        && headers.get("X-Source-Album").is_none()
         && crate::setup::admin::require_admin(&state, &auth)
             .await
             .is_ok()
@@ -264,6 +333,12 @@ pub async fn upload_photo(
             photo_hash = %photo_hash,
             "Duplicate upload detected (hash match) — returning existing record"
         );
+        // A deduped upload still carries album membership. Takeout ships the SAME
+        // bytes in the date folder and in every album folder, so for a Takeout
+        // upload this branch is where most memberships arrive: skipping it would
+        // silently drop every album member that also lives in a date folder —
+        // which, for Takeout, is all of them.
+        record_upload_album(&state, &auth.user_id, &eid, &headers).await;
         return Ok((
             StatusCode::OK,
             Json(serde_json::json!({
@@ -535,6 +610,9 @@ pub async fn upload_photo(
                 photo_hash = %photo_hash,
                 "Concurrent upload race resolved — returning winner's record"
             );
+            // We lost the race but still hold this copy's album membership;
+            // record it against the winning row (idempotent).
+            record_upload_album(&state, &auth.user_id, &eid, &headers).await;
             return Ok((
                 StatusCode::OK,
                 Json(serde_json::json!({
@@ -550,6 +628,10 @@ pub async fn upload_photo(
             "Photo insert ignored but no existing row found".to_string(),
         ));
     }
+
+    // Capture Takeout album membership the browser derived from the picked
+    // folder structure (issue: "Local Upload captures no albums at all").
+    record_upload_album(&state, &auth.user_id, &photo_id, &headers).await;
 
     // ── Inline geo & timeline backfill ──────────────────────────────────
     // Set photo_year/photo_month from taken_at timestamp
@@ -754,4 +836,93 @@ async fn defer_convertible_upload(
             "deferred": true,
         })),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn headers_with(name: &str, value: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert(
+            axum::http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+            value.parse().unwrap(),
+        );
+        h
+    }
+
+    fn album(value: &str) -> Option<String> {
+        upload_album_name(&headers_with("X-Source-Album", value))
+    }
+
+    fn title(value: &str) -> Option<String> {
+        source_album_header(
+            &headers_with("X-Source-Album-Title", value),
+            "X-Source-Album-Title",
+        )
+    }
+
+    #[test]
+    fn album_header_is_percent_decoded() {
+        assert_eq!(album("Trip%20to%20Rome").as_deref(), Some("Trip to Rome"));
+    }
+
+    #[test]
+    fn album_header_survives_non_ascii_names() {
+        // The whole reason the header is encoded: a raw non-Latin-1 value can't
+        // be sent at all, and anything above ASCII would arrive mojibake'd.
+        assert_eq!(
+            album("%E6%9D%B1%E4%BA%AC%202019").as_deref(),
+            Some("東京 2019")
+        );
+    }
+
+    #[test]
+    fn album_header_rejects_googles_non_album_folders() {
+        // The browser filters these already, but the header is client-supplied.
+        assert_eq!(album("Photos%20from%202021"), None);
+        assert_eq!(album("Takeout"), None);
+        assert_eq!(album("Google%20Photos"), None);
+        // A real album that merely looks similar still passes.
+        assert_eq!(
+            album("Photos%20from%20Grandma").as_deref(),
+            Some("Photos from Grandma")
+        );
+    }
+
+    #[test]
+    fn album_header_is_sanitised() {
+        // Bidi override stripped, whitespace collapsed (%E2%80%AE is U+202E).
+        assert_eq!(
+            album("Trip%E2%80%AE%20%20to%20%20%20Rome").as_deref(),
+            Some("Trip to Rome")
+        );
+        // Capped at the same length as any album name.
+        assert_eq!(
+            album(&"a".repeat(500)).map(|s| s.chars().count()),
+            Some(MAX_SOURCE_ALBUM_LEN)
+        );
+    }
+
+    /// The non-album folder rule is about FOLDER names. An album is free to be
+    /// *titled* "Photos from 2021" — dropping that title would silently fall the
+    /// album back to its mangled folder name for no reason.
+    #[test]
+    fn title_header_is_not_subject_to_the_folder_rules() {
+        assert_eq!(
+            title("Photos%20from%202021").as_deref(),
+            Some("Photos from 2021")
+        );
+        assert_eq!(title("Takeout").as_deref(), Some("Takeout"));
+    }
+
+    #[test]
+    fn album_header_absent_or_unusable_yields_none() {
+        assert_eq!(
+            source_album_header(&HeaderMap::new(), "X-Source-Album"),
+            None
+        );
+        assert_eq!(album("%20%20"), None, "blank after sanitisation");
+        assert_eq!(album("%E0%A4%A"), None, "invalid percent-encoding");
+    }
 }

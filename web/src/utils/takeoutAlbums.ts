@@ -14,17 +14,74 @@
  * step (it used to be a fragile, manual, filename-matching folder re-selection).
  */
 import { db, type CachedAlbum } from "../db";
-import { encrypt, sha256Hex } from "../crypto/crypto";
+import { sha256Hex } from "../crypto/crypto";
 import { api } from "../api/client";
+import { saveAlbumManifest } from "./albumManifest";
 
 export interface ServerRecreateResult {
   albumsCreated: number;
   albumsUpdated: number;
   photosAdded: number;
+  /** Albums re-titled from the Takeout folder name to their real Google name. */
+  albumsRenamed: number;
   /** Albums whose photos aren't in the local mirror yet (still syncing). */
   albumsUnmatched: number;
   /** Individual photo ids not yet synced locally (skipped, re-run to fill). */
   photosUnmatched: number;
+}
+
+/** One album as the server captured it (`GET /api/photos/source-albums`). */
+export interface SourceAlbum {
+  /** The Takeout folder name — the album's identity, mangled by Google. */
+  name: string;
+  /** The album's real Google Photos title, when the export carried one. */
+  title: string | null;
+  source: string;
+  photo_ids: string[];
+}
+
+/**
+ * The deterministic local album id for a source album.
+ *
+ * Derived from `(source, folder name)` so a rebuild on web and on Android
+ * produces the **same** id and the two converge into one album after sync,
+ * instead of two identically-named ones. The server computes it too, to resolve
+ * a `src-…` id back to the album it came from when tombstoning a deletion.
+ * All three implementations are pinned to one shared test vector — a drift here
+ * is silent and only shows up as duplicated or resurrected albums.
+ *
+ * Keyed on the folder name, never the title: identity must survive a retitle.
+ */
+export async function sourceAlbumId(
+  source: string,
+  folderName: string,
+): Promise<string> {
+  return (
+    "src-" + (await sha256Hex(new TextEncoder().encode(`${source} ${folderName}`)))
+  );
+}
+
+/**
+ * The name to show for a source album, given the local album it maps onto
+ * (`existingName` — `undefined` when we're about to create it).
+ *
+ * Takeout folder names are mangled ("Mum & Dad's 40th" exports as
+ * "Mum _ Dad_s 40th"), so the real title from the album's `metadata.json` wins
+ * for display. But the folder name stays the album's *identity* — it derives the
+ * deterministic album id — so renaming is purely cosmetic and never re-keys.
+ *
+ * The rename only ever supersedes a name **we** wrote (i.e. still exactly the
+ * raw folder name). If the local album is called anything else, the user renamed
+ * it — or it's their own album we merged into — and we leave it alone rather than
+ * stomping their curation on every reconstruction pass.
+ */
+export function resolveAlbumDisplayName(
+  album: Pick<SourceAlbum, "name" | "title">,
+  existingName?: string,
+): string {
+  const display = album.title?.trim() || album.name;
+  if (existingName === undefined) return display;
+  return existingName === album.name ? display : existingName;
 }
 
 /**
@@ -44,6 +101,7 @@ export async function recreateAlbumsFromServer(): Promise<ServerRecreateResult> 
     albumsCreated: 0,
     albumsUpdated: 0,
     photosAdded: 0,
+    albumsRenamed: 0,
     albumsUnmatched: 0,
     photosUnmatched: 0,
   };
@@ -85,34 +143,42 @@ export async function recreateAlbumsFromServer(): Promise<ServerRecreateResult> 
       continue;
     }
 
-    // Deterministic album id derived from (source, name) so a rebuild run on
-    // web and on Android produces the *same* id and converges into one album
-    // after sync — instead of two identically-named albums. Both platforms use
-    // this exact formula (see AlbumRepository.recreateAlbumsFromServer).
-    const albumId = "src-" + (await sha256Hex(
-      new TextEncoder().encode(`${album.source} ${album.name}`),
-    ));
+    const albumId = await sourceAlbumId(album.source, album.name);
 
     // Prefer an album already carrying this deterministic id; otherwise merge
     // into a user's manually-created same-named album rather than duplicating.
-    const existing = existingById.get(albumId) ?? existingByName.get(album.name.toLowerCase());
+    // The user's album is named after the real title, so try that before the raw
+    // folder name (which is what earlier, title-less runs of this pass wrote).
+    const display = resolveAlbumDisplayName(album);
+    const existing =
+      existingById.get(albumId) ??
+      existingByName.get(display.toLowerCase()) ??
+      existingByName.get(album.name.toLowerCase());
     if (existing) {
       const merged = [...new Set([...existing.photoBlobIds, ...blobIds])];
       const added = merged.length - existing.photoBlobIds.length;
-      if (added === 0) continue; // no-op: nothing new to write, skip the upload
+      const name = resolveAlbumDisplayName(album, existing.name);
+      const renamed = name !== existing.name;
+      // No-op: nothing new to write, skip the upload. Checking the rename too is
+      // what lets an album materialized under the mangled folder name by an
+      // earlier run get its real title — that pass adds no photos, so a
+      // photos-only check would skip it forever.
+      if (added === 0 && !renamed) continue;
       jobs.push({
         ...existing,
+        name,
         photoBlobIds: merged,
         coverPhotoBlobId: existing.coverPhotoBlobId || merged[0],
       });
       result.albumsUpdated++;
       result.photosAdded += added;
+      if (renamed) result.albumsRenamed++;
     } else {
       const ids = [...blobIds];
       jobs.push({
         albumId,
         manifestBlobId: "",
-        name: album.name,
+        name: display,
         createdAt: Date.now(),
         coverPhotoBlobId: ids[0],
         photoBlobIds: ids,
@@ -146,26 +212,3 @@ export async function recreateAlbumsFromServer(): Promise<ServerRecreateResult> 
   return result;
 }
 
-/** Encrypt + upload an album manifest and persist it locally. */
-async function saveAlbumManifest(album: CachedAlbum): Promise<void> {
-  // Replace the previous manifest blob (best-effort) when updating.
-  if (album.manifestBlobId) {
-    try {
-      await api.blobs.delete(album.manifestBlobId);
-    } catch {
-      /* already gone */
-    }
-  }
-  const payload = JSON.stringify({
-    v: 1,
-    album_id: album.albumId,
-    name: album.name,
-    created_at: new Date(album.createdAt).toISOString(),
-    cover_photo_blob_id: album.coverPhotoBlobId || null,
-    photo_blob_ids: album.photoBlobIds,
-  });
-  const encrypted = await encrypt(new TextEncoder().encode(payload));
-  const hash = await sha256Hex(new Uint8Array(encrypted));
-  const res = await api.blobs.upload(encrypted, "album_manifest", hash);
-  await db.albums.put({ ...album, manifestBlobId: res.blob_id });
-}

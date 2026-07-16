@@ -68,8 +68,12 @@ pub(crate) struct NativeCandidate {
     pub sidecar_abs: Option<PathBuf>,
     /// Takeout album name derived from the parent folder, when this file lives in
     /// a genuine Takeout album directory. Recorded in `photo_source_albums` so
-    /// clients can rebuild albums deterministically.
+    /// clients can rebuild albums deterministically. This is the album's identity
+    /// key, so it stays the folder name even though Takeout mangles it.
     pub album_name: Option<String>,
+    /// The album's real title from its folder's `metadata.json`, when present.
+    /// Display only — `None` means clients fall back to [`Self::album_name`].
+    pub album_title: Option<String>,
 }
 
 /// Read-only context shared across every file in one registration pass.
@@ -84,31 +88,27 @@ pub(crate) struct RegisterContext {
     pub gallery_hashes: Arc<HashSet<String>>,
 }
 
-/// Record a Google Takeout album membership (idempotent via the
-/// `(photo_id, album_name)` primary key). Shared by the fresh-insert path and the
-/// hash-duplicate backfill path so an album captures its members regardless of
-/// which physical copy of a photo the walk registers first.
+/// Record a Google Takeout album membership. Shared with the bulk-import and
+/// backfill writers so an album captures its members regardless of which
+/// physical copy of a photo the walk registers first; errors are logged there,
+/// and a failed membership must not abort the registration itself.
 async fn record_source_album(
     pool: &SqlitePool,
     user_id: &str,
     photo_id: &str,
     album: &str,
+    album_title: Option<&str>,
     now: &str,
 ) {
-    if let Err(e) = sqlx::query(
-        "INSERT OR IGNORE INTO photo_source_albums \
-         (photo_id, user_id, album_name, source, created_at) \
-         VALUES (?, ?, ?, 'google_takeout', ?)",
+    let _ = crate::import::takeout::record_source_album(
+        pool,
+        user_id,
+        photo_id,
+        album,
+        album_title,
+        now,
     )
-    .bind(photo_id)
-    .bind(user_id)
-    .bind(album)
-    .bind(now)
-    .execute(pool)
-    .await
-    {
-        tracing::warn!(photo_id = %photo_id, album = %album, error = %e, "Failed to record Takeout source album");
-    }
+    .await;
 }
 
 /// Register a single native media file: extract metadata + subtype, hash it,
@@ -278,7 +278,15 @@ pub(crate) async fn register_native_file(
                 .unwrap_or(None);
                 match existing_id {
                     Some(existing_id) => {
-                        record_source_album(pool, &ctx.user_id, &existing_id, album, &now).await;
+                        record_source_album(
+                            pool,
+                            &ctx.user_id,
+                            &existing_id,
+                            album,
+                            cand.album_title.as_deref(),
+                            &now,
+                        )
+                        .await;
                         tracing::debug!(file = %cand.rel_path, album = %album, "Duplicate copy — backfilled album membership onto existing photo");
                     }
                     None => {
@@ -302,7 +310,15 @@ pub(crate) async fn register_native_file(
     // lives in a genuine Takeout album directory, so a normal user folder never
     // becomes an album.
     if let Some(ref album) = cand.album_name {
-        record_source_album(pool, &ctx.user_id, &photo_id, album, &now).await;
+        record_source_album(
+            pool,
+            &ctx.user_id,
+            &photo_id,
+            album,
+            cand.album_title.as_deref(),
+            &now,
+        )
+        .await;
     }
 
     // Persist the parsed sidecar (title/description/geo/views) for the info panel.
@@ -441,6 +457,7 @@ mod tests {
             modified: Some("2026-07-04T00:00:00.000Z".to_string()),
             sidecar_abs: Some(sidecar.clone()),
             album_name: Some("Trip to Rome".to_string()),
+            album_title: Some("Trip to Rome 🇮🇹".to_string()),
         };
         let ctx = RegisterContext {
             user_id: "user-1".to_string(),
@@ -468,13 +485,16 @@ mod tests {
         assert_eq!(lat, Some(41.9028), "GPS latitude comes from the sidecar");
         assert_eq!(lon, Some(12.4964), "GPS longitude comes from the sidecar");
 
-        // Album membership recorded from the folder.
-        let (album,): (String,) =
-            sqlx::query_as("SELECT album_name FROM photo_source_albums WHERE user_id = 'user-1'")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        // Album membership recorded from the folder — keyed by the folder name,
+        // carrying the real title from the album's metadata.json alongside it.
+        let (album, title): (String, Option<String>) = sqlx::query_as(
+            "SELECT album_name, album_title FROM photo_source_albums WHERE user_id = 'user-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(album, "Trip to Rome");
+        assert_eq!(title.as_deref(), Some("Trip to Rome 🇮🇹"));
 
         // Parsed sidecar metadata persisted for the info panel.
         let (meta_count,): (i64,) =
@@ -523,6 +543,7 @@ mod tests {
             modified: Some("2020-01-02T03:04:05.000Z".to_string()),
             sidecar_abs: None,
             album_name: None,
+            album_title: None,
         };
         let ctx = RegisterContext {
             user_id: "user-1".to_string(),
@@ -596,6 +617,7 @@ mod tests {
             modified: Some("2020-06-01T00:00:00.000Z".to_string()),
             sidecar_abs: None,
             album_name: None,
+            album_title: None,
         };
         assert!(
             register_native_file(&pool, &root, &year_cand, &ctx).await,
@@ -613,6 +635,7 @@ mod tests {
             modified: Some("2020-06-01T00:00:00.000Z".to_string()),
             sidecar_abs: None,
             album_name: Some("Cats".to_string()),
+            album_title: None,
         };
         assert!(
             !register_native_file(&pool, &root, &album_cand, &ctx).await,

@@ -408,26 +408,8 @@ export default function useViewerActions({
       if (!album) return;
       const updated = album.photoBlobIds.filter((bid: string) => bid !== id);
 
-      // Delete old manifest blob
-      if (album.manifestBlobId) {
-        try { await api.blobs.delete(album.manifestBlobId); } catch { /* ok */ }
-      }
-
-      // Upload new manifest
-      const payload = JSON.stringify({
-        v: 1,
-        album_id: album.albumId,
-        name: album.name,
-        created_at: new Date(album.createdAt).toISOString(),
-        cover_photo_blob_id: album.coverPhotoBlobId || null,
-        photo_blob_ids: updated,
-      });
-      const { encrypt: enc, sha256Hex: sha } = await import("../crypto/crypto");
-      const encrypted = await enc(new TextEncoder().encode(payload));
-      const hash = await sha(new Uint8Array(encrypted));
-      const res = await api.blobs.upload(encrypted, "album_manifest", hash);
-
-      await db.albums.put({ ...album, photoBlobIds: updated, manifestBlobId: res.blob_id });
+      const { saveAlbumManifest } = await import("../utils/albumManifest");
+      await saveAlbumManifest({ ...album, photoBlobIds: updated });
 
       // Navigate to next photo or back to album
       if (photoIds && photoIds.length > 1) {

@@ -23,14 +23,25 @@
 //!
 //! Detection is schema-validated ([`is_photo_sidecar`]) so a matched JSON that is
 //! actually an album-level `metadata.json` (or `print-subscriptions.json`, …) is
-//! never mistaken for a per-photo sidecar.
+//! never mistaken for a per-photo sidecar. That album-level `metadata.json` is
+//! itself read here — it holds the album's real title (see
+//! [`TakeoutDirContext::resolve_album_title`]).
 
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::media::original_name_for_edited;
+use crate::media::{is_media_file, original_name_for_edited};
 
 use super::models::GooglePhotosMetadata;
+
+/// Filename of the album-level metadata Google writes into each album folder
+/// (lowercased for the case-insensitive lookup). It carries the album's real
+/// `"title"` — unlike the folder name, which Takeout mangles.
+const ALBUM_METADATA_JSON: &str = "metadata.json";
+
+/// Album titles are user-facing text from an untrusted file, so they go through
+/// the same display-name sanitisation and length cap as a user-created album.
+const MAX_ALBUM_TITLE_LEN: usize = 200;
 
 /// Per-directory Takeout context: the `.json` sidecars present in one directory
 /// plus the album that directory represents. Built once per directory during the
@@ -79,6 +90,34 @@ impl TakeoutDirContext {
         } else {
             None
         }
+    }
+
+    /// The album's **real** title, read from the album folder's own
+    /// `metadata.json`. `None` for non-album directories, folders without that
+    /// file (older exports), or a file that doesn't parse as album metadata —
+    /// callers then fall back to the folder name.
+    ///
+    /// This is the fix for albums arriving *wrongly named*: `album_name()` is the
+    /// Takeout folder name, which Google mangles on export (special characters →
+    /// `_`, length truncation, `(1)` collision counters). The untouched title
+    /// survives only here. The folder name stays the identity key — the title is
+    /// a display name only — so album ids never churn.
+    ///
+    /// One small read per album directory, and only for directories that are
+    /// actually albums, so the `Photos from YYYY` copy of the library costs
+    /// nothing.
+    pub async fn resolve_album_title(&self, dir: &Path) -> Option<String> {
+        // Gate on album_name(): honours `is_takeout`, so a plain user folder that
+        // happens to contain a `metadata.json` is never read as an album.
+        self.album_name()?;
+        let name = self.json_by_lower.get(ALBUM_METADATA_JSON)?;
+        let bytes = tokio::fs::read(dir.join(name))
+            .await
+            .inspect_err(|e| {
+                tracing::warn!(dir = ?dir, error = %e, "Unreadable album metadata.json; falling back to folder name");
+            })
+            .ok()?;
+        parse_album_title(&bytes)
     }
 
     /// Resolve the Google sidecar filename for `media_name`, returning the
@@ -187,12 +226,79 @@ pub fn is_photo_sidecar(meta: &GooglePhotosMetadata) -> bool {
     meta.photo_taken_time.is_some() || meta.google_photos_origin.is_some()
 }
 
-/// Derive the Takeout album name from a directory: its own folder name, unless
-/// that folder is one of Google's non-album date/container folders.
+/// Does this `.json` *filename* look like a per-photo Google sidecar, as opposed
+/// to an album-level `metadata.json`, `print-subscriptions.json`, or unrelated
+/// JSON? Name-only — [`is_photo_sidecar`] is the schema-level check.
 ///
-/// Mirrors the web allowlist (`web/src/utils/takeoutAlbums.ts`): skips the
-/// `Photos from YYYY` date folders and the `Takeout` / `Google Photos` container
-/// folders (including common localisations).
+/// Used to count/report sidecars without opening every file. It undoes the same
+/// naming rules [`TakeoutDirContext::resolve_sidecar`] applies, so the two can't
+/// disagree about what a sidecar is: strip `.json`, strip a displaced duplicate
+/// counter (`IMG_1.JPG(1).json`), strip the `.supplemental-metadata` tail (which
+/// Google may have truncated), and see if a real media filename is left.
+pub fn is_photo_sidecar_name(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    let Some(stem) = lower.strip_suffix(".json") else {
+        return false;
+    };
+    is_media_file(strip_supplemental_tail(strip_trailing_counter(stem)))
+}
+
+/// Strip a trailing `(N)` duplicate counter: `"img_1.jpg(1)"` → `"img_1.jpg"`.
+fn strip_trailing_counter(s: &str) -> &str {
+    let Some(rest) = s.strip_suffix(')') else {
+        return s;
+    };
+    let Some(open) = rest.rfind('(') else {
+        return s;
+    };
+    let n = &rest[open + 1..];
+    if !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()) {
+        &s[..open]
+    } else {
+        s
+    }
+}
+
+/// Strip a trailing `.supplemental-metadata`, including the truncated forms
+/// Google's filename-length cap produces (`".supplemental-me"`).
+fn strip_supplemental_tail(s: &str) -> &str {
+    let Some(dot) = s.rfind('.') else {
+        return s;
+    };
+    let tail = &s[dot + 1..];
+    if !tail.is_empty() && "supplemental-metadata".starts_with(tail) {
+        &s[..dot]
+    } else {
+        s
+    }
+}
+
+/// Extract an album's real title from the bytes of an album-level
+/// `metadata.json`. `None` when the JSON doesn't parse, is actually a *photo*
+/// sidecar (the [`is_photo_sidecar`] guard, inverted — a per-photo sidecar's
+/// `title` is the media filename, which would be a terrible album name), or has
+/// no usable title.
+///
+/// The title is untrusted text from a file on disk, so it is sanitised exactly
+/// like a user-typed album name: dangerous/invisible codepoints stripped,
+/// whitespace collapsed, capped at [`MAX_ALBUM_TITLE_LEN`] characters.
+pub fn parse_album_title(bytes: &[u8]) -> Option<String> {
+    let meta: GooglePhotosMetadata = serde_json::from_slice(bytes).ok()?;
+    if is_photo_sidecar(&meta) {
+        return None;
+    }
+    crate::sanitize::sanitize_display_name(meta.title.as_deref()?, MAX_ALBUM_TITLE_LEN).ok()
+}
+
+/// Derive the Takeout album name from a directory: its own folder name, unless
+/// that folder is one of Google's non-album date/container folders — the
+/// `Photos from YYYY` date folders and the `Takeout` / `Google Photos`
+/// containers (including common localisations).
+///
+/// This is the authoritative rule. The browser upload path has to duplicate it
+/// (`isNonAlbumFolder` in `web/src/utils/uploadAlbums.ts`) because only the
+/// browser can see the folder a picked file came from; that copy is pinned by
+/// tests mirroring these ones, and the server re-checks whatever it sends.
 pub fn derive_album_from_dir(dir: &Path) -> Option<String> {
     let folder = dir.file_name()?.to_string_lossy().to_string();
     if is_non_album_folder(&folder) {
@@ -406,5 +512,176 @@ mod tests {
         let origin: GooglePhotosMetadata =
             serde_json::from_str(r#"{"title":"x","googlePhotosOrigin":{"driveSync":{}}}"#).unwrap();
         assert!(is_photo_sidecar(&origin));
+    }
+
+    #[test]
+    fn photo_sidecar_names_cover_every_naming_rule() {
+        // The forms resolve_sidecar knows how to pair — this predicate must
+        // recognise all of them, or the scan report calls them "not a sidecar".
+        assert!(is_photo_sidecar_name(
+            "IMG_1.jpg.supplemental-metadata.json"
+        ));
+        assert!(is_photo_sidecar_name("IMG_1.jpg.json"));
+        // Duplicate counter displaced after the extension.
+        assert!(is_photo_sidecar_name("IMG_1234.JPG(1).json"));
+        assert!(is_photo_sidecar_name(
+            "IMG_9.jpg.supplemental-metadata(2).json"
+        ));
+        // Length-truncated supplemental tail.
+        assert!(is_photo_sidecar_name(
+            "a_long_name.jpg.supplemental-me.json"
+        ));
+    }
+
+    #[test]
+    fn photo_sidecar_names_reject_non_sidecars() {
+        assert!(
+            !is_photo_sidecar_name("metadata.json"),
+            "album metadata is not a photo sidecar"
+        );
+        assert!(!is_photo_sidecar_name("print-subscriptions.json"));
+        assert!(!is_photo_sidecar_name("user-generated-memory-titles.json"));
+        assert!(!is_photo_sidecar_name("notes.txt"));
+        assert!(!is_photo_sidecar_name("IMG_1.jpg"), "the media file itself");
+    }
+
+    #[test]
+    fn sidecar_name_helpers_strip_only_real_suffixes() {
+        assert_eq!(strip_trailing_counter("img_1.jpg(1)"), "img_1.jpg");
+        assert_eq!(strip_trailing_counter("img_1.jpg"), "img_1.jpg");
+        assert_eq!(strip_trailing_counter("img(x)"), "img(x)", "not digits");
+        assert_eq!(strip_trailing_counter("img()"), "img()", "empty counter");
+
+        assert_eq!(
+            strip_supplemental_tail("img_1.jpg.supplemental-metadata"),
+            "img_1.jpg"
+        );
+        assert_eq!(
+            strip_supplemental_tail("img_1.jpg.supplemental-me"),
+            "img_1.jpg"
+        );
+        assert_eq!(strip_supplemental_tail("img_1.jpg"), "img_1.jpg");
+    }
+
+    // ── Album titles ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn album_title_read_from_album_metadata() {
+        // The whole point: the folder is "Mum _ Dad_s 40th _ 2019" on disk, but
+        // the real title survives in the album metadata.
+        let title = parse_album_title(
+            r#"{"title":"Mum & Dad's 40th — 2019","description":"","access":"protected"}"#
+                .as_bytes(),
+        );
+        assert_eq!(title.as_deref(), Some("Mum & Dad's 40th — 2019"));
+    }
+
+    #[test]
+    fn album_title_rejects_a_photo_sidecar() {
+        // A per-photo sidecar's "title" is the media FILENAME. Reading it as an
+        // album title would name the album "IMG_1.jpg".
+        assert_eq!(
+            parse_album_title(br#"{"title":"IMG_1.jpg","photoTakenTime":{"timestamp":"149"}}"#),
+            None
+        );
+    }
+
+    #[test]
+    fn album_title_rejects_unusable_input() {
+        assert_eq!(parse_album_title(b"not json at all"), None);
+        assert_eq!(parse_album_title(br#"{"description":"no title"}"#), None);
+        assert_eq!(
+            parse_album_title(br#"{"title":"   "}"#),
+            None,
+            "blank title"
+        );
+        // JSON-escaped so the source stays ASCII: a title made only of a bidi
+        // override + a zero-width space sanitises away to nothing.
+        assert_eq!(
+            parse_album_title(r#"{"title":"\u202E\u200B"}"#.as_bytes()),
+            None,
+            "a title of only dangerous codepoints sanitises to empty"
+        );
+    }
+
+    #[test]
+    fn album_title_is_sanitised_like_a_user_typed_name() {
+        // Untrusted text from disk: bidi overrides stripped, whitespace collapsed.
+        assert_eq!(
+            parse_album_title("{\"title\":\"Trip\u{202E}  to   Rome\"}".as_bytes()).as_deref(),
+            Some("Trip to Rome")
+        );
+        // Length is capped.
+        let long = format!(r#"{{"title":"{}"}}"#, "a".repeat(500));
+        assert_eq!(
+            parse_album_title(long.as_bytes()).map(|t| t.chars().count()),
+            Some(MAX_ALBUM_TITLE_LEN)
+        );
+        // Normal Unicode survives.
+        assert_eq!(
+            parse_album_title(r#"{"title":"🎉 Party 🥳"}"#.as_bytes()).as_deref(),
+            Some("🎉 Party 🥳")
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_album_title_reads_metadata_json_case_insensitively() {
+        let dir = std::env::temp_dir().join(format!("sp-albumtitle-{}", uuid::Uuid::new_v4()));
+        let album_dir = dir.join("Mum _ Dad_s 40th _ 2019");
+        tokio::fs::create_dir_all(&album_dir).await.unwrap();
+        // On-disk casing differs from our lookup key.
+        tokio::fs::write(
+            album_dir.join("Metadata.json"),
+            br#"{"title":"Mum & Dad's 40th","access":"protected"}"#,
+        )
+        .await
+        .unwrap();
+
+        let c = TakeoutDirContext::new(
+            ["a.jpg.json".to_string(), "Metadata.json".to_string()],
+            &album_dir,
+        );
+        assert_eq!(
+            c.resolve_album_title(&album_dir).await.as_deref(),
+            Some("Mum & Dad's 40th"),
+            "the mangled folder name must be superseded by the real title"
+        );
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn resolve_album_title_none_for_non_album_and_missing_file() {
+        let dir = std::env::temp_dir().join(format!("sp-albumtitle-{}", uuid::Uuid::new_v4()));
+        let date_dir = dir.join("Photos from 2021");
+        tokio::fs::create_dir_all(&date_dir).await.unwrap();
+        tokio::fs::write(
+            date_dir.join("metadata.json"),
+            br#"{"title":"Photos from 2021"}"#,
+        )
+        .await
+        .unwrap();
+
+        // A date folder is not an album — never read a title for it.
+        let date = TakeoutDirContext::new(
+            ["a.jpg.json".to_string(), "metadata.json".to_string()],
+            &date_dir,
+        );
+        assert_eq!(date.resolve_album_title(&date_dir).await, None);
+
+        // A plain (non-Takeout) folder with a metadata.json is still not an album.
+        let plain_dir = dir.join("Vacation");
+        tokio::fs::create_dir_all(&plain_dir).await.unwrap();
+        let plain = TakeoutDirContext::new(["metadata.json".to_string()], &plain_dir);
+        assert_eq!(plain.resolve_album_title(&plain_dir).await, None);
+
+        // A real album folder with no metadata.json (older export) → fall back.
+        let album_dir = dir.join("Trip to Rome");
+        tokio::fs::create_dir_all(&album_dir).await.unwrap();
+        let album = TakeoutDirContext::new(["a.jpg.json".to_string()], &album_dir);
+        assert_eq!(album.resolve_album_title(&album_dir).await, None);
+        assert_eq!(album.album_name(), Some("Trip to Rome"));
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 }

@@ -41,6 +41,14 @@ export interface ImportItem {
   /** Google Photos metadata (optional) */
   metadata?: GooglePhotosMetadata;
   metadataFile?: string;
+  /**
+   * Takeout album folder this file was picked from, when the user selected a
+   * folder (so we could see the structure) and it really is a Takeout album.
+   * Sent to the server so browser-imported Takeouts keep their albums.
+   */
+  sourceAlbum?: string;
+  /** The album's real title, from the album folder's `metadata.json`. */
+  sourceAlbumTitle?: string;
   status: "pending" | "uploading" | "done" | "error";
   error?: string;
 }

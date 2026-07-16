@@ -8,8 +8,8 @@ import { useLocation } from "react-router-dom";
 import { useAppNavigate } from "../../hooks/useAppNavigate";
 import { useScrollMemory } from "../../hooks/useScrollMemory";
 import { api } from "../../api/client";
-import { encrypt, sha256Hex } from "../../crypto/crypto";
 import { db, type CachedAlbum } from "../../db";
+import { saveAlbumManifest } from "../../utils/albumManifest";
 import { useAlbumPhotos } from "../../hooks/useAlbumPhotos";
 import AppHeader from "../../components/AppHeader";
 import AppIcon from "../../components/AppIcon";
@@ -198,34 +198,7 @@ export default function RegularAlbumView({ albumId }: { albumId: string | undefi
   }
 
   async function updateAlbumManifest(updatedAlbum: CachedAlbum) {
-    // Delete the old manifest blob on the server
-    if (updatedAlbum.manifestBlobId) {
-      try {
-        await api.blobs.delete(updatedAlbum.manifestBlobId);
-      } catch {
-        // Old manifest may already be deleted — continue
-      }
-    }
-
-    // Upload new manifest
-    const payload = JSON.stringify({
-      v: 1,
-      album_id: updatedAlbum.albumId,
-      name: updatedAlbum.name,
-      created_at: new Date(updatedAlbum.createdAt).toISOString(),
-      cover_photo_blob_id: updatedAlbum.coverPhotoBlobId || null,
-      photo_blob_ids: updatedAlbum.photoBlobIds,
-    });
-
-    const encrypted = await encrypt(new TextEncoder().encode(payload));
-    const hash = await sha256Hex(new Uint8Array(encrypted));
-    const res = await api.blobs.upload(encrypted, "album_manifest", hash);
-
-    // Update local cache
-    await db.albums.put({
-      ...updatedAlbum,
-      manifestBlobId: res.blob_id,
-    });
+    await saveAlbumManifest(updatedAlbum);
   }
 
   async function deleteAlbum() {
@@ -233,12 +206,21 @@ export default function RegularAlbumView({ albumId }: { albumId: string | undefi
     if (!confirm(`Delete album "${album.name}"? Photos will not be deleted.`))
       return;
     try {
+      // Tombstone FIRST for a Takeout-reconstructed album. Without this the
+      // delete below is undone: the next reconstruction pass rebuilds the album
+      // from the untouched server-side membership, on every device. Doing it
+      // before the local delete means a failure here leaves the album intact
+      // rather than deleting it locally and having it silently reappear.
+      if (album.albumId.startsWith("src-")) {
+        await api.photos.dismissSourceAlbum(album.albumId);
+      }
       if (album.manifestBlobId) {
         await api.blobs.delete(album.manifestBlobId);
       }
       await db.albums.delete(album.albumId);
       navigate("/albums");
     } catch (err: unknown) {
+      console.error("[RegularAlbumView] delete album failed", err);
       setError(getErrorMessage(err));
     }
   }

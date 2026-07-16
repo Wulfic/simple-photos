@@ -150,11 +150,33 @@ export const photosApi = {
 
   /** Authoritative `album_name → [photo_id]` mapping captured at Takeout import
    *  time (server-side, keyed by photo id — survives filename collisions and
-   *  `-edited` dedup). Used to rebuild album manifests deterministically. */
+   *  `-edited` dedup). Used to rebuild album manifests deterministically.
+   *
+   *  `name` is the Takeout *folder* name and is the album's identity (the
+   *  deterministic album id derives from it), so it stays stable even though
+   *  Google mangles it. `title` is the album's real Google Photos name, read
+   *  from the album's `metadata.json`; display it in preference to `name`, and
+   *  fall back to `name` when it's null (older exports don't carry one). */
   sourceAlbums: () =>
     request<{
-      albums: Array<{ name: string; source: string; photo_ids: string[] }>;
+      albums: Array<{
+        name: string;
+        title: string | null;
+        source: string;
+        photo_ids: string[];
+      }>;
     }>("/photos/source-albums"),
+
+  /** Tombstone a Takeout-reconstructed album the user deleted, so reconstruction
+   *  stops recreating it on this and every other device. `dismissed: false` means
+   *  the id wasn't a source album at all (an ordinary user album) — not an error.
+   *  Identified by the local album id; the server resolves it back to the album
+   *  identity by recomputing the same hash. Photos are not affected. */
+  dismissSourceAlbum: (albumId: string) =>
+    request<{ dismissed: boolean; name: string | null }>(
+      "/photos/source-albums/dismiss",
+      { method: "POST", body: JSON.stringify({ album_id: albumId }) },
+    ),
 
   /** URL for serving the embedded motion video for a motion photo */
   motionVideoUrl: (photoId: string) => `${BASE}/photos/${photoId}/motion-video`,
@@ -211,6 +233,16 @@ export const photosApi = {
        * instead of a photo record.
        */
       deferConversion?: boolean;
+      /**
+       * Takeout album folder this file was picked from, derived client-side from
+       * the folder structure (`utils/uploadAlbums.ts`). Recorded server-side in
+       * `photo_source_albums` so the album can be rebuilt — without it, a Takeout
+       * imported through the browser loses all its album data. Note the server
+       * will not defer conversion for an upload carrying this.
+       */
+      sourceAlbum?: string;
+      /** The album's real Google Photos title from its `metadata.json`. */
+      sourceAlbumTitle?: string;
     },
   ): Promise<
     | {
@@ -240,6 +272,17 @@ export const photosApi = {
       overrides.fileModifiedAt > 0
     ) {
       headers["X-File-Modified-At"] = Math.floor(overrides.fileModifiedAt).toString();
+    }
+    // Percent-encoded: header values are bytes, and `fetch` throws outright on a
+    // non-Latin-1 string — an album called "東京 2019" would fail the upload.
+    // The server percent-decodes and sanitises (see photos/upload.rs).
+    if (overrides?.sourceAlbum) {
+      headers["X-Source-Album"] = encodeURIComponent(overrides.sourceAlbum);
+    }
+    if (overrides?.sourceAlbumTitle) {
+      headers["X-Source-Album-Title"] = encodeURIComponent(
+        overrides.sourceAlbumTitle,
+      );
     }
     return request("/photos/upload", {
       method: "POST",
