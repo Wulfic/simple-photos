@@ -6,7 +6,6 @@
 package com.simplephotos.ui.screens.gallery
 
 import android.net.Uri
-import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -77,8 +76,7 @@ import com.simplephotos.ui.components.HeaderNavigation
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_DIAGNOSTIC_LOGGING
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_USERNAME
 import com.simplephotos.ui.navigation.Screen
-import com.simplephotos.ui.navigation.findActivity
-import com.simplephotos.ui.navigation.openInNewWindow
+import com.simplephotos.ui.navigation.rememberNewWindowLauncher
 import com.simplephotos.ui.theme.ThemeState
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
@@ -116,23 +114,10 @@ fun GalleryScreen(
     var showAlbumPicker by remember { mutableStateOf(false) }
     val isSystemDark = androidx.compose.foundation.isSystemInDarkTheme()
 
-    // Split-screen (#21) is a second *window* of the whole app, not a bespoke
-    // two-pane viewer. FLAG_ACTIVITY_LAUNCH_ADJACENT only tiles the windows when
-    // the device is already in multi-window mode; from fullscreen the second
-    // window quietly lands in Recents, so tell the user where it went instead of
-    // looking like nothing happened.
-    val openWindow: (String?) -> Unit = { route ->
-        val activity = context.findActivity()
-        if (!openInNewWindow(context, route)) {
-            Toast.makeText(context, "Couldn't open a second window", Toast.LENGTH_SHORT).show()
-        } else if (activity?.isInMultiWindowMode == false) {
-            Toast.makeText(
-                context,
-                "Opened a second window — use Recents to arrange split screen",
-                Toast.LENGTH_LONG
-            ).show()
-        }
-    }
+    // Split-screen (#21): a second *window* of the whole app. Shared launcher —
+    // used here for the Compare flow (opens the paired photo in the new window)
+    // and by every AppHeader's "New Window" menu item (todo1 issue 4).
+    val openWindow = rememberNewWindowLauncher()
 
     // Filter out photos that live in a secure gallery (shared filter so the
     // album grids/counts hide the exact same set — see #16).
@@ -262,8 +247,7 @@ fun GalleryScreen(
                         onDiagnosticsClick = onDiagnosticsClick,
                         onLogout = { viewModel.logout(onLogout) },
                         onToggleTheme = { ThemeState.toggle(viewModel.dataStore, ThemeState.isDark(isSystemDark)) },
-                        isAdmin = isAdmin,
-                        onNewWindowClick = { openWindow(null) }
+                        isAdmin = isAdmin
                     ),
                     isSyncing = viewModel.isSyncing,
                     syncLabel = if (viewModel.isSyncing) "Syncing" else null

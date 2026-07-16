@@ -18,6 +18,9 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
 import android.util.Log
+import android.widget.Toast
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.platform.LocalContext
 import com.simplephotos.MainActivity
 
 private const val TAG = "NewWindow"
@@ -118,6 +121,39 @@ fun openInNewWindow(context: Context, route: String? = null): Boolean {
     } catch (e: Exception) {
         Log.e(TAG, "Failed to open new window (route=${route ?: "default"})", e)
         false
+    }
+}
+
+/**
+ * The one-and-only "open a second window" action, wired to user feedback.
+ *
+ * Split-screen (#21) is a second *window* of the whole app, not a bespoke
+ * two-pane viewer. `FLAG_ACTIVITY_LAUNCH_ADJACENT` only tiles the windows when
+ * the device is already in multi-window mode; from fullscreen the second window
+ * quietly lands in Recents, so this launcher tells the user where it went
+ * instead of looking like nothing happened.
+ *
+ * Returns a `(route: String?) -> Unit`. Pass `null` to open on the default
+ * Gallery route, or a validated route (see [isValidStartRoute]) to deep-link —
+ * e.g. GalleryScreen's Compare flow opens the second photo of a pair.
+ *
+ * Every screen with an [AppHeader] offers this from the profile menu, so the
+ * lambda lives here once rather than being re-copied per screen.
+ */
+@Composable
+fun rememberNewWindowLauncher(): (String?) -> Unit {
+    val context = LocalContext.current
+    return { route ->
+        val activity = context.findActivity()
+        if (!openInNewWindow(context, route)) {
+            Toast.makeText(context, "Couldn't open a second window", Toast.LENGTH_SHORT).show()
+        } else if (activity?.isInMultiWindowMode == false) {
+            Toast.makeText(
+                context,
+                "Opened a second window — use Recents to arrange split screen",
+                Toast.LENGTH_LONG
+            ).show()
+        }
     }
 }
 
