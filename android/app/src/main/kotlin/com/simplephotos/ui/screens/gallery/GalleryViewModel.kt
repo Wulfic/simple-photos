@@ -51,14 +51,19 @@ internal fun groupPhotosByDay(photos: List<PhotoEntity>): List<Pair<String, List
 
 // Sealed class for grid items (headers vs photos)
 internal sealed class GalleryGridItem {
-    data class Header(val dateLabel: String, val photoIds: Set<String>) : GalleryGridItem()
+    // dateLabel: full "EEEE, MMMM d, yyyy" for the header row.
+    // shortLabel: compact "MMM d" for the select-day chip so the user can tell
+    // which day they're selecting mid-scroll (todo1 #2).
+    data class Header(val dateLabel: String, val shortLabel: String, val photoIds: Set<String>) : GalleryGridItem()
     data class Photo(val photo: PhotoEntity) : GalleryGridItem()
 }
 
 internal fun buildGridItems(dayGroups: List<Pair<String, List<PhotoEntity>>>): List<GalleryGridItem> {
+    val shortFmt = SimpleDateFormat("MMM d", Locale.getDefault())
     val items = mutableListOf<GalleryGridItem>()
     for ((dateLabel, photos) in dayGroups) {
-        items.add(GalleryGridItem.Header(dateLabel, photos.map { it.localId }.toSet()))
+        val shortLabel = photos.firstOrNull()?.let { shortFmt.format(Date(it.takenAt)) } ?: dateLabel
+        items.add(GalleryGridItem.Header(dateLabel, shortLabel, photos.map { it.localId }.toSet()))
         for (photo in photos) {
             items.add(GalleryGridItem.Photo(photo))
         }

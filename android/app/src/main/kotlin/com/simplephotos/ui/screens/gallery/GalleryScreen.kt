@@ -378,6 +378,7 @@ fun GalleryScreen(
                             if (header != null) {
                                 DayHeader(
                                     dateLabel = header.dateLabel,
+                                    shortLabel = header.shortLabel,
                                     isSelectionMode = viewModel.isSelectionMode,
                                     allSelected = header.photoIds.all { it in viewModel.selectedIds },
                                     onSelectDay = { viewModel.selectDay(header.photoIds) }
@@ -448,6 +449,7 @@ fun GalleryScreen(
 @Composable
 private fun DayHeader(
     dateLabel: String,
+    shortLabel: String,
     isSelectionMode: Boolean,
     allSelected: Boolean,
     onSelectDay: () -> Unit
@@ -479,7 +481,9 @@ private fun DayHeader(
                 shape = RoundedCornerShape(16.dp)
             ) {
                 Text(
-                    if (allSelected) "Selected" else "Select day",
+                    // Name the day in the chip so it's clear which day is being
+                    // selected mid-scroll (todo1 #2).
+                    if (allSelected) "Selected" else "Select $shortLabel",
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Medium,
                     color = if (allSelected) Color(0xFF22C55E) else MaterialTheme.colorScheme.onSurfaceVariant,
