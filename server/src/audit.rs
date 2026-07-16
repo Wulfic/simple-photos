@@ -254,6 +254,9 @@ pub async fn log(
 
     // Own the values that reference borrowed data so the spawned task is 'static.
     let pool = state.pool.clone();
+    // Username lookup uses the read pool so it never contends with the write
+    // pool during high-frequency events (e.g. a bulk upload's blob_upload flood).
+    let read_pool = state.read_pool.clone();
     let audit_tx = state.audit_tx.clone();
     let event_str = event.as_str().to_string();
     let user_id_owned = user_id.map(|s| s.to_string());
@@ -280,7 +283,7 @@ pub async fn log(
             // instead of the raw UUID. The paginated fetch does this via a JOIN;
             // the broadcast has to do it explicitly. Best-effort — a lookup
             // failure just leaves `username` None (UI falls back to the UUID).
-            let username = resolve_username(&pool, user_id_owned.as_deref()).await;
+            let username = resolve_username(&read_pool, user_id_owned.as_deref()).await;
             // Broadcast to SSE subscribers — ignore send errors (no receivers = ok)
             let _ = audit_tx.send(AuditBroadcast {
                 id: id.clone(),
