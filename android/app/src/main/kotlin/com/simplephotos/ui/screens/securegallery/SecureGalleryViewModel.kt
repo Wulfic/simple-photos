@@ -12,6 +12,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.simplephotos.data.SecureSmartAlbum
+import com.simplephotos.data.SecureSmartAlbums
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.remote.dto.SecureGallery
 import com.simplephotos.data.remote.dto.SecureGalleryItem
@@ -81,6 +83,23 @@ class SecureGalleryViewModel @Inject constructor(
     var itemsLoading by mutableStateOf(false)
         private set
 
+    // ── Secure smart albums (built-in, media-type derived) ──────────────────
+    // The aggregate feed across ALL secure galleries, fetched once after unlock
+    // and refreshed on every mutation. Smart-album membership derives from it.
+    var allItems by mutableStateOf<List<SecureGalleryItem>>(emptyList())
+        private set
+    var allItemsLoading by mutableStateOf(false)
+        private set
+    // When a smart album is open, `selectedGallery` is null and this holds the
+    // smart id (a synthetic selection — never a fake SecureGallery instance, so
+    // smart ids can't leak into deleteGallery/addPhotosToGallery).
+    var selectedSmartAlbumId by mutableStateOf<String?>(null)
+        private set
+
+    /** Non-empty secure smart albums, recomputed from the aggregate feed. */
+    val smartAlbums: List<SecureSmartAlbum>
+        get() = SecureSmartAlbums.compute(allItems)
+
     // ── Picker source selection ─────────────────────────────────────────────
     // The "Add Photos" picker can draw from the full library OR a specific
     // album / smart album, mirroring the web flow. `pickerAlbums` are the
@@ -118,6 +137,7 @@ class SecureGalleryViewModel @Inject constructor(
                 isAuthenticated = true
                 Log.i(TAG, "Unlock successful, token obtained")
                 loadGalleries()
+                loadAllItems()
             } catch (e: Exception) {
                 Log.e(TAG, "Unlock failed", e)
                 authError = e.message ?: "Invalid password"
@@ -143,15 +163,52 @@ class SecureGalleryViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Load the aggregate item feed for the secure smart albums. If a smart album
+     * is currently open, its item list is re-derived from the fresh feed so a
+     * mutation (remove) reflects immediately.
+     */
+    fun loadAllItems() {
+        viewModelScope.launch {
+            allItemsLoading = true
+            try {
+                val res = withContext(Dispatchers.IO) {
+                    secureGalleryRepository.listAllItems(galleryToken)
+                }
+                allItems = res.items
+                Log.d(TAG, "Loaded ${allItems.size} aggregate secure items")
+                selectedSmartAlbumId?.let { items = SecureSmartAlbums.filter(allItems, it) }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to load aggregate secure items", e)
+                error = "Failed to load secure albums: ${e.message}"
+            } finally {
+                allItemsLoading = false
+            }
+        }
+    }
+
     fun selectGallery(gallery: SecureGallery) {
         Log.d(TAG, "selectGallery: id=${gallery.id} name=${gallery.name} items=${gallery.itemCount}")
+        selectedSmartAlbumId = null
         selectedGallery = gallery
         loadItems(gallery.id)
         loadPhotos()
     }
 
+    /**
+     * Open a built-in secure smart album. No per-gallery fetch and no picker
+     * prep (smart views are read-only) — items derive from the aggregate feed.
+     */
+    fun selectSmartAlbum(id: String) {
+        Log.d(TAG, "selectSmartAlbum: id=$id")
+        selectedGallery = null
+        selectedSmartAlbumId = id
+        items = SecureSmartAlbums.filter(allItems, id)
+    }
+
     fun deselectGallery() {
         selectedGallery = null
+        selectedSmartAlbumId = null
         items = emptyList()
     }
 
@@ -288,6 +345,7 @@ class SecureGalleryViewModel @Inject constructor(
                     items = emptyList()
                 }
                 loadGalleries()
+                loadAllItems()
             } catch (e: Exception) {
                 Log.e(TAG, "Delete gallery failed: ${gallery.id}", e)
                 error = "Delete failed: ${e.message}"
@@ -328,6 +386,7 @@ class SecureGalleryViewModel @Inject constructor(
             }
             loadItems(gallery.id)
             loadGalleries()
+            loadAllItems()
         }
     }
 
@@ -348,23 +407,44 @@ class SecureGalleryViewModel @Inject constructor(
      * exact bug this fixes.
      */
     fun removeItems(targets: List<SecureGalleryItem>) {
-        val gallery = selectedGallery ?: return
         if (targets.isEmpty()) return
-        val burstIds = targets.mapNotNull { it.burstId }.filter { it.isNotEmpty() }.toSet()
-        val toRemove = (targets + items.filter { !it.burstId.isNullOrEmpty() && it.burstId in burstIds })
-            .distinctBy { it.id }
+        // Route each item to its OWNING album: in a smart view `selectedGallery`
+        // is null and items span multiple galleries, so we can't assume one
+        // target gallery. Fall back to the selected real gallery when an item
+        // predates gallery_id (older server).
+        val fallbackGalleryId = selectedGallery?.id
+        // Burst-aware, but gallery-SCOPED: siblings must share BOTH the burst_id
+        // and the owning gallery. Frames of one burst live in one album, so this
+        // just guards against a hypothetical cross-album burst_id collision.
+        val burstKeys = targets
+            .filter { !it.burstId.isNullOrEmpty() }
+            .map { it.galleryId to it.burstId }
+            .toSet()
+        val siblings = items.filter {
+            !it.burstId.isNullOrEmpty() && (it.galleryId to it.burstId) in burstKeys
+        }
+        val toRemove = (targets + siblings).distinctBy { it.id }
         viewModelScope.launch {
             try {
                 withContext(Dispatchers.IO) {
                     coroutineScope {
-                        toRemove.map { item ->
-                            async { secureGalleryRepository.removeItem(gallery.id, item.id) }
+                        toRemove.mapNotNull { item ->
+                            val gid = item.galleryId ?: fallbackGalleryId
+                            if (gid == null) {
+                                Log.e(TAG, "  cannot remove item ${item.id}: no owning gallery id")
+                                null
+                            } else {
+                                async { secureGalleryRepository.removeItem(gid, item.id) }
+                            }
                         }.awaitAll()
                     }
                 }
-                Log.i(TAG, "Removed ${toRemove.size} item(s) from gallery ${gallery.id}")
-                loadItems(gallery.id)
+                Log.i(TAG, "Removed ${toRemove.size} item(s) from secure album(s)")
+                // Refresh the aggregate feed (re-derives smart items) and the
+                // album list; real albums also re-fetch their own items.
+                loadAllItems()
                 loadGalleries()
+                selectedGallery?.let { loadItems(it.id) }
             } catch (e: Exception) {
                 Log.e(TAG, "Remove items failed (${toRemove.size} targets)", e)
                 error = "Remove failed: ${e.message}"

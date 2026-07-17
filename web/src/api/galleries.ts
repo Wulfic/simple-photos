@@ -9,6 +9,28 @@
  */
 import { request } from "./core";
 
+/**
+ * A single item in a secure gallery. `gallery_id` (the owning album) is present
+ * on both the per-gallery and aggregate responses; `gallery_name` is only set
+ * by the aggregate `/galleries/secure/items` endpoint (used for the smart-album
+ * detail header).
+ */
+export type SecureGalleryItem = {
+  id: string;
+  blob_id: string;
+  added_at: string;
+  gallery_id: string;
+  gallery_name?: string | null;
+  encrypted_thumb_blob_id?: string | null;
+  width?: number | null;
+  height?: number | null;
+  media_type?: string | null;
+  photo_subtype?: string | null;
+  burst_id?: string | null;
+  duration_secs?: number | null;
+  motion_video_blob_id?: string | null;
+};
+
 // ── Secure Galleries API ─────────────────────────────────────────────────────
 
 export const secureGalleriesApi = {
@@ -44,21 +66,20 @@ export const secureGalleriesApi = {
     ),
 
   listItems: (galleryId: string, galleryToken: string) =>
-    request<{
-      items: Array<{
-        id: string;
-        blob_id: string;
-        added_at: string;
-        encrypted_thumb_blob_id?: string | null;
-        width?: number | null;
-        height?: number | null;
-        media_type?: string | null;
-        photo_subtype?: string | null;
-        burst_id?: string | null;
-        duration_secs?: number | null;
-        motion_video_blob_id?: string | null;
-      }>;
-    }>(`/galleries/secure/${galleryId}/items`, {
+    request<{ items: SecureGalleryItem[] }>(
+      `/galleries/secure/${galleryId}/items`,
+      {
+        headers: { "X-Gallery-Token": galleryToken },
+      }
+    ),
+
+  /**
+   * List items across ALL of the user's secure galleries in one request.
+   * Each item carries its owning `gallery_id`/`gallery_name`. Feeds the
+   * built-in secure smart albums (see gallery/secureSmartAlbums.ts).
+   */
+  listAllItems: (galleryToken: string) =>
+    request<{ items: SecureGalleryItem[] }>(`/galleries/secure/items`, {
       headers: { "X-Gallery-Token": galleryToken },
     }),
 

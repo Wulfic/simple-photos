@@ -48,6 +48,14 @@ class SecureGalleryRepository @Inject constructor(
     suspend fun listItems(galleryId: String, galleryToken: String): SecureGalleryItemsResponse =
         api.listSecureGalleryItems(galleryId, galleryToken)
 
+    /**
+     * List items across ALL secure galleries in one request (requires gallery
+     * token). Feeds the built-in secure smart albums. Each item carries its
+     * owning [SecureGalleryItem.galleryId].
+     */
+    suspend fun listAllItems(galleryToken: String): SecureGalleryItemsResponse =
+        api.listAllSecureGalleryItems(galleryToken)
+
     /** Add a blob to a secure gallery. */
     suspend fun addItem(galleryId: String, blobId: String): SecureGalleryAddItemResponse =
         api.addSecureGalleryItem(galleryId, SecureGalleryAddItemRequest(blobId))

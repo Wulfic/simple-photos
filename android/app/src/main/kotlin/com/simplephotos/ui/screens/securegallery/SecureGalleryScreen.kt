@@ -93,17 +93,33 @@ fun SecureGalleryScreen(
         return
     }
 
-    // ── Gallery Detail ────────────────────────────────
+    // ── Gallery Detail (real album) ───────────────────
     val sel = viewModel.selectedGallery
     if (sel != null) {
         GalleryDetailView(
-            gallery = sel,
+            title = sel.name,
             items = viewModel.items,
             itemsLoading = viewModel.itemsLoading,
             error = viewModel.error,
             onBack = { viewModel.deselectGallery() },
             onAddPhotos = { viewModel.addPhotosToGallery(it) },
             viewModel = viewModel
+        )
+        return
+    }
+
+    // ── Smart Album Detail (read-only, media-type derived) ──
+    val smartId = viewModel.selectedSmartAlbumId
+    if (smartId != null) {
+        GalleryDetailView(
+            title = com.simplephotos.data.SecureSmartAlbums.labelOf(smartId) ?: "Secure",
+            items = viewModel.items,
+            itemsLoading = viewModel.allItemsLoading,
+            error = viewModel.error,
+            onBack = { viewModel.deselectGallery() },
+            onAddPhotos = { /* read-only: no target album */ },
+            viewModel = viewModel,
+            readOnly = true
         )
         return
     }
@@ -115,6 +131,7 @@ fun SecureGalleryScreen(
         error = viewModel.error,
         onBack = onBack,
         onGalleryClick = { viewModel.selectGallery(it) },
+        onSmartAlbumClick = { viewModel.selectSmartAlbum(it.id) },
         onCreateGallery = { viewModel.createGallery(it) },
         onDeleteGallery = { viewModel.deleteGallery(it) },
         viewModel = viewModel

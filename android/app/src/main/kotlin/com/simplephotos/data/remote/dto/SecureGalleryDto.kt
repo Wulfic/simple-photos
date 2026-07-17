@@ -41,6 +41,12 @@ data class SecureGalleryItem(
     val id: String,
     @SerializedName("blob_id") val blobId: String,
     @SerializedName("added_at") val addedAt: String,
+    // Owning album — present on both the per-gallery and aggregate responses.
+    // Needed to route a "remove" from a smart view to the real album; null only
+    // on responses from older servers.
+    @SerializedName("gallery_id") val galleryId: String? = null,
+    // Only set by the aggregate /galleries/secure/items feed (smart-album header).
+    @SerializedName("gallery_name") val galleryName: String? = null,
     @SerializedName("encrypted_thumb_blob_id") val encryptedThumbBlobId: String? = null,
     val width: Int? = null,
     val height: Int? = null,

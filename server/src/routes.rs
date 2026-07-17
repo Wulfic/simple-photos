@@ -432,6 +432,10 @@ fn gallery_routes() -> Router<AppState> {
             get(crate::gallery::secure::list_secure_blob_ids),
         )
         .route(
+            "/galleries/secure/items",
+            get(crate::gallery::secure::list_all_gallery_items),
+        )
+        .route(
             "/galleries/secure/{id}",
             delete(crate::gallery::secure::delete_secure_gallery),
         )

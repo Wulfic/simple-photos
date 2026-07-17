@@ -314,6 +314,52 @@ pub async fn add_gallery_item(
         return Err(AppError::NotFound);
     }
 
+    // Enforce the one-secure-album invariant BEFORE cloning: a photo may live
+    // in at most one secure gallery, so the "Secure Gallery" union view has no
+    // duplicates.  Until now this was only enforced client-side (the picker
+    // hides already-secured ids), so two windows / a stale picker / a raw API
+    // call could double-add.
+    //
+    // Determine the canonical "original" identity for this add: for a
+    // server-side photo id it's the id itself; for a client-encrypted blob id
+    // it's the owning photo's id (photos.encrypted_blob_id = req.blob_id).
+    let candidate_original_id: String = sqlx::query_scalar::<_, String>(
+        "SELECT id FROM photos WHERE encrypted_blob_id = ? AND user_id = ?",
+    )
+    .bind(&req.blob_id)
+    .bind(&auth.user_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .unwrap_or_else(|| req.blob_id.clone());
+
+    // Reject if this photo already lives in ANY of the user's secure galleries.
+    let existing: Option<(String, String)> = sqlx::query_as(
+        "SELECT gi.gallery_id, gi.id \
+         FROM encrypted_gallery_items gi \
+         JOIN encrypted_galleries g ON g.id = gi.gallery_id \
+         WHERE g.user_id = ? \
+           AND (gi.original_blob_id = ? OR gi.blob_id = ?)",
+    )
+    .bind(&auth.user_id)
+    .bind(&candidate_original_id)
+    .bind(&req.blob_id)
+    .fetch_optional(&state.pool)
+    .await?;
+
+    if let Some((existing_gallery_id, existing_item_id)) = existing {
+        tracing::info!(
+            target_gallery_id = %gallery_id,
+            existing_gallery_id = %existing_gallery_id,
+            existing_item_id = %existing_item_id,
+            req_blob_id = %req.blob_id,
+            candidate_original_id = %candidate_original_id,
+            "[DIAG:SECURE_ADD] Rejected duplicate add — photo already in a secure album"
+        );
+        return Err(AppError::Conflict(
+            "Photo is already in a secure album".into(),
+        ));
+    }
+
     // Fetch original blob metadata — first try the `blobs` table (encrypted
     // uploads), then fall back to the `photos` table (autoscanned/server-side
     // files).  The client may pass either a blob ID or a photo ID.
@@ -832,6 +878,104 @@ pub async fn list_gallery_items(
                 "id": r.id,
                 "blob_id": r.blob_id,
                 "added_at": r.added_at,
+                "gallery_id": gallery_id,
+                "encrypted_thumb_blob_id": r.encrypted_thumb_blob_id,
+                "width": r.width,
+                "height": r.height,
+                "media_type": r.media_type,
+                "photo_subtype": r.photo_subtype,
+                "burst_id": r.burst_id,
+                "duration_secs": r.duration_secs,
+                "motion_video_blob_id": r.motion_video_blob_id,
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({ "items": items_json })))
+}
+
+/// GET /api/galleries/secure/items
+/// List items across ALL of the user's secure galleries (requires unlock token
+/// in header).  This is the aggregate feed the clients use to derive the
+/// built-in secure smart albums (Secure Gallery / Photos / GIFs / Videos /
+/// Audio) without an N+1 per-gallery fetch.
+///
+/// Each item carries its owning `gallery_id` (+ `gallery_name` for the detail
+/// header) so a "remove" from a smart view can route to the real album.
+///
+/// Token verification is identical to [`list_gallery_items`]; there is no
+/// gallery-id ownership check because the scope is simply `g.user_id = ?`.
+pub async fn list_all_gallery_items(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, AppError> {
+    // Verify the unlock token — same contract as the per-gallery endpoint.
+    let token = headers
+        .get("x-gallery-token")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| {
+            AppError::Unauthorized("Gallery token required. Unlock the gallery first.".into())
+        })?;
+
+    if !crate::gallery::secure_token::verify(token, &auth.user_id, &state.config.auth.jwt_secret) {
+        return Err(AppError::Unauthorized(
+            "Invalid or expired gallery token. Unlock the gallery again.".into(),
+        ));
+    }
+
+    // Same item shape as `list_gallery_items`, plus the owning gallery id/name.
+    #[derive(FromRow)]
+    struct AllGalleryItemRow {
+        id: String,
+        blob_id: String,
+        added_at: String,
+        gallery_id: String,
+        gallery_name: String,
+        encrypted_thumb_blob_id: Option<String>,
+        width: Option<i64>,
+        height: Option<i64>,
+        media_type: Option<String>,
+        photo_subtype: Option<String>,
+        burst_id: Option<String>,
+        duration_secs: Option<f64>,
+        motion_video_blob_id: Option<String>,
+    }
+
+    let items = sqlx::query_as::<_, AllGalleryItemRow>(
+        "SELECT gi.id, \
+                COALESCE(gi.encrypted_blob_id, p.encrypted_blob_id, gi.blob_id) as blob_id, \
+                gi.added_at, \
+                gi.gallery_id, \
+                g.name as gallery_name, \
+                COALESCE(gi.encrypted_thumb_blob_id, p.encrypted_thumb_blob_id, op.encrypted_thumb_blob_id) as encrypted_thumb_blob_id, \
+                COALESCE(p.width, op.width) as width, \
+                COALESCE(p.height, op.height) as height, \
+                COALESCE(p.media_type, op.media_type) as media_type, \
+                COALESCE(p.photo_subtype, op.photo_subtype) as photo_subtype, \
+                COALESCE(p.burst_id, op.burst_id) as burst_id, \
+                COALESCE(p.duration_secs, op.duration_secs) as duration_secs, \
+                COALESCE(p.motion_video_blob_id, op.motion_video_blob_id) as motion_video_blob_id \
+         FROM encrypted_gallery_items gi \
+         JOIN encrypted_galleries g ON g.id = gi.gallery_id \
+         LEFT JOIN photos p ON p.id = gi.blob_id AND p.encrypted_blob_id IS NOT NULL \
+         LEFT JOIN photos op ON op.id = gi.original_blob_id \
+         WHERE g.user_id = ? \
+         ORDER BY gi.added_at DESC",
+    )
+    .bind(&auth.user_id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let items_json: Vec<serde_json::Value> = items
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "id": r.id,
+                "blob_id": r.blob_id,
+                "added_at": r.added_at,
+                "gallery_id": r.gallery_id,
+                "gallery_name": r.gallery_name,
                 "encrypted_thumb_blob_id": r.encrypted_thumb_blob_id,
                 "width": r.width,
                 "height": r.height,

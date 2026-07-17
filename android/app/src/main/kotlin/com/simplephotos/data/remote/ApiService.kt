@@ -326,6 +326,13 @@ interface ApiService {
         @Header("X-Gallery-Token") galleryToken: String
     ): SecureGalleryItemsResponse
 
+    // Aggregate feed across ALL of the user's secure galleries — drives the
+    // built-in secure smart albums. Each item carries its owning gallery_id.
+    @GET("api/galleries/secure/items")
+    suspend fun listAllSecureGalleryItems(
+        @Header("X-Gallery-Token") galleryToken: String
+    ): SecureGalleryItemsResponse
+
     @POST("api/galleries/secure/{id}/items")
     suspend fun addSecureGalleryItem(
         @Path("id") galleryId: String,

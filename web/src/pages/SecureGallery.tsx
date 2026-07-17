@@ -25,7 +25,18 @@ import {
   isGalleryTokenRejection,
 } from "../utils/galleryToken";
 import { useSecureAdd } from "../store/secureAdd";
-import { SecureGalleryItem, SecureAlbumCover } from "../gallery";
+import {
+  SecureGalleryItem,
+  SecureAlbumCover,
+  SecureSmartAlbumCover,
+} from "../gallery";
+import {
+  computeSecureSmartAlbums,
+  filterSecureSmartAlbum,
+  isSecureSmartAlbum,
+  type SecureSmartAlbum,
+} from "../gallery/secureSmartAlbums";
+import type { SecureGalleryItem as SecureItem } from "../api/galleries";
 import { GallerySkeleton, AlbumGridSkeleton } from "../components/skeletons";
 
 interface Gallery {
@@ -35,18 +46,13 @@ interface Gallery {
   item_count: number;
 }
 
-interface GalleryItem {
-  id: string;
-  blob_id: string;
-  added_at: string;
-  encrypted_thumb_blob_id?: string | null;
-  width?: number | null;
-  height?: number | null;
-  media_type?: string | null;
-  photo_subtype?: string | null;
-  burst_id?: string | null;
-  duration_secs?: number | null;
-  motion_video_blob_id?: string | null;
+// Item shape from the secure-gallery API (per-album and aggregate). `gallery_id`
+// is always present; `gallery_name` only on the aggregate feed.
+type GalleryItem = SecureItem;
+
+/** Synthesize a Gallery card from a computed secure smart album. */
+function smartToGallery(sa: SecureSmartAlbum): Gallery {
+  return { id: sa.id, name: sa.label, created_at: "", item_count: sa.count };
 }
 
 /**
@@ -88,6 +94,17 @@ export default function SecureGallery() {
   // Gallery items state
   const [items, setItems] = useState<GalleryItem[]>([]);
   const [itemsLoading, setItemsLoading] = useState(false);
+
+  // Aggregate feed across ALL secure galleries — drives the built-in secure
+  // smart albums (Secure Gallery / Photos / GIFs / Videos / Audio). Fetched
+  // once after unlock and refreshed on every mutation (create/delete/remove).
+  const [allItems, setAllItems] = useState<GalleryItem[]>([]);
+  const [allItemsLoading, setAllItemsLoading] = useState(false);
+
+  // Visible secure smart albums (non-empty types only), recomputed as the feed
+  // changes. Cheap pure derivation — no memo needed. Declared here so the
+  // ?album restore effect (below) can reference it.
+  const smartAlbums = computeSecureSmartAlbums(allItems);
 
   // Preserve scroll position per secure album when opening a photo and
   // returning. Keyed by the selected gallery so each album restores its own.
@@ -143,11 +160,19 @@ export default function SecureGallery() {
   // album).
   useEffect(() => {
     const albumId = searchParams.get("album");
-    if (authenticated && albumId && !selectedGallery && galleries.length > 0) {
+    if (!authenticated || !albumId || selectedGallery) return;
+    // Smart album: synthesize the selection from the aggregate feed once loaded.
+    // Fixes return-from-viewer landing back INSIDE a smart album.
+    if (isSecureSmartAlbum(albumId)) {
+      const sa = smartAlbums.find((s) => s.id === albumId);
+      if (sa) setSelectedGallery(smartToGallery(sa));
+      return;
+    }
+    if (galleries.length > 0) {
       const g = galleries.find((x) => x.id === albumId);
       if (g) setSelectedGallery(g);
     }
-  }, [authenticated, searchParams, galleries, selectedGallery]);
+  }, [authenticated, searchParams, galleries, selectedGallery, smartAlbums]);
 
   // Load galleries after auth
   const loadGalleries = useCallback(async () => {
@@ -165,6 +190,30 @@ export default function SecureGallery() {
   useEffect(() => {
     if (authenticated) loadGalleries();
   }, [authenticated, loadGalleries]);
+
+  // Load the aggregate item feed for the secure smart albums. Token-gated like
+  // per-album items — a rejected token means the session lapsed → back to gate.
+  const loadAllItems = useCallback(async () => {
+    if (!galleryToken) return;
+    setAllItemsLoading(true);
+    try {
+      const res = await api.secureGalleries.listAllItems(galleryToken);
+      setAllItems(res.items);
+    } catch (err: unknown) {
+      if (isGalleryTokenRejection(err)) {
+        lock("Your secure session expired. Enter your password to continue.");
+      } else {
+        console.error("[SecureGallery] Failed to load aggregate items", err);
+        setError("Failed to load secure albums.");
+      }
+    } finally {
+      setAllItemsLoading(false);
+    }
+  }, [galleryToken, lock]);
+
+  useEffect(() => {
+    if (authenticated) loadAllItems();
+  }, [authenticated, loadAllItems]);
 
   // Load items for selected gallery
   const loadItems = useCallback(
@@ -189,9 +238,19 @@ export default function SecureGallery() {
     [galleryToken, lock]
   );
 
+  // Real album → fetch its items with the gallery token. Smart album → derive
+  // items from the already-loaded aggregate feed (no per-gallery request).
   useEffect(() => {
-    if (selectedGallery) loadItems(selectedGallery.id);
+    if (selectedGallery && !isSecureSmartAlbum(selectedGallery.id)) {
+      loadItems(selectedGallery.id);
+    }
   }, [selectedGallery, loadItems]);
+
+  useEffect(() => {
+    if (selectedGallery && isSecureSmartAlbum(selectedGallery.id)) {
+      setItems(filterSecureSmartAlbum(allItems, selectedGallery.id));
+    }
+  }, [selectedGallery, allItems]);
 
   // Handle password auth
   async function handleUnlock(e: React.FormEvent) {
@@ -226,6 +285,7 @@ export default function SecureGallery() {
       setNewName("");
       setShowCreate(false);
       await loadGalleries();
+      await loadAllItems();
     } catch (err: unknown) {
       setError(getErrorMessage(err));
     } finally {
@@ -245,6 +305,7 @@ export default function SecureGallery() {
         setItems([]);
       }
       await loadGalleries();
+      await loadAllItems();
     } catch (err: unknown) {
       setError(getErrorMessage(err));
     }
@@ -257,17 +318,29 @@ export default function SecureGallery() {
   // the next gallery refresh unhides it automatically).
   async function handleRemoveItem(item: GalleryItem) {
     if (!selectedGallery) return;
+    // In a smart view the selected "gallery" is synthetic — route removal to
+    // the item's REAL owning album. `gallery_id` is always present on both the
+    // per-album and aggregate feeds.
+    const smartView = isSecureSmartAlbum(selectedGallery.id);
+    const owningGalleryId = smartView ? item.gallery_id : selectedGallery.id;
+    if (!owningGalleryId) {
+      setError("Could not determine which album this photo belongs to.");
+      return;
+    }
     if (!confirm("Remove this photo from the secure album? It will return to your regular gallery."))
       return;
     try {
-      await api.secureGalleries.removeItem(selectedGallery.id, item.id);
+      await api.secureGalleries.removeItem(owningGalleryId, item.id);
       // Drop the local IDB clone entry that `handleAddSelectedPhotos`
       // created at add time, so the secure album view stays consistent
       // even before the next reload.
       try { await db.photos.delete(item.blob_id); } catch { /* non-fatal */ }
       setSuccess("Photo returned to your gallery.");
-      await loadItems(selectedGallery.id);
+      // Refresh the aggregate feed (smart items re-derive from it via effect)
+      // and the album list; real albums also re-fetch their own items.
+      await loadAllItems();
       await loadGalleries();
+      if (!smartView) await loadItems(selectedGallery.id);
     } catch (err: unknown) {
       setError(getErrorMessage(err));
     }
@@ -379,7 +452,7 @@ export default function SecureGallery() {
               </h2>
               <span className="text-fg-muted text-sm">{displayItems.length} items</span>
             </div>
-            {!isBackupServer && (
+            {!isBackupServer && !isSecureSmartAlbum(selectedGallery.id) && (
               <div className="flex gap-2">
                 <button
                   onClick={() => {
@@ -411,13 +484,13 @@ export default function SecureGallery() {
             </p>
           )}
 
-          {itemsLoading ? (
+          {(isSecureSmartAlbum(selectedGallery.id) ? allItemsLoading : itemsLoading) ? (
             <GallerySkeleton />
           ) : items.length === 0 ? (
             <div className="text-center py-16 border-2 border-dashed border-edge rounded-lg">
               <span className="text-4xl mb-3 block">🖼️</span>
               <p className="text-fg-muted text-sm mb-3">This album is empty.</p>
-              {!isBackupServer && (
+              {!isBackupServer && !isSecureSmartAlbum(selectedGallery.id) && (
               <button
                 onClick={() => {
                   startSecureAdd(selectedGallery.id, selectedGallery.name);
@@ -562,6 +635,37 @@ export default function SecureGallery() {
               </button>
             </div>
           </form>
+        )}
+
+        {/* Smart albums — built-in, media-type derived; only non-empty types.
+            Read-only: no delete affordance, no create. */}
+        {smartAlbums.length > 0 && (
+          <div className="mb-8">
+            <h3 className="text-sm font-semibold text-fg-muted mb-3">Smart albums</h3>
+            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-3">
+              {smartAlbums.map((sa) => (
+                <div
+                  key={sa.id}
+                  className="card card-interactive p-2 cursor-pointer relative"
+                  onClick={() => {
+                    setSelectedGallery(smartToGallery(sa));
+                    navigate(`/secure-gallery?album=${sa.id}`);
+                  }}
+                >
+                  <div className="aspect-square bg-surface-raised rounded mb-1.5 flex items-center justify-center overflow-hidden">
+                    <SecureSmartAlbumCover item={sa.coverItem} />
+                  </div>
+                  <p className="font-medium text-sm truncate flex items-center gap-1">
+                    <span className="shrink-0">🔒</span>
+                    <span className="truncate">{sa.label}</span>
+                  </p>
+                  <p className="text-xs text-fg-muted">
+                    {sa.count} item{sa.count !== 1 ? "s" : ""}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
         )}
 
         {/* Album list */}

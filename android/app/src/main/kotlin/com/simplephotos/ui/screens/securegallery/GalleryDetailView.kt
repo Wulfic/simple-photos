@@ -28,7 +28,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.simplephotos.data.collapseBursts
 import com.simplephotos.data.local.entities.PhotoEntity
-import com.simplephotos.data.remote.dto.SecureGallery
 import com.simplephotos.data.remote.dto.SecureGalleryItem
 import com.simplephotos.ui.theme.Violet
 
@@ -42,13 +41,17 @@ private enum class PickerTab { All, Recents, Albums }
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 internal fun GalleryDetailView(
-    gallery: SecureGallery,
+    title: String,
     items: List<SecureGalleryItem>,
     itemsLoading: Boolean,
     error: String?,
     onBack: () -> Unit,
     onAddPhotos: (List<String>) -> Unit,
-    viewModel: SecureGalleryViewModel
+    viewModel: SecureGalleryViewModel,
+    // Read-only smart-album view: no target album to add into, so every "Add
+    // Photos" affordance is hidden. Per-item Remove still works (routed to the
+    // item's real owning album by the view model).
+    readOnly: Boolean = false,
 ) {
     var showAddPhotos by remember { mutableStateOf(false) }
     var selectedBlobIds by remember { mutableStateOf(emptySet<String>()) }
@@ -179,7 +182,7 @@ internal fun GalleryDetailView(
                 TopAppBar(
                     title = {
                         Column {
-                            Text(gallery.name, maxLines = 1)
+                            Text(title, maxLines = 1)
                             Text(
                                 "${displayItems.size} items",
                                 style = MaterialTheme.typography.bodySmall,
@@ -193,7 +196,7 @@ internal fun GalleryDetailView(
                         }
                     },
                     actions = {
-                        if (!showAddPhotos) {
+                        if (!readOnly && !showAddPhotos) {
                             IconButton(onClick = {
                                 showAddPhotos = true
                                 selectedBlobIds = emptySet()
@@ -286,15 +289,17 @@ internal fun GalleryDetailView(
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text("This album is empty.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Spacer(Modifier.height(8.dp))
-                            Button(onClick = {
-                                showAddPhotos = true
-                                selectedBlobIds = emptySet()
-                                pickerTab = PickerTab.All
-                                browsingAlbumId = null
-                                viewModel.selectPickerSource("all")
-                            }) {
-                                Text("Add Photos")
+                            if (!readOnly) {
+                                Spacer(Modifier.height(8.dp))
+                                Button(onClick = {
+                                    showAddPhotos = true
+                                    selectedBlobIds = emptySet()
+                                    pickerTab = PickerTab.All
+                                    browsingAlbumId = null
+                                    viewModel.selectPickerSource("all")
+                                }) {
+                                    Text("Add Photos")
+                                }
                             }
                         }
                     }

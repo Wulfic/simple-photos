@@ -5,6 +5,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as lazyGridItems
 import androidx.compose.foundation.shape.CircleShape
@@ -25,7 +26,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.simplephotos.R
+import com.simplephotos.data.SecureSmartAlbum
 import com.simplephotos.data.remote.dto.SecureGallery
+import com.simplephotos.data.remote.dto.SecureGalleryItem
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Gallery List View
@@ -39,10 +42,14 @@ internal fun GalleryListView(
     error: String?,
     onBack: () -> Unit,
     onGalleryClick: (SecureGallery) -> Unit,
+    onSmartAlbumClick: (SecureSmartAlbum) -> Unit,
     onCreateGallery: (String) -> Unit,
     onDeleteGallery: (SecureGallery) -> Unit,
     viewModel: SecureGalleryViewModel
 ) {
+    // Built-in smart albums (non-empty types only), derived from the aggregate
+    // feed. Read-only: no delete affordance, no create.
+    val smartAlbums = viewModel.smartAlbums
     var showCreate by remember { mutableStateOf(false) }
     var newName by remember { mutableStateOf("") }
     var confirmDeleteId by remember { mutableStateOf<String?>(null) }
@@ -115,7 +122,7 @@ internal fun GalleryListView(
                 ) {
                     CircularProgressIndicator()
                 }
-            } else if (galleries.isEmpty()) {
+            } else if (galleries.isEmpty() && smartAlbums.isEmpty()) {
                 Box(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
@@ -158,6 +165,35 @@ internal fun GalleryListView(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     contentPadding = PaddingValues(vertical = 8.dp)
                 ) {
+                    // Built-in smart albums first (full-width header + cards),
+                    // then the user's own albums. Smart cards have no delete.
+                    if (smartAlbums.isNotEmpty()) {
+                        item(span = { GridItemSpan(maxLineSpan) }) {
+                            Text(
+                                "Smart albums",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier.padding(top = 4.dp, bottom = 4.dp)
+                            )
+                        }
+                        lazyGridItems(smartAlbums, key = { it.id }) { sa ->
+                            SmartAlbumCard(
+                                smartAlbum = sa,
+                                viewModel = viewModel,
+                                onClick = { onSmartAlbumClick(sa) }
+                            )
+                        }
+                    }
+                    if (galleries.isNotEmpty() && smartAlbums.isNotEmpty()) {
+                        item(span = { GridItemSpan(maxLineSpan) }) {
+                            Text(
+                                "Albums",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
+                            )
+                        }
+                    }
                     lazyGridItems(galleries, key = { it.id }) { gallery ->
                         Card(
                             modifier = Modifier
@@ -221,6 +257,97 @@ internal fun GalleryListView(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Smart Album Card — a built-in, read-only secure smart album (no delete)
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun SmartAlbumCard(
+    smartAlbum: SecureSmartAlbum,
+    viewModel: SecureGalleryViewModel,
+    onClick: () -> Unit,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            SmartAlbumCoverThumbnail(
+                item = smartAlbum.coverItem,
+                viewModel = viewModel,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(1f)
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                smartAlbum.label,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1
+            )
+            Text(
+                "${smartAlbum.count} item${if (smartAlbum.count != 1) "s" else ""}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+/**
+ * Cover thumbnail for a smart album, rendered from an ALREADY-KNOWN item (the
+ * cover from the aggregate feed) — no extra `listItems` fetch, unlike
+ * [GalleryCoverThumbnail].
+ */
+@Composable
+private fun SmartAlbumCoverThumbnail(
+    item: SecureGalleryItem,
+    viewModel: SecureGalleryViewModel,
+    modifier: Modifier = Modifier.size(48.dp)
+) {
+    var bitmap by remember(item.blobId) { mutableStateOf<android.graphics.Bitmap?>(null) }
+
+    LaunchedEffect(item.blobId) {
+        if (bitmap == null) {
+            val data = try {
+                viewModel.downloadThumb(item.blobId, item.encryptedThumbBlobId)
+            } catch (_: Exception) { null }
+            if (data != null) {
+                bitmap = try {
+                    BitmapFactory.decodeByteArray(data, 0, data.size)
+                } catch (_: Exception) { null }
+            }
+        }
+    }
+
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.primaryContainer
+    ) {
+        val bmp = bitmap
+        if (bmp != null) {
+            Image(
+                bitmap = bmp.asImageBitmap(),
+                contentDescription = "Album cover",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+        } else {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_locks),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
             }
         }
     }

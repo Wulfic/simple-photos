@@ -1302,3 +1302,135 @@ class TestSecureAddAlreadyEncrypted:
                 f"Clone blob is not valid AES-GCM ciphertext: {e}"
             )
         assert len(plaintext) > 0
+
+
+class TestSecureAggregateItems:
+    """The aggregate feed GET /api/galleries/secure/items — one request that
+    returns every item across ALL of the user's secure galleries, each tagged
+    with its owning gallery_id/gallery_name.  Drives the built-in secure smart
+    albums on web + Android.
+
+    NOTE: test_06 has PRE-EXISTING secure 401 failures on clean dev (see memory
+    e2e-preexisting-failures-2026-07-15) — baseline before blaming this diff.
+    """
+
+    def test_aggregate_returns_items_across_galleries(self, user_client):
+        token = user_client.unlock_secure_gallery(USER_PASSWORD)["gallery_token"]
+        g1 = user_client.create_secure_gallery("Aggregate A")
+        g2 = user_client.create_secure_gallery("Aggregate B")
+
+        b1 = user_client.upload_blob("photo", generate_random_bytes(512))
+        b2 = user_client.upload_blob("photo", generate_random_bytes(768))
+        user_client.add_secure_gallery_item(g1["gallery_id"], b1["blob_id"], token)
+        user_client.add_secure_gallery_item(g2["gallery_id"], b2["blob_id"], token)
+
+        r = user_client.get(
+            "/api/galleries/secure/items",
+            headers={"x-gallery-token": token},
+        )
+        assert r.status_code == 200, f"aggregate items failed: HTTP {r.status_code}"
+        items = r.json()["items"]
+
+        # Every item must carry its owning gallery id/name + a media_type key.
+        for i in items:
+            assert "gallery_id" in i, "aggregate item missing gallery_id"
+            assert "gallery_name" in i, "aggregate item missing gallery_name"
+            assert "media_type" in i, "aggregate item missing media_type"
+
+        gallery_ids = {i["gallery_id"] for i in items}
+        assert g1["gallery_id"] in gallery_ids, "gallery A item missing from aggregate"
+        assert g2["gallery_id"] in gallery_ids, "gallery B item missing from aggregate"
+
+        names = {i["gallery_id"]: i["gallery_name"] for i in items}
+        assert names[g1["gallery_id"]] == "Aggregate A"
+        assert names[g2["gallery_id"]] == "Aggregate B"
+
+    def test_aggregate_without_token_fails(self, user_client):
+        r = user_client.get("/api/galleries/secure/items")
+        assert r.status_code in (400, 401, 403), (
+            f"aggregate items without token should be rejected, got {r.status_code}"
+        )
+
+    def test_aggregate_with_garbage_token_fails(self, user_client):
+        r = user_client.get(
+            "/api/galleries/secure/items",
+            headers={"x-gallery-token": "not-a-real-token"},
+        )
+        assert r.status_code in (400, 401, 403), (
+            f"aggregate items with garbage token should be rejected, got {r.status_code}"
+        )
+
+    def test_per_gallery_items_include_gallery_id(self, user_client):
+        """The per-gallery list_gallery_items response also carries gallery_id
+        so the item shape is identical everywhere (smart-view removal routing)."""
+        token = user_client.unlock_secure_gallery(USER_PASSWORD)["gallery_token"]
+        gallery = user_client.create_secure_gallery("Per-Gallery gid")
+        blob = user_client.upload_blob("photo", generate_random_bytes(512))
+        user_client.add_secure_gallery_item(gallery["gallery_id"], blob["blob_id"], token)
+
+        items = user_client.list_secure_gallery_items(gallery["gallery_id"], token)
+        assert len(items["items"]) == 1
+        assert items["items"][0]["gallery_id"] == gallery["gallery_id"], (
+            "per-gallery item missing/incorrect gallery_id"
+        )
+
+
+class TestSecureDuplicateGuard:
+    """Phase 0: the one-secure-album invariant is enforced SERVER-SIDE.  A photo
+    may live in at most one secure gallery — a second add (same album or a
+    different one) returns 409 Conflict.  Previously this was UI-only, so two
+    windows / a stale picker / a raw API call could double-add."""
+
+    def test_add_same_blob_twice_conflicts(self, user_client):
+        token = user_client.unlock_secure_gallery(USER_PASSWORD)["gallery_token"]
+        gallery = user_client.create_secure_gallery("Dup Same Album")
+        blob = user_client.upload_blob("photo", generate_random_bytes(512))
+
+        # First add succeeds.
+        user_client.add_secure_gallery_item(gallery["gallery_id"], blob["blob_id"], token)
+
+        # Second add of the SAME blob → 409.
+        r = user_client.post(
+            f"/api/galleries/secure/{gallery['gallery_id']}/items",
+            json_data={"blob_id": blob["blob_id"]},
+            headers={"x-gallery-token": token},
+        )
+        assert r.status_code == 409, (
+            f"re-adding the same blob should 409, got {r.status_code}: {r.text}"
+        )
+
+    def test_add_to_second_gallery_conflicts(self, user_client):
+        token = user_client.unlock_secure_gallery(USER_PASSWORD)["gallery_token"]
+        g1 = user_client.create_secure_gallery("Dup Gallery One")
+        g2 = user_client.create_secure_gallery("Dup Gallery Two")
+        blob = user_client.upload_blob("photo", generate_random_bytes(512))
+
+        user_client.add_secure_gallery_item(g1["gallery_id"], blob["blob_id"], token)
+
+        # Adding the same photo to a DIFFERENT secure gallery → 409.
+        r = user_client.post(
+            f"/api/galleries/secure/{g2['gallery_id']}/items",
+            json_data={"blob_id": blob["blob_id"]},
+            headers={"x-gallery-token": token},
+        )
+        assert r.status_code == 409, (
+            f"adding to a second secure gallery should 409, got {r.status_code}: {r.text}"
+        )
+
+    def test_server_photo_dup_add_conflicts(self, user_client):
+        """A server-side photo (photos-table id) is guarded too."""
+        token = user_client.unlock_secure_gallery(USER_PASSWORD)["gallery_token"]
+        gallery = user_client.create_secure_gallery("Dup Server Photo")
+        photo = user_client.upload_photo(unique_filename())
+        pid = photo["photo_id"]
+
+        user_client.add_secure_gallery_item(gallery["gallery_id"], pid, token)
+
+        r = user_client.post(
+            f"/api/galleries/secure/{gallery['gallery_id']}/items",
+            json_data={"blob_id": pid},
+            headers={"x-gallery-token": token},
+        )
+        assert r.status_code == 409, (
+            f"re-adding the same server photo should 409, got {r.status_code}: {r.text}"
+        )
