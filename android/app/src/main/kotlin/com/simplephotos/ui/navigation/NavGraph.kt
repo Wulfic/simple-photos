@@ -3,14 +3,17 @@
  */
 package com.simplephotos.ui.navigation
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.navigation.NavController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.simplephotos.ui.screens.album.AlbumDetailScreen
@@ -56,6 +59,17 @@ fun NavGraph(startRoute: String? = null) {
 
     if (startDestination == null) return // Loading
 
+    // Bounded back-history cap (#37). Registered *before* NavHost so any
+    // screen-level BackHandler (registered later, deeper in the tree) wins over
+    // it via the dispatcher's LIFO ordering. It only fires when the stack is
+    // more than [MAX_BACK_HISTORY] screens above the Gallery and the current
+    // screen doesn't own its own Back — otherwise it's disabled and Back pops
+    // normally, walking the genuine history one screen at a time.
+    val backStack by navController.currentBackStack.collectAsState()
+    val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route
+    val capBack = shouldJumpToGalleryOnBack(backStack.map { it.destination.route }, currentRoute)
+    BackHandler(enabled = capBack) { navController.navigateHome() }
+
     NavHost(
         navController = navController,
         startDestination = startDestination!!
@@ -67,7 +81,7 @@ fun NavGraph(startRoute: String? = null) {
         }
         composable(Screen.Login.route) {
             LoginScreen(
-                onLoginSuccess = { navController.navigate(Screen.Gallery.route) { popUpTo(0) } },
+                onLoginSuccess = { navController.navigateHome() },
                 onNavigateToRegister = { navController.navigate(Screen.Register.route) }
             )
         }
@@ -80,29 +94,29 @@ fun NavGraph(startRoute: String? = null) {
         composable(Screen.Gallery.route) {
             GalleryScreen(
                 onPhotoClick = { photoId -> navController.navigate(Screen.PhotoViewer.createRoute(photoId)) },
-                onAlbumsClick = { navController.navigate(Screen.AlbumList.route) },
-                onSearchClick = { navController.navigate(Screen.Search.route) },
-                onTrashClick = { navController.navigate(Screen.Trash.route) },
-                onSettingsClick = { navController.navigate(Screen.Settings.route) },
-                onSecureGalleryClick = { navController.navigate(Screen.SecureGallery.route) },
-                onSharedAlbumsClick = { navController.navigate(Screen.SharedAlbums.route) },
-                onDiagnosticsClick = { navController.navigate(Screen.Diagnostics.route) },
+                onAlbumsClick = { navController.navigateTopLevel(Screen.AlbumList.route) },
+                onSearchClick = { navController.navigateTopLevel(Screen.Search.route) },
+                onTrashClick = { navController.navigateTopLevel(Screen.Trash.route) },
+                onSettingsClick = { navController.navigateTopLevel(Screen.Settings.route) },
+                onSecureGalleryClick = { navController.navigateTopLevel(Screen.SecureGallery.route) },
+                onSharedAlbumsClick = { navController.navigateTopLevel(Screen.SharedAlbums.route) },
+                onDiagnosticsClick = { navController.navigateTopLevel(Screen.Diagnostics.route) },
                 onLogout = { navController.navigate(Screen.Login.route) { popUpTo(0) } },
                 isAdmin = isAdmin
             )
         }
         composable(Screen.AlbumList.route) {
             AlbumListScreen(
-                onGalleryClick = { navController.navigate(Screen.Gallery.route) { popUpTo(0) } },
-                onSearchClick = { navController.navigate(Screen.Search.route) },
-                onTrashClick = { navController.navigate(Screen.Trash.route) },
-                onSettingsClick = { navController.navigate(Screen.Settings.route) },
-                onSecureGalleryClick = { navController.navigate(Screen.SecureGallery.route) },
-                onSharedAlbumsClick = { navController.navigate(Screen.SharedAlbums.route) },
-                onDiagnosticsClick = { navController.navigate(Screen.Diagnostics.route) },
+                onGalleryClick = { navController.navigateHome() },
+                onSearchClick = { navController.navigateTopLevel(Screen.Search.route) },
+                onTrashClick = { navController.navigateTopLevel(Screen.Trash.route) },
+                onSettingsClick = { navController.navigateTopLevel(Screen.Settings.route) },
+                onSecureGalleryClick = { navController.navigateTopLevel(Screen.SecureGallery.route) },
+                onSharedAlbumsClick = { navController.navigateTopLevel(Screen.SharedAlbums.route) },
+                onDiagnosticsClick = { navController.navigateTopLevel(Screen.Diagnostics.route) },
                 onLogout = { navController.navigate(Screen.Login.route) { popUpTo(0) } },
                 onAlbumClick = { albumId -> navController.navigate(Screen.AlbumDetail.createRoute(albumId)) },
-                onSharedAlbumClick = { navController.navigate(Screen.SharedAlbums.route) },
+                onSharedAlbumClick = { navController.navigateTopLevel(Screen.SharedAlbums.route) },
                 onPeople = { navController.navigate(Screen.People.base) },
                 onPets = { navController.navigate(Screen.Pets.route) },
                 onMemories = { navController.navigate(Screen.Memories.route) },
@@ -116,13 +130,13 @@ fun NavGraph(startRoute: String? = null) {
         }
         composable(Screen.Trash.route) {
             TrashScreen(
-                onGalleryClick = { navController.navigate(Screen.Gallery.route) { popUpTo(0) } },
-                onAlbumsClick = { navController.navigate(Screen.AlbumList.route) },
-                onSearchClick = { navController.navigate(Screen.Search.route) },
-                onSettingsClick = { navController.navigate(Screen.Settings.route) },
-                onSecureGalleryClick = { navController.navigate(Screen.SecureGallery.route) },
-                onSharedAlbumsClick = { navController.navigate(Screen.SharedAlbums.route) },
-                onDiagnosticsClick = { navController.navigate(Screen.Diagnostics.route) },
+                onGalleryClick = { navController.navigateHome() },
+                onAlbumsClick = { navController.navigateTopLevel(Screen.AlbumList.route) },
+                onSearchClick = { navController.navigateTopLevel(Screen.Search.route) },
+                onSettingsClick = { navController.navigateTopLevel(Screen.Settings.route) },
+                onSecureGalleryClick = { navController.navigateTopLevel(Screen.SecureGallery.route) },
+                onSharedAlbumsClick = { navController.navigateTopLevel(Screen.SharedAlbums.route) },
+                onDiagnosticsClick = { navController.navigateTopLevel(Screen.Diagnostics.route) },
                 onLogout = { navController.navigate(Screen.Login.route) { popUpTo(0) } },
                 isAdmin = isAdmin
             )
@@ -130,13 +144,13 @@ fun NavGraph(startRoute: String? = null) {
         composable(Screen.Search.route) {
             SearchScreen(
                 onPhotoClick = { photoId -> navController.navigate(Screen.PhotoViewer.createRoute(photoId)) },
-                onGalleryClick = { navController.navigate(Screen.Gallery.route) { popUpTo(0) } },
-                onAlbumsClick = { navController.navigate(Screen.AlbumList.route) },
-                onTrashClick = { navController.navigate(Screen.Trash.route) },
-                onSettingsClick = { navController.navigate(Screen.Settings.route) },
-                onSecureGalleryClick = { navController.navigate(Screen.SecureGallery.route) },
-                onSharedAlbumsClick = { navController.navigate(Screen.SharedAlbums.route) },
-                onDiagnosticsClick = { navController.navigate(Screen.Diagnostics.route) },
+                onGalleryClick = { navController.navigateHome() },
+                onAlbumsClick = { navController.navigateTopLevel(Screen.AlbumList.route) },
+                onTrashClick = { navController.navigateTopLevel(Screen.Trash.route) },
+                onSettingsClick = { navController.navigateTopLevel(Screen.Settings.route) },
+                onSecureGalleryClick = { navController.navigateTopLevel(Screen.SecureGallery.route) },
+                onSharedAlbumsClick = { navController.navigateTopLevel(Screen.SharedAlbums.route) },
+                onDiagnosticsClick = { navController.navigateTopLevel(Screen.Diagnostics.route) },
                 onLogout = { navController.navigate(Screen.Login.route) { popUpTo(0) } },
                 isAdmin = isAdmin
             )
@@ -288,3 +302,22 @@ fun NavGraph(startRoute: String? = null) {
         }
     }
 }
+
+/**
+ * Navigate to a top-level (drawer) destination without stacking a duplicate on
+ * top of itself. Part of the #37 back-history fix: `launchSingleTop` keeps an
+ * A→A re-tap from growing the stack; the [MAX_BACK_HISTORY] cap handles the
+ * A↔B ping-pong case.
+ */
+private fun NavController.navigateTopLevel(route: String) =
+    navigate(route) { launchSingleTop = true }
+
+/**
+ * Reset to the Gallery home, clearing the back stack. Used by every "go home"
+ * affordance and by the back-history cap ([shouldJumpToGalleryOnBack]).
+ */
+private fun NavController.navigateHome() =
+    navigate(Screen.Gallery.route) {
+        popUpTo(0)
+        launchSingleTop = true
+    }
