@@ -1122,6 +1122,22 @@ fun PhotoViewerScreen(
                                     expanded = showOverflow,
                                     onDismissRequest = { showOverflow = false }
                                 ) {
+                                    // Info lives here too (#30) — standalone button stays up top.
+                                    DropdownMenuItem(
+                                        text = { Text("Info") },
+                                        onClick = {
+                                            showOverflow = false
+                                            overlayInteraction++
+                                            showInfoPanel = !showInfoPanel
+                                        },
+                                        leadingIcon = {
+                                            Icon(
+                                                imageVector = Icons.Default.Info,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    )
                                     if (currentPhoto.serverPhotoId != null) {
                                         DropdownMenuItem(
                                             text = { Text("Tags") },

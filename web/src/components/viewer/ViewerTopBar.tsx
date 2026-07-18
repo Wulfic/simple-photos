@@ -160,6 +160,17 @@ export default function ViewerTopBar({
               style={{ zIndex: 9999 }}
               role="menu"
             >
+              {/* Info lives here too (#30) — the standalone button stays up top. */}
+              <button
+                onClick={() => { setShowInfoPanel(!showInfoPanel); setMenuOpen(false); }}
+                className={menuItemClass}
+                role="menuitem"
+              >
+                <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                Info
+              </button>
               {!isBackupServer && (
                 <button
                   onClick={() => { setShowTagPanel(!showTagPanel); setMenuOpen(false); }}
