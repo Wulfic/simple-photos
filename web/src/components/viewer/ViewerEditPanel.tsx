@@ -51,6 +51,13 @@ interface ViewerEditPanelProps {
   onSave: () => void;
   /** Save Copy creates a new metadata-only version */
   onSaveCopy: () => void;
+  /**
+   * Secure-album edit (#31): the item is an encrypted clone with no "duplicate"
+   * endpoint, so Save Copy is hidden and Save (a pure metadata write to the
+   * secure item, applied non-destructively at display time) is always offered —
+   * including for GIFs, which have no server re-bake here but still crop via CSS.
+   */
+  secureEdit?: boolean;
   /** Reset clears all edits */
   onClear: () => void;
   /** Cancel exits edit mode without saving */
@@ -80,6 +87,7 @@ export default function ViewerEditPanel({
   onSaveCopy,
   onClear,
   onCancel,
+  secureEdit,
   rootRef,
 }: ViewerEditPanelProps) {
   // Determine which tabs are available for this media type
@@ -326,7 +334,7 @@ export default function ViewerEditPanel({
             drawables — issue #14/#18), so GIF edits must go through Save Copy,
             which re-encodes the GIF via ffmpeg AND regenerates a cropped
             thumbnail. Users can delete the original copy manually if desired. */}
-        {supportsInPlaceEditSave(mediaType) && (
+        {(supportsInPlaceEditSave(mediaType) || secureEdit) && (
           <button
             onClick={onSave}
             className="btn btn-primary btn-md"
@@ -334,13 +342,17 @@ export default function ViewerEditPanel({
             Save
           </button>
         )}
-        <button
-          onClick={onSaveCopy}
-          className={supportsInPlaceEditSave(mediaType) ? "btn btn-secondary btn-md" : "btn btn-primary btn-md"}
-          title="Save as a new copy — keeps the original unchanged"
-        >
-          Save Copy
-        </button>
+        {/* Secure items have no server-side duplicate, so Save Copy is hidden —
+            secure edits are a pure metadata write applied non-destructively. */}
+        {!secureEdit && (
+          <button
+            onClick={onSaveCopy}
+            className={supportsInPlaceEditSave(mediaType) ? "btn btn-secondary btn-md" : "btn btn-primary btn-md"}
+            title="Save as a new copy — keeps the original unchanged"
+          >
+            Save Copy
+          </button>
+        )}
         {cropData && (
           <button
             onClick={onClear}

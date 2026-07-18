@@ -18,9 +18,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -77,6 +81,10 @@ internal fun SecurePhotoViewer(
     )
     var confirmRemove by remember { mutableStateOf(false) }
     var overflowOpen by remember { mutableStateOf(false) }
+    // Info panel + Download parity with the regular viewer (#31).
+    var showInfo by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     // When a panorama / 360 page enters Live (pan) mode we must stop the pager
     // from stealing the horizontal drag (otherwise panning flips pages). Reset
     // whenever the page changes so a swipe away always re-enables paging.
@@ -116,6 +124,77 @@ internal fun SecurePhotoViewer(
         if (frames.isEmpty()) return cover
         val selId = burstSelections[cover.id]
         return frames.firstOrNull { it.id == selId } ?: cover
+    }
+
+    // Save a decrypted secure item to the device Downloads folder (#31). Mirrors
+    // the regular viewer's MediaStore write; the decrypted plaintext leaves the
+    // app only on this explicit, user-initiated export.
+    fun downloadCurrent(item: SecureGalleryItem) {
+        scope.launch {
+            try {
+                val bytes = viewModel.downloadAndDecrypt(item.blobId)
+                val ext = when (item.mediaType) {
+                    "video" -> "mp4"; "gif" -> "gif"; "audio" -> "m4a"; else -> "jpg"
+                }
+                val mime = when (item.mediaType) {
+                    "video" -> "video/mp4"; "gif" -> "image/gif"; "audio" -> "audio/mp4"
+                    else -> "image/jpeg"
+                }
+                val name = "secure_${item.id.take(8)}.$ext"
+                val values = android.content.ContentValues().apply {
+                    put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, name)
+                    put(android.provider.MediaStore.MediaColumns.MIME_TYPE, mime)
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                        put(
+                            android.provider.MediaStore.MediaColumns.RELATIVE_PATH,
+                            android.os.Environment.DIRECTORY_DOWNLOADS,
+                        )
+                    }
+                }
+                val collection =
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q)
+                        android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI
+                    else android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                val uri = context.contentResolver.insert(collection, values)
+                if (uri == null) {
+                    android.widget.Toast.makeText(context, "Download failed", android.widget.Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+                context.contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
+                android.widget.Toast.makeText(context, "Saved to Downloads", android.widget.Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                android.util.Log.e("SecurePhotoViewer", "download failed for ${item.blobId}", e)
+                android.widget.Toast.makeText(context, "Download failed", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    if (showInfo) {
+        val current = items.getOrNull(pagerState.currentPage)?.let { effectiveItem(it) }
+        AlertDialog(
+            onDismissRequest = { showInfo = false },
+            confirmButton = { TextButton(onClick = { showInfo = false }) { Text("Close") } },
+            title = { Text("Info") },
+            text = {
+                Column {
+                    val rows = buildList {
+                        current?.mediaType?.takeIf { it.isNotEmpty() }?.let { add("Type" to it) }
+                        current?.photoSubtype?.takeIf { it.isNotEmpty() }?.let { add("Subtype" to it) }
+                        val w = current?.width; val h = current?.height
+                        if (w != null && h != null && w > 0 && h > 0) add("Dimensions" to "$w × $h")
+                        current?.durationSecs?.let { d ->
+                            val m = (d / 60).toInt(); val s = (d % 60).toInt()
+                            add("Duration" to "$m:${s.toString().padStart(2, '0')}")
+                        }
+                        current?.addedAt?.takeIf { it.isNotEmpty() }?.let { add("Added" to it) }
+                        if (current?.cropMetadata != null) add("Edited" to "Yes (cropped)")
+                    }
+                    rows.forEach { (label, value) ->
+                        Text("$label: $value", fontSize = 13.sp)
+                    }
+                }
+            }
+        )
     }
 
     if (confirmRemove) {
@@ -178,10 +257,9 @@ internal fun SecurePhotoViewer(
             )
         }
 
-        // Overflow (⋮) menu — currently just "Remove from secure album", but a
-        // menu (not a bare trash) matches the regular/web viewers and pre-cleans
-        // the header for future secure actions like download (todo1 #3).
-        if (onRemove != null && items.isNotEmpty()) {
+        // Overflow (⋮) menu — Info + Download (read-only parity with the
+        // regular/web viewers, #31) plus Remove when the album is editable.
+        if (items.isNotEmpty()) {
             Box(
                 modifier = Modifier
                     .statusBarsPadding()
@@ -203,20 +281,39 @@ internal fun SecurePhotoViewer(
                         onDismissRequest = { overflowOpen = false }
                     ) {
                         DropdownMenuItem(
-                            text = { Text("Remove from secure album", color = MaterialTheme.colorScheme.error) },
-                            onClick = {
-                                overflowOpen = false
-                                confirmRemove = true
-                            },
+                            text = { Text("Info") },
+                            onClick = { overflowOpen = false; showInfo = true },
                             leadingIcon = {
-                                Icon(
-                                    Icons.Default.Delete,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.error,
-                                    modifier = Modifier.size(18.dp)
-                                )
+                                Icon(Icons.Default.Info, contentDescription = null, modifier = Modifier.size(18.dp))
                             }
                         )
+                        DropdownMenuItem(
+                            text = { Text("Download") },
+                            onClick = {
+                                overflowOpen = false
+                                items.getOrNull(pagerState.currentPage)?.let { downloadCurrent(effectiveItem(it)) }
+                            },
+                            leadingIcon = {
+                                Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                            }
+                        )
+                        if (onRemove != null) {
+                            DropdownMenuItem(
+                                text = { Text("Remove from secure album", color = MaterialTheme.colorScheme.error) },
+                                onClick = {
+                                    overflowOpen = false
+                                    confirmRemove = true
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.Delete,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            )
+                        }
                     }
                 }
             }

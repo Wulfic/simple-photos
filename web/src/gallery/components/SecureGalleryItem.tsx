@@ -17,6 +17,8 @@ interface GalleryItem {
   photo_subtype?: string | null;
   burst_id?: string | null;
   duration_secs?: number | null;
+  /** Non-destructive crop/edit JSON stored on the secure item (#31). */
+  crop_metadata?: string | null;
 }
 
 export default function SecureGalleryItem({
@@ -38,6 +40,10 @@ export default function SecureGalleryItem({
       photoSubtype={photoSubtype}
       burstCount={burstCount}
       duration={duration}
+      // Apply the secure item's own crop non-destructively at display time (#31),
+      // exactly like a regular photo — ThumbnailTile handles the transform
+      // (crop / rotate / brightness), including for GIFs. cropData is a JSON string.
+      cropData={item.crop_metadata ?? undefined}
       width={item.width ?? undefined}
       height={item.height ?? undefined}
       onClick={onClick}

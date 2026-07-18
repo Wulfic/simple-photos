@@ -49,6 +49,18 @@ interface UseViewerActionsParams {
   setEditMode: (v: boolean) => void;
   setError: (msg: string) => void;
   preloadCache: React.MutableRefObject<Map<string, PreloadEntry>>;
+  /**
+   * Secure-album edit context (#31). When set, the current photo is an encrypted
+   * secure item: Save / Reset persist the crop to the secure item row via the
+   * secure crop endpoint (NOT the photos table / IDB cache, which secure items
+   * are deliberately excluded from) and `onSaved` lets the viewer keep an
+   * in-session override so swiping away and back shows the fresh crop.
+   */
+  secure?: {
+    galleryId: string;
+    itemId: string;
+    onSaved: (metaJson: string | null) => void;
+  };
 }
 
 export default function useViewerActions({
@@ -77,6 +89,7 @@ export default function useViewerActions({
   setEditMode,
   setError,
   preloadCache,
+  secure,
 }: UseViewerActionsParams) {
   const navigate = useAppNavigate();
 
@@ -134,7 +147,23 @@ export default function useViewerActions({
       hasMeta: !!meta,
       metaJson,
       mediaType,
+      secure: !!secure,
     });
+    // ── Secure item: persist to the secure item row, not the photos table ──
+    // Secure clones are excluded from db.photos / server photos, so the regular
+    // save path below (which needs a serverPhotoId) silently no-ops for them.
+    if (secure) {
+      try {
+        await api.secureGalleries.setItemCrop(secure.galleryId, secure.itemId, metaJson);
+        setCropData(meta);
+        secure.onSaved(metaJson);
+      } catch (err) {
+        console.error("[EDIT:saveEdit] Secure crop save failed:", err);
+        setError(err instanceof Error ? err.message : "Save failed");
+      }
+      setEditMode(false);
+      return;
+    }
     if (!meta) {
       // All defaults — clear metadata
       try {
@@ -168,7 +197,7 @@ export default function useViewerActions({
       }
     } catch { /* non-fatal */ }
     setEditMode(false);
-  }, [id, buildEditMetadata, setCropData, setEditMode, preloadCache]);
+  }, [id, secure, buildEditMetadata, setCropData, setEditMode, setError, preloadCache]);
 
   const handleSaveCopy = useCallback(async () => {
     if (!id) return;
@@ -317,7 +346,13 @@ export default function useViewerActions({
   const handleClearCrop = useCallback(async () => {
     if (!id) return;
     try {
-      await db.photos.update(id, { cropData: undefined });
+      // Secure item: clear the crop on the secure item row too, so Reset sticks.
+      if (secure) {
+        await api.secureGalleries.setItemCrop(secure.galleryId, secure.itemId, null);
+        secure.onSaved(null);
+      } else {
+        await db.photos.update(id, { cropData: undefined });
+      }
       setCropData(null);
       setCropCorners({ x: 0, y: 0, w: 1, h: 1 });
       setBrightness(0);
@@ -325,7 +360,7 @@ export default function useViewerActions({
       setTrimStart(0);
       setTrimEnd(mediaDuration);
     } catch { /* ignore */ }
-  }, [id, setCropData, setCropCorners, setBrightness, setRotateValue, setTrimStart, setTrimEnd, mediaDuration]);
+  }, [id, secure, setCropData, setCropCorners, setBrightness, setRotateValue, setTrimStart, setTrimEnd, mediaDuration]);
 
   const handleLeaveAndSave = useCallback(async () => {
     // GIFs have no in-place metadata Save (issue #18): a metadata-only save
@@ -333,14 +368,18 @@ export default function useViewerActions({
     // frame. Persist real GIF edits as a rendered Save Copy instead, which
     // re-encodes the GIF via ffmpeg AND regenerates a correctly cropped
     // thumbnail. All-default (a reset) still falls through to the metadata clear.
-    if (!supportsInPlaceEditSave(mediaType) && buildEditMetadata()) {
+    //
+    // Secure items are the exception: there is no secure duplicate endpoint, so
+    // even a secure GIF saves as pure crop metadata (the tile applies it via CSS
+    // — animation is preserved), routed through the secure path in handleSaveEdit.
+    if (!secure && !supportsInPlaceEditSave(mediaType) && buildEditMetadata()) {
       await handleSaveCopy();
     } else {
       await handleSaveEdit();
     }
     setShowLeavePrompt(false);
     navigate(backTo);
-  }, [mediaType, buildEditMetadata, handleSaveCopy, handleSaveEdit, navigate, backTo]);
+  }, [secure, mediaType, buildEditMetadata, handleSaveCopy, handleSaveEdit, navigate, backTo]);
 
   const handleLeaveAndDiscard = useCallback(() => {
     setEditMode(false);

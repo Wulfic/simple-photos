@@ -17,6 +17,13 @@ export interface ViewerTopBarProps {
   mediaUrl: string | null;
   isFavorite: boolean;
   isBackupServer: boolean;
+  /**
+   * Allow the Edit button even when `isBackupServer` is true. Used by the secure
+   * viewer (#31): secure mode passes `isBackupServer` to keep favorite / tags /
+   * delete hidden, but edit is safe (a crop stays inside the secure album and is
+   * persisted via the secure crop endpoint), so it is opted back in here.
+   */
+  allowEdit?: boolean;
   isRenderingVideo: boolean;
   /** True only for real user-created albums — smart albums (Photos, Videos,
    *  GIFs, Audio, People, …) can't have items "removed" so they show Delete. */
@@ -42,6 +49,7 @@ export default function ViewerTopBar({
   mediaUrl,
   isFavorite,
   isBackupServer,
+  allowEdit,
   isRenderingVideo,
   canRemoveFromAlbum,
   onBack,
@@ -78,7 +86,7 @@ export default function ViewerTopBar({
 
   const canEdit =
     (mediaType === "photo" || mediaType === "gif" || mediaType === "video" || mediaType === "audio") &&
-    !isBackupServer;
+    (!isBackupServer || !!allowEdit);
 
   const menuItemClass =
     "w-full text-left px-4 py-2 text-sm text-fg-muted hover:bg-surface-sunken dark:hover:bg-white/10 flex items-center gap-2 transition-colors";

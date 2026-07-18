@@ -68,6 +68,8 @@ interface ViewerLocationState {
 interface SecureGalleryItemMeta {
   id: string;
   blob_id: string;
+  /** Owning secure album — the target for the secure crop endpoint (#31). */
+  gallery_id?: string | null;
   encrypted_thumb_blob_id?: string | null;
   width?: number | null;
   height?: number | null;
@@ -76,6 +78,8 @@ interface SecureGalleryItemMeta {
   burst_id?: string | null;
   duration_secs?: number | null;
   motion_video_blob_id?: string | null;
+  /** Non-destructive crop/edit JSON stored on the secure item (#31). */
+  crop_metadata?: string | null;
 }
 
 // ── Viewer ────────────────────────────────────────────────────────────────────
@@ -158,6 +162,18 @@ export default function Viewer() {
     () => (secureGallery ? secureItems?.filter((i) => i.burst_id === burstId) : undefined),
     [secureGallery, secureItems, burstId],
   );
+
+  // The secure item currently open (matched by blob id). Its `id` + `gallery_id`
+  // are the target for the secure crop endpoint (#31).
+  const currentSecureItem = useMemo(
+    () => (secureGallery ? secureItems?.find((i) => i.blob_id === id) : undefined),
+    [secureGallery, secureItems, id],
+  );
+
+  // In-session crop overrides for secure items, keyed by blob id. A secure save
+  // records the fresh crop here so swiping to another frame and back re-applies
+  // it — the nav-state `secureItems` array is a stale snapshot from open time.
+  const secureCropOverrides = useRef<Map<string, string | null>>(new Map());
 
   // ── Edit state (from hook) ─────────────────────────────────────────────
   const {
@@ -283,6 +299,17 @@ export default function Viewer() {
     cropData, setCropData, setCropCorners, setBrightness, setRotateValue, setTrimStart, setTrimEnd,
     setEditMode, setError,
     preloadCache,
+    // Secure edit (#31): persist crop to the secure item row, not the photos
+    // table. Only when the item carries its owning gallery id.
+    secure: currentSecureItem?.gallery_id
+      ? {
+          galleryId: currentSecureItem.gallery_id,
+          itemId: currentSecureItem.id,
+          onSaved: (metaJson: string | null) => {
+            if (id) secureCropOverrides.current.set(id, metaJson);
+          },
+        }
+      : undefined,
   });
 
   // ── Mutually-exclusive top-bar panels (#15) ────────────────────────────────
@@ -351,6 +378,17 @@ export default function Viewer() {
               secureItem.width && secureItem.height
             ) {
               setPanoImageDims({ width: secureItem.width, height: secureItem.height });
+            }
+            // Non-destructive crop lives on the secure item row (#31). Prefer an
+            // in-session override (a save made without leaving the viewer) over
+            // the stale nav-state snapshot.
+            const cropJson = secureCropOverrides.current.has(id!)
+              ? secureCropOverrides.current.get(id!)
+              : secureItem.crop_metadata;
+            if (cropJson) {
+              try { setCropData(JSON.parse(cropJson)); } catch { setCropData(null); }
+            } else {
+              setCropData(null);
             }
           }
         } else if (navBurstId) {
@@ -525,6 +563,7 @@ export default function Viewer() {
         mediaUrl={mediaUrl}
         isFavorite={isFavorite}
         isBackupServer={isBackupServer || secureGallery}
+        allowEdit={secureGallery && !isBackupServer}
         isRenderingVideo={isRenderingVideo}
         canRemoveFromAlbum={canRemoveFromAlbum}
         onBack={() => { if (editMode) setShowLeavePrompt(true); else navigate(backTo); }}
@@ -963,6 +1002,7 @@ export default function Viewer() {
           setTrimStart={setTrimStart} setTrimEnd={setTrimEnd} duration={mediaDuration}
           onSave={handleSaveEdit} onSaveCopy={handleSaveCopy}
           onClear={handleClearCrop} onCancel={() => setEditMode(false)}
+          secureEdit={secureGallery}
           rootRef={editPanelRef}
         />
       )}

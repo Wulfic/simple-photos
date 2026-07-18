@@ -58,6 +58,12 @@ internal fun GalleryDetailView(
     // Internal viewer state — show secure items only, not the main gallery
     var viewerIndex by remember { mutableStateOf<Int?>(null) }
 
+    // Cross-secure-album move picker (#31): pull media in from the user's OTHER
+    // secure albums. A photo lives in one secure album, so this is a move.
+    var showMovePicker by remember { mutableStateOf(false) }
+    var moveSelectedIds by remember { mutableStateOf(emptySet<String>()) }
+    val otherSecureItems = viewModel.otherSecureItems
+
     // ── Add-photos picker source state ──────────────────────────────────────
     var pickerTab by remember { mutableStateOf(PickerTab.All) }
     // When the Albums tab has an album open, this is its id (else browse list).
@@ -196,7 +202,15 @@ internal fun GalleryDetailView(
                         }
                     },
                     actions = {
-                        if (!readOnly && !showAddPhotos) {
+                        if (!readOnly && !showAddPhotos && !showMovePicker) {
+                            // Move in from other secure albums (#31) — only when
+                            // there is somewhere to pull from.
+                            if (otherSecureItems.isNotEmpty()) {
+                                TextButton(onClick = {
+                                    showMovePicker = true
+                                    moveSelectedIds = emptySet()
+                                }) { Text("From secure") }
+                            }
                             IconButton(onClick = {
                                 showAddPhotos = true
                                 selectedBlobIds = emptySet()
@@ -226,7 +240,26 @@ internal fun GalleryDetailView(
                 )
             }
 
-            if (showAddPhotos) {
+            if (showMovePicker) {
+                MoveFromSecurePanel(
+                    items = otherSecureItems,
+                    selectedIds = moveSelectedIds,
+                    viewModel = viewModel,
+                    onToggle = { id ->
+                        moveSelectedIds = if (id in moveSelectedIds)
+                            moveSelectedIds - id else moveSelectedIds + id
+                    },
+                    onMove = {
+                        viewModel.moveItemsIntoSelected(moveSelectedIds.toList())
+                        showMovePicker = false
+                        moveSelectedIds = emptySet()
+                    },
+                    onCancel = {
+                        showMovePicker = false
+                        moveSelectedIds = emptySet()
+                    },
+                )
+            } else if (showAddPhotos) {
                 AddPhotosPanel(
                     availablePhotos = availablePhotos,
                     pickerAlbums = pickerAlbums,
@@ -307,9 +340,9 @@ internal fun GalleryDetailView(
                     com.simplephotos.ui.components.JustifiedGrid(
                         items = displayItems,
                         getAspectRatio = { it ->
-                            val w = it.width ?: 0
-                            val h = it.height ?: 0
-                            if (w > 0 && h > 0) w.toFloat() / h.toFloat() else 1f
+                            // Crop-effective aspect (#31) so a cropped tile lays
+                            // out at the right shape and FillBounds shows cleanly.
+                            secureEffectiveAspect(it.width, it.height, it.cropMetadata)
                         },
                         getKey = { it.id },
                         targetRowHeight = com.simplephotos.ui.components.rememberGalleryRowHeight(),
@@ -548,6 +581,91 @@ private fun ColumnScope.AddPhotosPanel(
                             Box(contentAlignment = Alignment.Center) {
                                 Text("✓", color = Color.White, fontSize = 12.sp)
                             }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Move-from-secure panel — pick items from the user's OTHER secure albums (#31)
+// ─────────────────────────────────────────────────────────────────────────────
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ColumnScope.MoveFromSecurePanel(
+    items: List<SecureGalleryItem>,
+    selectedIds: Set<String>,
+    viewModel: SecureGalleryViewModel,
+    onToggle: (String) -> Unit,
+    onMove: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    // Collapse bursts so one tile represents a stack (the move pulls the cover;
+    // the server keeps membership rows per frame — bursts move as their cover
+    // here for parity with the add/remove flows' single-tile display).
+    val display = remember(items) { collapseSecureBursts(items) }
+    val burstCounts = remember(items) {
+        items.mapNotNull { it.burstId }.filter { it.isNotEmpty() }.groupingBy { it }.eachCount()
+    }
+
+    // Action bar.
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f))
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text("Selected ${selectedIds.size}", style = MaterialTheme.typography.bodyMedium)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = onMove, enabled = selectedIds.isNotEmpty()) { Text("Move here") }
+            OutlinedButton(onClick = onCancel) { Text("Cancel") }
+        }
+    }
+
+    if (display.isEmpty()) {
+        Box(
+            modifier = Modifier.fillMaxWidth().padding(32.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text("No other secure albums to move from.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        return
+    }
+
+    Box(modifier = Modifier.weight(1f)) {
+        com.simplephotos.ui.components.JustifiedGrid(
+            items = display,
+            getAspectRatio = { secureEffectiveAspect(it.width, it.height, it.cropMetadata) },
+            getKey = { it.id },
+            targetRowHeight = com.simplephotos.ui.components.rememberGalleryRowHeight(),
+            gap = 2.dp,
+        ) { item, widthDp, heightDp ->
+            val isSelected = item.id in selectedIds
+            Box(
+                modifier = Modifier
+                    .size(widthDp, heightDp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .clickable { onToggle(item.id) }
+            ) {
+                SecureItemTile(
+                    item = item,
+                    burstCount = item.burstId?.let { burstCounts[it] } ?: 0,
+                    viewModel = viewModel,
+                )
+                if (isSelected) {
+                    Box(modifier = Modifier.fillMaxSize().background(Violet.v500.copy(alpha = 0.3f)))
+                    Surface(
+                        modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).size(20.dp),
+                        shape = androidx.compose.foundation.shape.CircleShape,
+                        color = Violet.v600
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text("✓", color = Color.White, fontSize = 12.sp)
                         }
                     }
                 }

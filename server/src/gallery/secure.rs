@@ -847,6 +847,10 @@ pub async fn list_gallery_items(
         burst_id: Option<String>,
         duration_secs: Option<f64>,
         motion_video_blob_id: Option<String>,
+        // Non-destructive edit metadata stored on the item itself (#31). Lives
+        // on `gi` only — never falls through to the original photo, so an edit
+        // in the secure album can't leak back onto the regular-gallery original.
+        crop_metadata: Option<String>,
     }
 
     let items = sqlx::query_as::<_, GalleryItemRow>(
@@ -860,7 +864,8 @@ pub async fn list_gallery_items(
                 COALESCE(p.photo_subtype, op.photo_subtype) as photo_subtype, \
                 COALESCE(p.burst_id, op.burst_id) as burst_id, \
                 COALESCE(p.duration_secs, op.duration_secs) as duration_secs, \
-                COALESCE(p.motion_video_blob_id, op.motion_video_blob_id) as motion_video_blob_id \
+                COALESCE(p.motion_video_blob_id, op.motion_video_blob_id) as motion_video_blob_id, \
+                gi.crop_metadata as crop_metadata \
          FROM encrypted_gallery_items gi \
          LEFT JOIN photos p ON p.id = gi.blob_id AND p.encrypted_blob_id IS NOT NULL \
          LEFT JOIN photos op ON op.id = gi.original_blob_id \
@@ -887,6 +892,7 @@ pub async fn list_gallery_items(
                 "burst_id": r.burst_id,
                 "duration_secs": r.duration_secs,
                 "motion_video_blob_id": r.motion_video_blob_id,
+                "crop_metadata": r.crop_metadata,
             })
         })
         .collect();
@@ -940,6 +946,7 @@ pub async fn list_all_gallery_items(
         burst_id: Option<String>,
         duration_secs: Option<f64>,
         motion_video_blob_id: Option<String>,
+        crop_metadata: Option<String>,
     }
 
     let items = sqlx::query_as::<_, AllGalleryItemRow>(
@@ -955,7 +962,8 @@ pub async fn list_all_gallery_items(
                 COALESCE(p.photo_subtype, op.photo_subtype) as photo_subtype, \
                 COALESCE(p.burst_id, op.burst_id) as burst_id, \
                 COALESCE(p.duration_secs, op.duration_secs) as duration_secs, \
-                COALESCE(p.motion_video_blob_id, op.motion_video_blob_id) as motion_video_blob_id \
+                COALESCE(p.motion_video_blob_id, op.motion_video_blob_id) as motion_video_blob_id, \
+                gi.crop_metadata as crop_metadata \
          FROM encrypted_gallery_items gi \
          JOIN encrypted_galleries g ON g.id = gi.gallery_id \
          LEFT JOIN photos p ON p.id = gi.blob_id AND p.encrypted_blob_id IS NOT NULL \
@@ -984,9 +992,303 @@ pub async fn list_all_gallery_items(
                 "burst_id": r.burst_id,
                 "duration_secs": r.duration_secs,
                 "motion_video_blob_id": r.motion_video_blob_id,
+                "crop_metadata": r.crop_metadata,
             })
         })
         .collect();
 
     Ok(Json(serde_json::json!({ "items": items_json })))
+}
+
+/// Request body for `POST /api/galleries/secure/{gallery_id}/items/{item_id}/move`.
+#[derive(Debug, Deserialize)]
+pub struct MoveGalleryItemRequest {
+    /// Destination secure gallery (must be owned by the same user).
+    pub target_gallery_id: String,
+}
+
+/// POST /api/galleries/secure/:gallery_id/items/:item_id/move
+///
+/// Move a secure item from one of the user's secure galleries to another (#31,
+/// the cross-secure-album picker).  Because a photo may live in **at most one**
+/// secure gallery (enforced in [`add_gallery_item`]), pulling media in "from
+/// other secure albums" is a MOVE, not a copy — we simply reassign the
+/// membership row's `gallery_id`.  No re-clone, no re-encryption: the encrypted
+/// blob and the hidden original are untouched, so the one-secure-album invariant
+/// and the "original stays hidden" behaviour both hold.
+///
+/// Ownership of BOTH the source and target gallery is verified first (IDOR
+/// guard) — a caller can only shuffle items between galleries they own.
+pub async fn move_gallery_item(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((gallery_id, item_id)): Path<(String, String)>,
+    Json(req): Json<MoveGalleryItemRequest>,
+) -> Result<StatusCode, AppError> {
+    // Verify the caller owns the SOURCE gallery.
+    let owns_source: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM encrypted_galleries WHERE id = ? AND user_id = ?")
+            .bind(&gallery_id)
+            .bind(&auth.user_id)
+            .fetch_one(&state.pool)
+            .await?;
+    if owns_source == 0 {
+        return Err(AppError::NotFound);
+    }
+
+    // Verify the caller owns the TARGET gallery.
+    let owns_target: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM encrypted_galleries WHERE id = ? AND user_id = ?")
+            .bind(&req.target_gallery_id)
+            .bind(&auth.user_id)
+            .fetch_one(&state.pool)
+            .await?;
+    if owns_target == 0 {
+        return Err(AppError::BadRequest("Target secure album not found".into()));
+    }
+
+    // Reassign the membership row.  Scoped to (item_id, source gallery_id) so a
+    // guessed item id from another gallery can't be moved.
+    let result = sqlx::query(
+        "UPDATE encrypted_gallery_items SET gallery_id = ? WHERE id = ? AND gallery_id = ?",
+    )
+    .bind(&req.target_gallery_id)
+    .bind(&item_id)
+    .bind(&gallery_id)
+    .execute(&state.pool)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
+
+    tracing::info!(
+        source_gallery_id = %gallery_id,
+        target_gallery_id = %req.target_gallery_id,
+        item_id = %item_id,
+        "[DIAG:SECURE_MOVE] Moved item between secure galleries"
+    );
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Request body for `PUT /api/galleries/secure/{gallery_id}/items/{item_id}/crop`.
+#[derive(Debug, Deserialize)]
+pub struct SetGalleryItemCropRequest {
+    /// Crop/edit metadata JSON (same shape as `photos.crop_metadata`), or
+    /// `null` to clear all edits.
+    pub crop_metadata: Option<String>,
+}
+
+/// PUT /api/galleries/secure/:gallery_id/items/:item_id/crop
+///
+/// Persist non-destructive edit metadata (crop / brightness / rotate / trim) for
+/// a secure item (#31).  Stored on the item row itself, not the photos table, so
+/// it stays inside the secure domain and never leaks onto the regular-gallery
+/// original.  Clients apply it at display time exactly like `photos.crop_metadata`
+/// — no re-render / re-encryption of the encrypted blob.
+///
+/// Ownership of the gallery is verified first (IDOR guard), matching
+/// [`add_gallery_item`] / [`remove_gallery_item`].
+pub async fn set_gallery_item_crop(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((gallery_id, item_id)): Path<(String, String)>,
+    Json(req): Json<SetGalleryItemCropRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let owner: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM encrypted_galleries WHERE id = ? AND user_id = ?")
+            .bind(&gallery_id)
+            .bind(&auth.user_id)
+            .fetch_one(&state.pool)
+            .await?;
+    if owner == 0 {
+        return Err(AppError::NotFound);
+    }
+
+    let result = sqlx::query(
+        "UPDATE encrypted_gallery_items SET crop_metadata = ? WHERE id = ? AND gallery_id = ?",
+    )
+    .bind(&req.crop_metadata)
+    .bind(&item_id)
+    .bind(&gallery_id)
+    .execute(&state.pool)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
+
+    tracing::info!(
+        gallery_id = %gallery_id,
+        item_id = %item_id,
+        has_crop = req.crop_metadata.is_some(),
+        "[DIAG:SECURE_CROP] Updated secure item crop metadata"
+    );
+
+    Ok(Json(serde_json::json!({
+        "item_id": item_id,
+        "crop_metadata": req.crop_metadata,
+    })))
+}
+
+#[cfg(test)]
+mod tests {
+    //! Core SQL behaviour for the #31 move + crop mutations, exercised against
+    //! an in-memory DB with the REAL migrations (so migration 032's new
+    //! `crop_metadata` column is proven to apply). The handlers themselves need
+    //! a full `AppState`; these tests target the exact UPDATE statements the
+    //! handlers run, plus their gallery-scoping (the IDOR guard's teeth).
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use sqlx::SqlitePool;
+    use std::str::FromStr;
+
+    async fn mem_pool() -> SqlitePool {
+        // FKs off: we insert bare gallery/item rows without the full users graph.
+        let opts = SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .foreign_keys(false);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        pool
+    }
+
+    /// Insert a secure gallery owned by `user_id`.
+    async fn insert_gallery(pool: &SqlitePool, id: &str, user_id: &str) {
+        sqlx::query(
+            "INSERT INTO encrypted_galleries (id, user_id, name, password_hash, created_at) \
+             VALUES (?, ?, ?, 'x', '2026-07-18T00:00:00Z')",
+        )
+        .bind(id)
+        .bind(user_id)
+        .bind(format!("gallery-{id}"))
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    /// Insert a membership row into `gallery_id`.
+    async fn insert_item(pool: &SqlitePool, item_id: &str, gallery_id: &str) {
+        sqlx::query(
+            "INSERT INTO encrypted_gallery_items (id, gallery_id, blob_id, added_at) \
+             VALUES (?, ?, ?, '2026-07-18T00:00:00Z')",
+        )
+        .bind(item_id)
+        .bind(gallery_id)
+        .bind(format!("blob-{item_id}"))
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn gallery_of(pool: &SqlitePool, item_id: &str) -> Option<String> {
+        sqlx::query_scalar("SELECT gallery_id FROM encrypted_gallery_items WHERE id = ?")
+            .bind(item_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn migration_032_adds_crop_metadata_column() {
+        // If the column didn't exist this query would error, failing the test.
+        let pool = mem_pool().await;
+        insert_gallery(&pool, "g1", "u1").await;
+        insert_item(&pool, "i1", "g1").await;
+        let crop: Option<String> =
+            sqlx::query_scalar("SELECT crop_metadata FROM encrypted_gallery_items WHERE id = 'i1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(crop.is_none(), "new items start with no crop metadata");
+    }
+
+    #[tokio::test]
+    async fn move_reassigns_gallery_id() {
+        let pool = mem_pool().await;
+        insert_gallery(&pool, "src", "u1").await;
+        insert_gallery(&pool, "dst", "u1").await;
+        insert_item(&pool, "i1", "src").await;
+
+        // The exact statement move_gallery_item runs.
+        let res = sqlx::query(
+            "UPDATE encrypted_gallery_items SET gallery_id = ? WHERE id = ? AND gallery_id = ?",
+        )
+        .bind("dst")
+        .bind("i1")
+        .bind("src")
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(res.rows_affected(), 1);
+        assert_eq!(gallery_of(&pool, "i1").await.as_deref(), Some("dst"));
+    }
+
+    #[tokio::test]
+    async fn move_is_scoped_to_source_gallery() {
+        // A move claiming the wrong source gallery must NOT touch the item — this
+        // is what stops a guessed item id in another gallery being moved.
+        let pool = mem_pool().await;
+        insert_gallery(&pool, "src", "u1").await;
+        insert_gallery(&pool, "dst", "u1").await;
+        insert_item(&pool, "i1", "src").await;
+
+        let res = sqlx::query(
+            "UPDATE encrypted_gallery_items SET gallery_id = ? WHERE id = ? AND gallery_id = ?",
+        )
+        .bind("dst")
+        .bind("i1")
+        .bind("wrong-source")
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(res.rows_affected(), 0, "wrong source must be a no-op");
+        assert_eq!(gallery_of(&pool, "i1").await.as_deref(), Some("src"));
+    }
+
+    #[tokio::test]
+    async fn set_and_clear_crop_metadata() {
+        let pool = mem_pool().await;
+        insert_gallery(&pool, "g1", "u1").await;
+        insert_item(&pool, "i1", "g1").await;
+
+        let json = r#"{"x":0.1,"y":0.1,"width":0.8,"height":0.8,"rotate":90,"brightness":0}"#;
+        let set = sqlx::query(
+            "UPDATE encrypted_gallery_items SET crop_metadata = ? WHERE id = ? AND gallery_id = ?",
+        )
+        .bind(Some(json))
+        .bind("i1")
+        .bind("g1")
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(set.rows_affected(), 1);
+        let stored: Option<String> =
+            sqlx::query_scalar("SELECT crop_metadata FROM encrypted_gallery_items WHERE id = 'i1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(stored.as_deref(), Some(json));
+
+        // Clearing (null) wipes the edit.
+        sqlx::query(
+            "UPDATE encrypted_gallery_items SET crop_metadata = ? WHERE id = ? AND gallery_id = ?",
+        )
+        .bind(Option::<String>::None)
+        .bind("i1")
+        .bind("g1")
+        .execute(&pool)
+        .await
+        .unwrap();
+        let cleared: Option<String> =
+            sqlx::query_scalar("SELECT crop_metadata FROM encrypted_gallery_items WHERE id = 'i1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(cleared.is_none());
+    }
 }

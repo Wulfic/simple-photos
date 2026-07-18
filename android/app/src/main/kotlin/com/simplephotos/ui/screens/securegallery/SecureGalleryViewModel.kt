@@ -390,6 +390,87 @@ class SecureGalleryViewModel @Inject constructor(
         }
     }
 
+    // ── Cross-secure-album move picker (#31) ────────────────────────────────
+    // Items in the user's OTHER secure albums — the source pool for moving media
+    // into the open album. Excludes the open album's own items and any item with
+    // no owning gallery id (older rows we can't route a move for).
+    val otherSecureItems: List<SecureGalleryItem>
+        get() {
+            val current = selectedGallery?.id ?: return emptyList()
+            return allItems.filter { it.galleryId != null && it.galleryId != current }
+        }
+
+    /**
+     * Move the given items (by id) from their current secure albums into the
+     * open album (#31). Each is isolated so one failure never aborts the rest.
+     */
+    fun moveItemsIntoSelected(itemIds: List<String>) {
+        val target = selectedGallery ?: return
+        if (itemIds.isEmpty()) return
+        val pool = otherSecureItems.associateBy { it.id }
+        viewModelScope.launch {
+            val outcomes = withContext(Dispatchers.IO) {
+                coroutineScope {
+                    itemIds.mapNotNull { id ->
+                        val item = pool[id]
+                        val src = item?.galleryId
+                        if (src == null) {
+                            Log.e(TAG, "  cannot move item $id: not in pool / no source gallery")
+                            null
+                        } else {
+                            async {
+                                try {
+                                    secureGalleryRepository.moveItem(src, id, target.id)
+                                    true
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "  move failed for item $id", e)
+                                    false
+                                }
+                            }
+                        }
+                    }.awaitAll()
+                }
+            }
+            val moved = outcomes.count { it }
+            val failed = itemIds.size - moved
+            Log.i(TAG, "Moved $moved/${itemIds.size} items into ${target.id} ($failed failed)")
+            if (failed > 0) {
+                error = "$failed item${if (failed != 1) "s" else ""} couldn't be moved"
+            }
+            loadItems(target.id)
+            loadGalleries()
+            loadAllItems()
+        }
+    }
+
+    /**
+     * Persist (or clear, with null) a secure item's crop/edit metadata (#31),
+     * then refresh so the tile + viewer re-render with the applied crop.
+     */
+    fun setItemCrop(item: SecureGalleryItem, cropMetadata: String?, onDone: () -> Unit = {}) {
+        val gid = item.galleryId ?: selectedGallery?.id
+        if (gid == null) {
+            Log.e(TAG, "setItemCrop: no owning gallery for item ${item.id}")
+            error = "Could not determine which album this photo belongs to."
+            return
+        }
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    secureGalleryRepository.setItemCrop(gid, item.id, cropMetadata)
+                }
+                Log.i(TAG, "Saved crop for secure item ${item.id} (hasCrop=${cropMetadata != null})")
+                loadAllItems()
+                selectedGallery?.let { loadItems(it.id) }
+            } catch (e: Exception) {
+                Log.e(TAG, "setItemCrop failed for ${item.id}", e)
+                error = "Save failed: ${e.message}"
+            } finally {
+                onDone()
+            }
+        }
+    }
+
     /**
      * Remove a single item (or whole burst) from the selected secure gallery.
      * Delegates to [removeItems] so burst stacks are removed in full.

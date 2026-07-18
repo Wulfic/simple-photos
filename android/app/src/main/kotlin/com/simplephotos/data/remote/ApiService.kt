@@ -728,6 +728,22 @@ interface ApiService {
         @Path("item_id") itemId: String,
     ): Response<Unit>
 
+    // ── Secure gallery item move (cross-secure-album picker, #31) ─────────
+    @POST("api/galleries/secure/{id}/items/{item_id}/move")
+    suspend fun moveSecureGalleryItem(
+        @Path("id") sourceGalleryId: String,
+        @Path("item_id") itemId: String,
+        @Body request: SecureGalleryMoveItemRequest,
+    ): Response<Unit>
+
+    // ── Secure gallery item crop/edit persistence (#31) ──────────────────
+    @PUT("api/galleries/secure/{id}/items/{item_id}/crop")
+    suspend fun setSecureGalleryItemCrop(
+        @Path("id") galleryId: String,
+        @Path("item_id") itemId: String,
+        @Body request: SecureGallerySetCropRequest,
+    ): Response<Unit>
+
     // ── External diagnostics (Basic auth) ────────────────────────────────
     // Not declared here; called via separate ApiService instance with Basic
     // auth interceptor when admin enables external diagnostics access.

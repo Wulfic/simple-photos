@@ -15,6 +15,8 @@ import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
 import JustifiedGrid from "../components/gallery/JustifiedGrid";
 import { getErrorMessage } from "../utils/formatters";
+import { getEffectiveAspectRatio } from "../utils/thumbnailCss";
+import { otherSecureAlbumItems, resolveSecureMoves } from "../gallery/secureMovePicker";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
 import { useAuthStore } from "../store/auth";
 import {
@@ -114,6 +116,13 @@ export default function SecureGallery() {
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
+
+  // Cross-secure-album picker (#31): move items INTO the open album from the
+  // user's OTHER secure albums. A photo can live in only one secure album, so
+  // this is a move (server reassigns membership), not a copy.
+  const [showMovePicker, setShowMovePicker] = useState(false);
+  const [moveSelected, setMoveSelected] = useState<Set<string>>(new Set());
+  const [moving, setMoving] = useState(false);
 
   // Error / success
   const [error, setError] = useState("");
@@ -346,6 +355,51 @@ export default function SecureGallery() {
     }
   }
 
+  // Items in the user's OTHER secure albums — the source pool for the
+  // cross-secure-album move picker. Excludes the open album's own items.
+  const otherSecureItems = selectedGallery
+    ? otherSecureAlbumItems(allItems, selectedGallery.id)
+    : [];
+
+  function toggleMoveSelect(itemId: string) {
+    setMoveSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(itemId)) next.delete(itemId);
+      else next.add(itemId);
+      return next;
+    });
+  }
+
+  // Move the picked items from their current secure albums into the open album.
+  async function handleMoveSelected() {
+    if (!selectedGallery || moveSelected.size === 0 || moving) return;
+    setMoving(true);
+    let moved = 0;
+    let failed = 0;
+    // Resolve each selected item to its owning gallery, then reassign it. Each
+    // is isolated so one failure never aborts the rest (mirrors secure-add).
+    const moves = resolveSecureMoves(otherSecureItems, moveSelected);
+    failed += moveSelected.size - moves.length; // selections we couldn't route
+    for (const mv of moves) {
+      try {
+        await api.secureGalleries.moveItem(mv.sourceGalleryId, mv.itemId, selectedGallery.id);
+        moved++;
+      } catch (err) {
+        console.error("[SecureGallery] move item failed", err); // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
+        failed++;
+      }
+    }
+    if (moved > 0) setSuccess(`Moved ${moved} item${moved !== 1 ? "s" : ""} into "${selectedGallery.name}".`);
+    if (failed > 0) setError(`${failed} item${failed !== 1 ? "s" : ""} couldn't be moved.`);
+    setMoveSelected(new Set());
+    setShowMovePicker(false);
+    setMoving(false);
+    // Refresh: aggregate feed re-derives, the open album re-fetches, counts update.
+    await loadAllItems();
+    await loadGalleries();
+    await loadItems(selectedGallery.id);
+  }
+
   // Collapse burst stacks → one tile / viewer page per burst (the album still
   // physically holds every frame). Counts come from the full list for the badge.
   const secureBurstCounts = new Map<string, number>();
@@ -454,6 +508,18 @@ export default function SecureGallery() {
             </div>
             {!isBackupServer && !isSecureSmartAlbum(selectedGallery.id) && (
               <div className="flex gap-2">
+                {/* Move media in from the user's OTHER secure albums (#31). Only
+                    offered when there's somewhere to pull from. */}
+                {otherSecureItems.length > 0 && (
+                  <button
+                    onClick={() => { setShowMovePicker((v) => !v); setMoveSelected(new Set()); }}
+                    className={`btn btn-md inline-flex items-center ${showMovePicker ? "btn-primary" : "btn-secondary"}`}
+                    title="Move photos in from your other secure albums"
+                  >
+                    <span className="mr-1">🔒</span>
+                    {showMovePicker ? "Done" : "From secure albums"}
+                  </button>
+                )}
                 <button
                   onClick={() => {
                     // Browse your regular/smart albums to pick photos, instead
@@ -472,6 +538,46 @@ export default function SecureGallery() {
               </div>
             )}
           </div>
+
+          {/* Cross-secure-album move picker (#31) */}
+          {showMovePicker && !isBackupServer && !isSecureSmartAlbum(selectedGallery.id) && (
+            <div className="card p-4 mb-6">
+              <div className="flex items-center justify-between mb-3 gap-3">
+                <h3 className="text-sm font-semibold text-fg-muted min-w-0 truncate">
+                  Move from your other secure albums
+                  <span className="tabular-nums"> ({moveSelected.size} selected)</span>
+                </h3>
+                <button
+                  onClick={handleMoveSelected}
+                  disabled={moveSelected.size === 0 || moving}
+                  className="btn btn-primary btn-md shrink-0 whitespace-nowrap"
+                >
+                  {moving ? "Moving…" : `Move here (${moveSelected.size})`}
+                </button>
+              </div>
+              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-2">
+                {otherSecureItems.map((it) => {
+                  const selected = moveSelected.has(it.id);
+                  return (
+                    <div
+                      key={it.id}
+                      className={`relative aspect-square rounded overflow-hidden cursor-pointer ${selected ? "ring-2 ring-accent-500" : ""}`}
+                      onClick={() => toggleMoveSelect(it.id)}
+                    >
+                      <SecureGalleryItem item={it} onClick={() => toggleMoveSelect(it.id)} />
+                      {selected && (
+                        <div className="absolute top-1 right-1 w-5 h-5 rounded-full bg-green-500 flex items-center justify-center z-10 pointer-events-none">
+                          <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                          </svg>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {error && (
             <p className="text-red-600 dark:text-red-400 text-sm mb-4 p-3 bg-red-50 dark:bg-red-900/30 rounded">
@@ -505,7 +611,9 @@ export default function SecureGallery() {
           ) : (
             <JustifiedGrid
               items={displayItems}
-              getAspectRatio={(item) => (item.width && item.height) ? item.width / item.height : 1}
+              getAspectRatio={(item) =>
+                getEffectiveAspectRatio(item.width, item.height, item.crop_metadata)
+              }
               getKey={(item) => item.id}
               renderItem={(item, idx) => (
                 <div className="group relative w-full h-full">

@@ -451,6 +451,14 @@ fn gallery_routes() -> Router<AppState> {
             "/galleries/secure/{id}/items/{item_id}",
             delete(crate::gallery::secure::remove_gallery_item),
         )
+        .route(
+            "/galleries/secure/{id}/items/{item_id}/move",
+            post(crate::gallery::secure::move_gallery_item),
+        )
+        .route(
+            "/galleries/secure/{id}/items/{item_id}/crop",
+            put(crate::gallery::secure::set_gallery_item_crop),
+        )
 }
 
 // ── Trash ────────────────────────────────────────────────────────────

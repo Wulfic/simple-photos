@@ -11,6 +11,8 @@ import com.simplephotos.data.remote.dto.SecureGalleryCreateRequest
 import com.simplephotos.data.remote.dto.SecureGalleryCreateResponse
 import com.simplephotos.data.remote.dto.SecureGalleryItemsResponse
 import com.simplephotos.data.remote.dto.SecureGalleryListResponse
+import com.simplephotos.data.remote.dto.SecureGalleryMoveItemRequest
+import com.simplephotos.data.remote.dto.SecureGallerySetCropRequest
 import com.simplephotos.data.remote.dto.SecureGalleryUnlockRequest
 import com.simplephotos.data.remote.dto.SecureGalleryUnlockResponse
 import javax.inject.Inject
@@ -71,4 +73,25 @@ class SecureGalleryRepository @Inject constructor(
     /** Return all blob IDs that belong to any secure gallery for the current user. */
     suspend fun getSecureBlobIds(): Set<String> =
         try { api.getSecureBlobIds().blobIds.toSet() } catch (_: Exception) { emptySet() }
+
+    /**
+     * Move an item from [sourceGalleryId] into [targetGalleryId] (#31,
+     * cross-secure-album picker). A photo lives in at most one secure album, so
+     * this reassigns membership rather than copying.
+     */
+    suspend fun moveItem(sourceGalleryId: String, itemId: String, targetGalleryId: String) {
+        api.moveSecureGalleryItem(
+            sourceGalleryId, itemId, SecureGalleryMoveItemRequest(targetGalleryId)
+        )
+    }
+
+    /**
+     * Persist (or clear, with null) non-destructive crop/edit metadata for a
+     * secure item (#31). Stored on the item row; applied at display time.
+     */
+    suspend fun setItemCrop(galleryId: String, itemId: String, cropMetadata: String?) {
+        api.setSecureGalleryItemCrop(
+            galleryId, itemId, SecureGallerySetCropRequest(cropMetadata)
+        )
+    }
 }

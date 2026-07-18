@@ -57,7 +57,11 @@ data class SecureGalleryItem(
     @SerializedName("photo_subtype") val photoSubtype: String? = null,
     @SerializedName("burst_id") val burstId: String? = null,
     @SerializedName("duration_secs") val durationSecs: Float? = null,
-    @SerializedName("motion_video_blob_id") val motionVideoBlobId: String? = null
+    @SerializedName("motion_video_blob_id") val motionVideoBlobId: String? = null,
+    // Non-destructive crop/edit JSON stored on the secure item itself (#31),
+    // same shape as a regular photo's crop_metadata. Applied at display time in
+    // the tile + viewer; null = no edits.
+    @SerializedName("crop_metadata") val cropMetadata: String? = null
 )
 
 data class SecureGalleryItemsResponse(
@@ -74,4 +78,14 @@ data class SecureGalleryAddItemResponse(
 
 data class SecureBlobIdsResponse(
     @SerializedName("blob_ids") val blobIds: List<String>
+)
+
+/** Move a secure item into another of the user's secure albums (#31). */
+data class SecureGalleryMoveItemRequest(
+    @SerializedName("target_gallery_id") val targetGalleryId: String
+)
+
+/** Persist (or clear, with null) a secure item's crop/edit metadata (#31). */
+data class SecureGallerySetCropRequest(
+    @SerializedName("crop_metadata") val cropMetadata: String?
 )
