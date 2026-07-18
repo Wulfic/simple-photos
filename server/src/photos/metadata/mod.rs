@@ -22,7 +22,7 @@ pub(crate) use media::{
 pub(crate) use subtype::{
     apply_aspect_subtype_fallback_with, backfill_photo_subtypes_all_users, extract_motion_video,
     extract_xmp_subtype, extract_xmp_subtype_async, pano_sensitivity_for_user, read_file_prefix,
-    PanoSensitivity, XMP_SCAN_PREFIX_BYTES,
+    repair_vertical_pano_mistags, PanoSensitivity, XMP_SCAN_PREFIX_BYTES,
 };
 
 // Crate-wide API kept for completeness; currently only referenced from within

@@ -217,8 +217,10 @@ pub(crate) async fn pano_sensitivity_for_user(
 ///   - `Strict`: ≥ 2.5 — removes the 2.0–2.5 band where ultra-wide landscape
 ///     crops and 20:9 cinematic shots produced the false positives item #7
 ///     targets. Genuine ≥2.5:1 stitched panos are kept.
-/// * Vertical panorama: `h/w >=` threshold ⇒ `panorama` (Samsung "vertical
-///   pano"). `Loose` 2.5, `Strict` 3.0.
+/// * There is deliberately **no** vertical-pano rule (item #29): panoramas are
+///   wide, not tall, so the XMP-less heuristic never tags `height > width`
+///   images. Samsung "vertical panos" that carry a GPano XMP marker are still
+///   handled upstream by `extract_xmp_subtype`.
 ///
 /// Width/height of `0` (unknown) are treated as a no-op.
 pub(crate) fn apply_aspect_subtype_fallback_with(
@@ -253,14 +255,18 @@ pub(crate) fn apply_aspect_subtype_fallback_with(
         return;
     }
 
-    let (h_aspect_min, v_aspect_min) = match sensitivity {
-        PanoSensitivity::Loose => (2.0_f64, 2.5_f64),
-        PanoSensitivity::Strict => (2.5_f64, 3.0_f64),
+    let h_aspect_min = match sensitivity {
+        PanoSensitivity::Loose => 2.0_f64,
+        PanoSensitivity::Strict => 2.5_f64,
     };
 
+    // item #29: panoramas are *wide*, not tall. The old vertical-pano branch
+    // (`h/w >= threshold`) mis-tagged tall screenshots, scrolls, and collages
+    // as panoramas. Genuine "vertical panoramas" that carry a GPano XMP marker
+    // are still recognised upstream by `extract_xmp_subtype`; only the
+    // XMP-less aspect heuristic dropped the tall-image case.
     let is_horizontal_pano = aspect >= h_aspect_min;
-    let is_vertical_pano = (1.0 / aspect) >= v_aspect_min;
-    if !is_horizontal_pano && !is_vertical_pano {
+    if !is_horizontal_pano {
         return;
     }
     // Telemetry hook (item #7): log every heuristic assignment with the aspect
@@ -470,6 +476,57 @@ pub async fn backfill_photo_subtypes_all_users(
         tracing::info!(updated = n, "[subtype-backfill] complete");
     }
     n
+}
+
+/// One-time startup repair (item #29): the aspect fallback used to tag tall
+/// images (`height > width`) as vertical panoramas. That heuristic is gone, so
+/// rows tagged before the change are never re-evaluated (the backfill only
+/// fills NULLs and never un-tags). Clear the `panorama` subtype on every tall
+/// photo so the normal backfill can re-read it — only photos whose XMP
+/// genuinely says panorama get re-tagged (XMP is read before the aspect
+/// fallback), so heuristic mistags stay untagged.
+///
+/// Guarded by a `server_settings` latch so it runs at most once per database.
+/// On DB error the latch is *not* set, so the repair retries on the next boot.
+pub async fn repair_vertical_pano_mistags(pool: &sqlx::SqlitePool) {
+    let done: bool = sqlx::query_scalar(
+        "SELECT value = 'true' FROM server_settings WHERE key = 'vertical_pano_untag_v1'",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or(false);
+    if done {
+        return;
+    }
+
+    match sqlx::query(
+        "UPDATE photos SET photo_subtype = NULL \
+         WHERE photo_subtype = 'panorama' AND height > width",
+    )
+    .execute(pool)
+    .await
+    {
+        Ok(r) => tracing::info!(
+            untagged = r.rows_affected(),
+            "[vpano-repair] cleared vertical-pano mistags (item #29)"
+        ),
+        Err(e) => {
+            tracing::error!(error = %e, "[vpano-repair] failed to un-tag vertical panos; will retry next boot");
+            return;
+        }
+    }
+
+    if let Err(e) = sqlx::query(
+        "INSERT INTO server_settings (key, value) VALUES ('vertical_pano_untag_v1', 'true') \
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    )
+    .execute(pool)
+    .await
+    {
+        tracing::warn!(error = %e, "[vpano-repair] failed to set completion latch");
+    }
 }
 
 /// Extract the embedded MP4 trailer from a motion photo JPEG.
@@ -840,11 +897,13 @@ mod xmp_tests {
     }
 
     #[test]
-    fn aspect_fallback_vertical_panorama() {
-        // Samsung "vertical pano" — h/w ≥ 2.5.
+    fn aspect_fallback_tall_image_is_never_panorama() {
+        // item #29: panoramas are wide, not tall. A tall portrait/screenshot
+        // (h/w ≈ 3.7) that carries no GPano XMP must stay untagged — the old
+        // vertical-pano heuristic that tagged it is gone.
         let mut info = SubtypeInfo::default();
-        apply_aspect_subtype_fallback(&mut info, 1080, 4000); // h/w ≈ 3.7
-        assert_eq!(info.photo_subtype.as_deref(), Some("panorama"));
+        apply_aspect_subtype_fallback(&mut info, 1080, 4000);
+        assert_eq!(info.photo_subtype, None);
     }
 
     #[test]
@@ -896,22 +955,35 @@ mod xmp_tests {
     }
 
     #[test]
-    fn strict_rejects_mild_vertical_pano() {
-        // h/w ≈ 2.68 — Loose tags it, Strict (≥3.0) does not.
+    fn tall_image_untagged_under_both_sensitivities() {
+        // item #29: no vertical-pano heuristic remains, so a tall image is
+        // never tagged regardless of sensitivity — mild (h/w ≈ 2.68) …
         let mut loose = SubtypeInfo::default();
         apply_aspect_subtype_fallback_with(&mut loose, 1080, 2900, PanoSensitivity::Loose);
-        assert_eq!(loose.photo_subtype.as_deref(), Some("panorama"));
+        assert_eq!(loose.photo_subtype, None);
 
         let mut strict = SubtypeInfo::default();
         apply_aspect_subtype_fallback_with(&mut strict, 1080, 2900, PanoSensitivity::Strict);
         assert_eq!(strict.photo_subtype, None);
+
+        // … and extreme (h/w ≈ 3.7, the old Samsung "vertical pano" case).
+        let mut loose_x = SubtypeInfo::default();
+        apply_aspect_subtype_fallback_with(&mut loose_x, 1080, 4000, PanoSensitivity::Loose);
+        assert_eq!(loose_x.photo_subtype, None);
+
+        let mut strict_x = SubtypeInfo::default();
+        apply_aspect_subtype_fallback_with(&mut strict_x, 1080, 4000, PanoSensitivity::Strict);
+        assert_eq!(strict_x.photo_subtype, None);
     }
 
     #[test]
-    fn strict_keeps_extreme_vertical_pano() {
-        // h/w ≈ 3.7 — kept under Strict.
-        let mut strict = SubtypeInfo::default();
-        apply_aspect_subtype_fallback_with(&mut strict, 1080, 4000, PanoSensitivity::Strict);
-        assert_eq!(strict.photo_subtype.as_deref(), Some("panorama"));
+    fn portrait_1080x4000_stays_none() {
+        // item #29 regression: the exact tall-portrait case from the issue
+        // (1080×4000) must remain untagged under both sensitivities.
+        for sens in [PanoSensitivity::Loose, PanoSensitivity::Strict] {
+            let mut info = SubtypeInfo::default();
+            apply_aspect_subtype_fallback_with(&mut info, 1080, 4000, sens);
+            assert_eq!(info.photo_subtype, None, "sensitivity {sens:?}");
+        }
     }
 }

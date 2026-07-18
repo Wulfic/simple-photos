@@ -77,6 +77,7 @@ pub fn spawn_all(
     spawn_storage_health_monitor(storage_root_swap.clone(), storage_available.clone());
     spawn_dimension_repair(pool.clone(), config.storage.root.clone());
     spawn_thumbnail_orientation_repair(pool.clone(), config.storage.root.clone());
+    spawn_vertical_pano_repair(pool.clone());
     spawn_photo_subtype_backfill(pool.clone(), config.storage.root.clone());
     crate::ai::processor::spawn_ai_processor(
         pool.clone(),
@@ -536,6 +537,16 @@ fn spawn_dimension_repair(pool: SqlitePool, storage_root: PathBuf) {
 fn spawn_thumbnail_orientation_repair(pool: SqlitePool, storage_root: PathBuf) {
     tokio::spawn(async move {
         crate::photos::thumbnail::repair_thumbnail_orientation(&pool, &storage_root).await;
+    });
+}
+
+/// One-time startup task (item #29): clear the `panorama` subtype off tall
+/// (`height > width`) photos that the retired vertical-pano heuristic mistagged.
+/// Runs before the subtype backfill (which has a 15 s delay) so the NULLed rows
+/// get re-evaluated and only genuine GPano panos are re-tagged.
+fn spawn_vertical_pano_repair(pool: SqlitePool) {
+    tokio::spawn(async move {
+        crate::photos::metadata::repair_vertical_pano_mistags(&pool).await;
     });
 }
 
