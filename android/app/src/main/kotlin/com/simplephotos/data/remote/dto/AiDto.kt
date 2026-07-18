@@ -51,6 +51,12 @@ data class FaceCluster(
     @SerializedName("photo_count") val photoCount: Int,
     /** Representative photo id used as the cluster thumbnail. */
     val representative: String? = null,
+    /** Representative face bbox (normalised 0–1) — crops the People tile to the
+     *  face. Null when the server couldn't resolve a detection. */
+    @SerializedName("rep_bbox_x") val repBboxX: Double? = null,
+    @SerializedName("rep_bbox_y") val repBboxY: Double? = null,
+    @SerializedName("rep_bbox_w") val repBboxW: Double? = null,
+    @SerializedName("rep_bbox_h") val repBboxH: Double? = null,
     @SerializedName("created_at") val createdAt: String? = null,
     @SerializedName("updated_at") val updatedAt: String? = null,
 )

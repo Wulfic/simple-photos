@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material3.*
@@ -25,6 +26,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -44,6 +47,19 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+// ── Face-zoom crop for People tiles ──────────────────────────────────────────
+
+/** Normalised (0–1) face bbox used to zoom a cluster tile onto the face. */
+data class TileFaceBox(val x: Float, val y: Float, val w: Float, val h: Float)
+
+/** Mirrors web computeFaceCropStyle: zoom so the larger face dimension reaches
+ *  ~60% of the tile, clamped to [1, 3]. */
+private const val FACE_TARGET_FRACTION = 0.6f
+private const val FACE_MAX_ZOOM = 3f
+
+private fun faceZoom(w: Float, h: Float): Float =
+    (FACE_TARGET_FRACTION / maxOf(w, h)).coerceIn(1f, FACE_MAX_ZOOM)
+
 // ── Generic grid scaffold ────────────────────────────────────────────────────
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -61,6 +77,7 @@ private fun <T> GridScaffold(
     onItemClick: (T) -> Unit,
     emptyHint: String,
     banner: String? = null,
+    faceBox: (T) -> TileFaceBox? = { null },
 ) {
     Scaffold(
         topBar = {
@@ -113,6 +130,7 @@ private fun <T> GridScaffold(
                             label = label(item),
                             subtitle = subtitle(item),
                             thumbUrl = thumbUrl(item),
+                            faceBox = faceBox(item),
                             onClick = { onItemClick(item) },
                         )
                     }
@@ -129,6 +147,7 @@ private fun ClusterTile(
     subtitle: String,
     thumbUrl: String?,
     onClick: () -> Unit,
+    faceBox: TileFaceBox? = null,
 ) {
     Card(
         modifier = Modifier
@@ -141,15 +160,28 @@ private fun ClusterTile(
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(1f)
+                    .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp))
                     .background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center,
             ) {
                 if (!thumbUrl.isNullOrEmpty()) {
+                    // Zoom the thumbnail onto the detected face when the server
+                    // sent a bbox — otherwise show the whole (cover-cropped) photo.
+                    val zoomModifier = if (faceBox != null && faceBox.w > 0f && faceBox.h > 0f) {
+                        val cx = (faceBox.x + faceBox.w / 2f).coerceIn(0f, 1f)
+                        val cy = (faceBox.y + faceBox.h / 2f).coerceIn(0f, 1f)
+                        val zoom = faceZoom(faceBox.w, faceBox.h)
+                        Modifier.graphicsLayer {
+                            scaleX = zoom
+                            scaleY = zoom
+                            transformOrigin = TransformOrigin(cx, cy)
+                        }
+                    } else Modifier
                     AsyncImage(
                         model = rememberThumbnailRequest(data = thumbUrl),
                         contentDescription = label,
                         contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier.fillMaxSize().then(zoomModifier),
                     )
                 } else {
                     Icon(
@@ -186,6 +218,7 @@ private fun PhotoIdsGridScaffold(
     serverBaseUrl: String,
     onPhotoClick: (String) -> Unit,
     emptyHint: String,
+    actions: @Composable RowScope.() -> Unit = {},
 ) {
     Scaffold(
         topBar = {
@@ -196,6 +229,7 @@ private fun PhotoIdsGridScaffold(
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
+                actions = actions,
             )
         }
     ) { padding ->
@@ -309,6 +343,13 @@ fun PeopleScreen(
                 if (vm.serverBaseUrl.isNotEmpty()) "${vm.serverBaseUrl}/api/photos/$id/thumb" else null
             }
         },
+        faceBox = { c ->
+            val w = c.repBboxW
+            val h = c.repBboxH
+            if (w != null && h != null) {
+                TileFaceBox((c.repBboxX ?: 0.0).toFloat(), (c.repBboxY ?: 0.0).toFloat(), w.toFloat(), h.toFloat())
+            } else null
+        },
         onItemClick = { cluster ->
             if (assignDetectionId != null) {
                 vm.assignFace(assignDetectionId, cluster.id, onAssigned)
@@ -344,6 +385,20 @@ class PersonDetailViewModel @Inject constructor(
             loading = false
         }
     }
+
+    /** Rename this person (face cluster). Optimistically updates the title; on
+     *  failure surfaces the error and leaves the old label. */
+    fun rename(clusterId: Long, name: String, onDone: () -> Unit) {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) { onDone(); return }
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { repo.renameFaceCluster(clusterId.toString(), trimmed) }
+                label = trimmed
+            } catch (e: Exception) { error = e.message }
+            onDone()
+        }
+    }
 }
 
 @Composable
@@ -354,6 +409,7 @@ fun PersonDetailScreen(
     vm: PersonDetailViewModel = hiltViewModel(),
 ) {
     LaunchedEffect(clusterId) { vm.load(clusterId) }
+    var showRename by remember { mutableStateOf(false) }
     PhotoIdsGridScaffold(
         title = vm.label,
         onBack = onBack,
@@ -363,6 +419,47 @@ fun PersonDetailScreen(
         serverBaseUrl = vm.serverBaseUrl,
         onPhotoClick = onPhotoClick,
         emptyHint = "No photos for this person.",
+        actions = {
+            IconButton(onClick = { showRename = true }) {
+                Icon(Icons.Default.Edit, contentDescription = "Rename person")
+            }
+        },
+    )
+    if (showRename) {
+        RenameClusterDialog(
+            current = vm.label,
+            onDismiss = { showRename = false },
+            onConfirm = { newName -> vm.rename(clusterId, newName) { showRename = false } },
+        )
+    }
+}
+
+/** Shared rename dialog for a person/pet cluster. */
+@Composable
+private fun RenameClusterDialog(
+    current: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var value by remember { mutableStateOf(current) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Rename person") },
+        text = {
+            OutlinedTextField(
+                value = value,
+                onValueChange = { value = it },
+                singleLine = true,
+                label = { Text("Name") },
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onConfirm(value) },
+                enabled = value.trim().isNotEmpty(),
+            ) { Text("Save") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
 

@@ -58,12 +58,21 @@ pub struct AiStatusResponse {
 }
 
 /// Face cluster summary for the clusters list endpoint.
+///
+/// `rep_bbox_*` describe the representative face's bounding box (normalised
+/// 0.0–1.0) within the representative photo, so clients can crop the People-grid
+/// tile to the detected face instead of showing the whole photo. They are
+/// `None` when no matching detection exists (additive — old clients ignore them).
 #[derive(Debug, Serialize, FromRow)]
 pub struct FaceClusterSummary {
     pub id: i64,
     pub label: Option<String>,
     pub photo_count: i64,
     pub representative: Option<String>,
+    pub rep_bbox_x: Option<f64>,
+    pub rep_bbox_y: Option<f64>,
+    pub rep_bbox_w: Option<f64>,
+    pub rep_bbox_h: Option<f64>,
     pub created_at: String,
     pub updated_at: String,
 }

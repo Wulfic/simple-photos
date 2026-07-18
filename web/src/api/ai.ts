@@ -24,6 +24,12 @@ export interface FaceCluster {
   label: string | null;
   photo_count: number;
   representative: string | null;
+  /** Representative face bbox (normalised 0–1) for cropping the People tile.
+   *  Null when the server couldn't resolve a detection for the representative. */
+  rep_bbox_x: number | null;
+  rep_bbox_y: number | null;
+  rep_bbox_w: number | null;
+  rep_bbox_h: number | null;
   created_at: string;
   updated_at: string;
 }

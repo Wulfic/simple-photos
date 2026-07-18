@@ -8,7 +8,7 @@
  *
  * Representative thumbnails come from the shared useIdbThumbnailMap hook.
  */
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useAppNavigate } from "../../hooks/useAppNavigate";
 import AppHeader from "../../components/AppHeader";
 import { GallerySkeleton } from "../../components/skeletons";
@@ -28,6 +28,9 @@ export interface ClusterCard {
   alt: string;
   /** Muted text line(s) rendered under the title. */
   meta: ReactNode;
+  /** Optional CSS applied to the thumbnail <img> — used by People to zoom the
+   *  tile onto the detected face (see computeFaceCropStyle). */
+  imgStyle?: CSSProperties;
 }
 
 interface SmartClusterListProps<T> {
@@ -155,7 +158,7 @@ function ClusterTile({
       <div onClick={onClick} className="card card-interactive p-3 cursor-pointer">
         <div className="aspect-square bg-surface-raised rounded-full mb-2 mx-auto w-24 h-24 flex items-center justify-center overflow-hidden">
           {thumbUrl ? (
-            <img src={thumbUrl} alt={card.alt} className="w-full h-full object-cover rounded-full" />
+            <img src={thumbUrl} alt={card.alt} style={card.imgStyle} className="w-full h-full object-cover rounded-full" />
           ) : (
             placeholder
           )}
@@ -169,7 +172,7 @@ function ClusterTile({
     <div onClick={onClick} className="card card-interactive cursor-pointer overflow-hidden">
       <div className="aspect-video bg-surface-raised flex items-center justify-center overflow-hidden">
         {thumbUrl ? (
-          <img src={thumbUrl} alt={card.alt} className="w-full h-full object-cover" />
+          <img src={thumbUrl} alt={card.alt} style={card.imgStyle} className="w-full h-full object-cover" />
         ) : (
           placeholder
         )}

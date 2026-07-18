@@ -258,6 +258,50 @@ export function getCropFillStyle(cropJson?: string | null): CSSProperties | null
   }
 }
 
+/** Face bounding box, normalised to 0.0–1.0 within the source photo. */
+export interface FaceBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** Fraction of the tile the face should roughly occupy after zooming. */
+export const FACE_TARGET_FRACTION = 0.6;
+/** Upper bound on the extra zoom so a tiny far-away face doesn't pixel-explode. */
+export const FACE_MAX_ZOOM = 3;
+
+/**
+ * CSS for an `object-fit: cover` <img> in a square tile so it zooms/pans to the
+ * detected face instead of showing the whole photo (People-grid tiles, face
+ * chips). Pure heuristic — it deliberately does not need the image aspect ratio,
+ * which we don't know for a cached thumbnail:
+ *   - `objectPosition` slides the cover crop so the face centre is centred.
+ *   - `transform: scale()` (origin at the same point) zooms so the larger face
+ *     dimension reaches ~{@link FACE_TARGET_FRACTION} of the tile, clamped to
+ *     [1, {@link FACE_MAX_ZOOM}].
+ * Returns `{}` for a missing/degenerate box so callers fall back to plain cover.
+ */
+export function computeFaceCropStyle(box?: FaceBox | null): CSSProperties {
+  if (!box) return {};
+  const { x, y, w, h } = box;
+  if (![x, y, w, h].every((n) => Number.isFinite(n)) || w <= 0 || h <= 0) return {};
+
+  const cx = Math.min(1, Math.max(0, x + w / 2));
+  const cy = Math.min(1, Math.max(0, y + h / 2));
+  const zoom = Math.min(
+    FACE_MAX_ZOOM,
+    Math.max(1, FACE_TARGET_FRACTION / Math.max(w, h)),
+  );
+  const originX = `${(cx * 100).toFixed(2)}%`;
+  const originY = `${(cy * 100).toFixed(2)}%`;
+  return {
+    objectPosition: `${originX} ${originY}`,
+    transformOrigin: `${originX} ${originY}`,
+    transform: `scale(${zoom.toFixed(3)})`,
+  };
+}
+
 export function getThumbnailStyle(
   cropJson?: string | null,
   naturalW?: number | null,

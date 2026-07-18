@@ -10,6 +10,18 @@ import { useAppNavigate } from "../../hooks/useAppNavigate";
 import SmartClusterList from "./SmartClusterList";
 import SmartAlbumDetail from "./SmartAlbumDetail";
 import { resolvePhotosByServerId } from "./resolveServerPhotos";
+import { computeFaceCropStyle } from "../../utils/thumbnailCss";
+
+/** Build the face-zoom style for a cluster tile, when the server sent a bbox. */
+function faceCropStyle(cluster: FaceCluster) {
+  if (cluster.rep_bbox_w == null || cluster.rep_bbox_h == null) return undefined;
+  return computeFaceCropStyle({
+    x: cluster.rep_bbox_x ?? 0,
+    y: cluster.rep_bbox_y ?? 0,
+    w: cluster.rep_bbox_w,
+    h: cluster.rep_bbox_h,
+  });
+}
 
 const PersonIcon = (
   <svg className="w-10 h-10 text-fg-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -61,6 +73,7 @@ export function PeopleView() {
         href: `/albums/smart-people/${cluster.id}`,
         title: cluster.label || "Unknown Person",
         alt: cluster.label || "Unknown",
+        imgStyle: faceCropStyle(cluster),
         meta: (
           <p className="text-xs text-fg-muted text-center">
             {cluster.photo_count} photo{cluster.photo_count !== 1 ? "s" : ""}

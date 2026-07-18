@@ -269,7 +269,22 @@ pub async fn list_face_clusters(
     // Smart-album rule: require at least 2 distinct photos before surfacing a
     // person card. This prevents random faces in group photos / crowds from
     // creating noisy single-photo "People" entries.
-    let clusters: Vec<FaceClusterSummary> = sqlx::query_as(
+    let clusters = fetch_face_clusters(&state.pool, &auth.user_id).await?;
+    Ok(Json(clusters))
+}
+
+/// Query the face-cluster summaries for a user, including the representative
+/// face's bbox so clients can crop the People tile to the face.
+///
+/// `rep` is the highest-confidence detection on the representative photo. The
+/// join is LEFT so clusters whose representative detection can't be resolved
+/// still list (bbox simply comes back NULL). Extracted from the handler so it
+/// can be unit-tested against an in-memory DB.
+pub(crate) async fn fetch_face_clusters(
+    pool: &sqlx::SqlitePool,
+    user_id: &str,
+) -> Result<Vec<FaceClusterSummary>, sqlx::Error> {
+    sqlx::query_as(
         "SELECT fc.id, fc.label, fc.photo_count, \
                 COALESCE(\
                     fc.representative, \
@@ -277,16 +292,25 @@ pub async fn list_face_clusters(
                      WHERE fd.cluster_id = fc.id \
                      ORDER BY fd.confidence DESC LIMIT 1) \
                 ) AS representative, \
+                rep.bbox_x AS rep_bbox_x, rep.bbox_y AS rep_bbox_y, \
+                rep.bbox_w AS rep_bbox_w, rep.bbox_h AS rep_bbox_h, \
                 fc.created_at, fc.updated_at \
          FROM face_clusters fc \
+         LEFT JOIN face_detections rep ON rep.id = (\
+             SELECT fd2.id FROM face_detections fd2 \
+             WHERE fd2.cluster_id = fc.id \
+               AND fd2.photo_id = COALESCE(\
+                   fc.representative, \
+                   (SELECT fd3.photo_id FROM face_detections fd3 \
+                    WHERE fd3.cluster_id = fc.id \
+                    ORDER BY fd3.confidence DESC LIMIT 1)) \
+             ORDER BY fd2.confidence DESC LIMIT 1) \
          WHERE fc.user_id = ?1 AND fc.photo_count >= 2 \
          ORDER BY fc.photo_count DESC",
     )
-    .bind(&auth.user_id)
-    .fetch_all(&state.pool)
-    .await?;
-
-    Ok(Json(clusters))
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
 }
 
 /// GET /api/ai/faces/:cluster_id/photos — list photos in a face cluster.
@@ -848,4 +872,99 @@ pub async fn merge_pet_clusters(
         "merged_into": target_id,
         "photo_count": count.0
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::str::FromStr;
+
+    async fn memory_pool() -> sqlx::SqlitePool {
+        // See gallery::summary tests: single connection to a shared in-memory DB
+        // and FKs off so we can insert bare face rows without the users/photos graph.
+        let opts = sqlx::sqlite::SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .foreign_keys(false);
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        pool
+    }
+
+    async fn insert_cluster(pool: &sqlx::SqlitePool, id: i64, user: &str, photo_count: i64) {
+        sqlx::query(
+            "INSERT INTO face_clusters (id, user_id, label, representative, photo_count, created_at, updated_at) \
+             VALUES (?, ?, NULL, NULL, ?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        )
+        .bind(id)
+        .bind(user)
+        .bind(photo_count)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn insert_detection(
+        pool: &sqlx::SqlitePool,
+        user: &str,
+        photo: &str,
+        cluster: i64,
+        bbox: (f64, f64, f64, f64),
+        confidence: f64,
+    ) {
+        sqlx::query(
+            "INSERT INTO face_detections (photo_id, user_id, cluster_id, bbox_x, bbox_y, bbox_w, bbox_h, confidence, created_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, '2026-01-01T00:00:00Z')",
+        )
+        .bind(photo)
+        .bind(user)
+        .bind(cluster)
+        .bind(bbox.0)
+        .bind(bbox.1)
+        .bind(bbox.2)
+        .bind(bbox.3)
+        .bind(confidence)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn face_clusters_carry_representative_bbox() {
+        let pool = memory_pool().await;
+        let u = "user-1";
+        insert_cluster(&pool, 1, u, 2).await;
+        // Highest-confidence detection (0.9) on photo "p1" is the representative;
+        // its bbox must be the one surfaced, not the lower-confidence one.
+        insert_detection(&pool, u, "p1", 1, (0.1, 0.2, 0.3, 0.4), 0.9).await;
+        insert_detection(&pool, u, "p2", 1, (0.5, 0.5, 0.1, 0.1), 0.5).await;
+
+        let clusters = fetch_face_clusters(&pool, u).await.unwrap();
+        assert_eq!(clusters.len(), 1);
+        let c = &clusters[0];
+        assert_eq!(c.representative.as_deref(), Some("p1"));
+        assert_eq!(c.rep_bbox_x, Some(0.1));
+        assert_eq!(c.rep_bbox_y, Some(0.2));
+        assert_eq!(c.rep_bbox_w, Some(0.3));
+        assert_eq!(c.rep_bbox_h, Some(0.4));
+    }
+
+    #[tokio::test]
+    async fn cluster_below_two_photos_hidden_and_missing_bbox_is_null() {
+        let pool = memory_pool().await;
+        let u = "user-1";
+        // Single-photo cluster is filtered out (photo_count < 2).
+        insert_cluster(&pool, 1, u, 1).await;
+        insert_detection(&pool, u, "p1", 1, (0.1, 0.1, 0.2, 0.2), 0.8).await;
+        // Eligible cluster with no linked detections → representative + bbox NULL.
+        insert_cluster(&pool, 2, u, 2).await;
+
+        let clusters = fetch_face_clusters(&pool, u).await.unwrap();
+        assert_eq!(clusters.len(), 1, "only the >=2-photo cluster surfaces");
+        assert_eq!(clusters[0].id, 2);
+        assert_eq!(clusters[0].rep_bbox_x, None);
+    }
 }
