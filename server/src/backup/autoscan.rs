@@ -262,6 +262,7 @@ pub async fn run_auto_scan_public(pool: &sqlx::SqlitePool, storage_root: &std::p
 
 /// Scan storage directory and register any unregistered media files for ALL users.
 async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) -> i64 {
+    let scan_start = std::time::Instant::now();
     // Skip scanning while a disaster-recovery push is in-flight to avoid
     // creating duplicate photo rows that race with the incoming sync.
     let recovering: bool = sqlx::query_scalar(
@@ -377,6 +378,37 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
     // many hours.
     use crate::photos::register::{register_native_file, NativeCandidate, RegisterContext};
 
+    // Load previously scan-rejected paths (Takeout album-copy duplicates +
+    // gallery-hidden originals) so the walk skips re-hashing them over the
+    // storage mount every pass — the fix for the "server never goes idle after
+    // import" disk thrash (migration 031). Keyed by rel_path → (size, mtime); a
+    // hit with unchanged size+mtime means "known dead end, don't touch".
+    let mut skip_map: std::collections::HashMap<String, (i64, Option<String>)> =
+        std::collections::HashMap::new();
+    {
+        let mut rows = sqlx::query_as::<_, (String, i64, Option<String>)>(
+            "SELECT rel_path, size_bytes, mtime FROM scan_skipped_paths WHERE user_id = ?",
+        )
+        .bind(&admin_id)
+        .fetch(pool);
+        while let Some(row) = rows.try_next().await.unwrap_or(None) {
+            skip_map.insert(row.0, (row.1, row.2));
+        }
+    }
+    tracing::info!(
+        "[DIAG:AUTOSCAN] run_auto_scan: {} known scan-skip paths loaded",
+        skip_map.len()
+    );
+
+    // Per-pass tallies for the single summary line (Phase 3 log hygiene).
+    let mut walked: u64 = 0;
+    let mut shadowed_count: u64 = 0;
+    let mut already_registered: u64 = 0;
+    let mut known_skipped: u64 = 0;
+    // Skip rows whose file changed on disk (size/mtime differ) — cleared after
+    // the walk so the candidate gets a fresh evaluation.
+    let mut stale_skip_paths: Vec<String> = Vec::new();
+
     let mut candidates: Vec<NativeCandidate> = Vec::new();
     let mut queue = vec![storage_root.to_path_buf()];
 
@@ -437,11 +469,13 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
             if !(ft.is_file() && is_media_file(&name)) {
                 continue;
             }
+            walked += 1;
 
             // Skip the unedited Google Photos original when its baked-in
             // "-edited" sibling is in this same folder (#19).
             if shadowed_originals.contains(&name.to_lowercase()) {
-                tracing::info!(
+                shadowed_count += 1;
+                tracing::debug!(
                     file = %name,
                     "[DIAG:AUTOSCAN] Skipping unedited Google Photos original ('-edited' sibling present)"
                 );
@@ -457,6 +491,7 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
                 .replace('\\', "/");
 
             if existing_set.contains(&rel_path) {
+                already_registered += 1;
                 continue;
             }
 
@@ -468,6 +503,19 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
                     crate::photos::utils::normalize_iso_timestamp(&dt.to_rfc3339())
                 })
             });
+
+            // Known scan-reject (Takeout album copy / gallery-hidden) with an
+            // identical size+mtime — skip the expensive re-hash entirely. This is
+            // the change that stops the 4,254-file re-hash loop at idle. If either
+            // size or mtime differs the file was replaced/edited, so we clear the
+            // stale row and fall through to re-evaluate it.
+            if let Some((skip_size, skip_mtime)) = skip_map.get(&rel_path) {
+                if *skip_size == size && *skip_mtime == modified {
+                    known_skipped += 1;
+                    continue;
+                }
+                stale_skip_paths.push(rel_path.clone());
+            }
 
             // Native format — determine MIME and media type directly.
             let mime = mime_from_extension(&name).to_string();
@@ -503,10 +551,27 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
         }
     }
 
-    tracing::info!(
+    tracing::debug!(
         "[DIAG:AUTOSCAN] run_auto_scan: {} new candidate files to register",
         candidates.len()
     );
+
+    // Clear skip rows whose file changed on disk since we last rejected it, so
+    // the fresh evaluation below isn't shadowed by a stale "already a dup" row.
+    // Rare (only genuinely-changed files land here), so a per-path delete is
+    // fine; if the file is still a duplicate, register re-records the row.
+    for stale in &stale_skip_paths {
+        if let Err(e) = sqlx::query(
+            "DELETE FROM scan_skipped_paths WHERE user_id = ? AND rel_path = ?",
+        )
+        .bind(&admin_id)
+        .bind(stale)
+        .execute(pool)
+        .await
+        {
+            tracing::warn!(rel_path = %stale, error = %e, "Failed to clear stale scan-skip row");
+        }
+    }
 
     // ── Phase 2: register candidates with bounded concurrency ──
     // Registration is memory-light (header metadata, streaming hash, one INSERT,
@@ -514,6 +579,7 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
     // so scaling this with CPU cores speeds a large import up without adding the
     // decode/OOM pressure a naive fan-out would. Shared with the manual `/scan`
     // path via crate::photos::register (single source of truth).
+    let candidates_len = candidates.len();
     let ctx = Arc::new(RegisterContext {
         user_id: admin_id,
         pano_sensitivity,
@@ -542,5 +608,241 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
         .for_each(|_| async {})
         .await;
 
-    new_count.load(Ordering::Relaxed)
+    let registered = new_count.load(Ordering::Relaxed);
+    // One summary line per pass instead of thousands of per-file INFO lines. At
+    // idle steady-state this reports 0 candidates / 0 registered and finishes in
+    // well under a second — the signal that the disk-thrash loop is dead.
+    tracing::info!(
+        "[DIAG:AUTOSCAN] scan pass: {} media walked, {} shadowed, {} already-registered, \
+         {} known-dups skipped, {} stale-rechecked, {} candidates, {} registered, took {:.1}s",
+        walked,
+        shadowed_count,
+        already_registered,
+        known_skipped,
+        stale_skip_paths.len(),
+        candidates_len,
+        registered,
+        scan_start.elapsed().as_secs_f64(),
+    );
+    registered
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::str::FromStr;
+
+    /// In-memory DB with all migrations + one admin user (the scan assigns new
+    /// photos to the first admin). `max_connections(1)` keeps the single
+    /// in-memory database alive across the whole test.
+    async fn test_pool() -> sqlx::SqlitePool {
+        let opts = sqlx::sqlite::SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .foreign_keys(true);
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO users (id, username, password_hash, created_at, role) \
+             VALUES ('admin-1', 'admin', 'x', '2020-01-01T00:00:00.000Z', 'admin')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool
+    }
+
+    /// THE disk-thrash fix, end to end: a Takeout date-folder photo and its
+    /// identical album-folder copy. The first scan registers one photo and
+    /// remembers the copy; the second scan must find and skip the copy WITHOUT
+    /// re-hashing it — proven by a sentinel on the skip row that a re-run of
+    /// `register` (which `INSERT OR REPLACE`s the row) would have overwritten.
+    #[tokio::test]
+    async fn scan_remembers_dup_and_skips_it_next_pass() {
+        let pool = test_pool().await;
+        let root = std::env::temp_dir().join(format!("sp-autoscan-{}", uuid::Uuid::new_v4()));
+        let year = root.join("Photos from 2020");
+        let album = root.join("Cats");
+        tokio::fs::create_dir_all(&year).await.unwrap();
+        tokio::fs::create_dir_all(&album).await.unwrap();
+        let bytes = b"identical-cat-bytes-in-date-and-album-folders";
+        tokio::fs::write(year.join("cat.jpg"), bytes).await.unwrap();
+        tokio::fs::write(album.join("cat.jpg"), bytes).await.unwrap();
+
+        let first = run_auto_scan(&pool, &root).await;
+        assert_eq!(first, 1, "identical bytes dedup to a single new photo");
+
+        let (photos,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM photos")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(photos, 1);
+
+        let (skips,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM scan_skipped_paths")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(skips, 1, "the duplicate copy is remembered exactly once");
+        let reason: String = sqlx::query_scalar("SELECT reason FROM scan_skipped_paths")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(reason, "hash_duplicate");
+
+        // If the next pass re-hashes the copy, `register` runs again and its
+        // INSERT OR REPLACE overwrites this sentinel. Survival == it was skipped.
+        sqlx::query("UPDATE scan_skipped_paths SET created_at = 'SENTINEL'")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let second = run_auto_scan(&pool, &root).await;
+        assert_eq!(second, 0, "steady state registers nothing new");
+
+        let (survived,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM scan_skipped_paths WHERE created_at = 'SENTINEL'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            survived, 1,
+            "the copy was skipped without re-hashing (register never re-ran)"
+        );
+
+        let _ = tokio::fs::remove_dir_all(&root).await;
+    }
+
+    /// A skip row is a cache keyed by size+mtime: if the file on disk changes, it
+    /// must be re-evaluated, never wrongly suppressed. Change the remembered copy
+    /// to unique content and it must register as a new photo.
+    #[tokio::test]
+    async fn changed_file_is_reevaluated_despite_stale_skip() {
+        let pool = test_pool().await;
+        let root = std::env::temp_dir().join(format!("sp-autoscan-{}", uuid::Uuid::new_v4()));
+        let year = root.join("Photos from 2020");
+        let album = root.join("Cats");
+        tokio::fs::create_dir_all(&year).await.unwrap();
+        tokio::fs::create_dir_all(&album).await.unwrap();
+        let bytes = b"identical-cat-bytes-A";
+        tokio::fs::write(year.join("cat.jpg"), bytes).await.unwrap();
+        tokio::fs::write(album.join("cat.jpg"), bytes).await.unwrap();
+
+        assert_eq!(run_auto_scan(&pool, &root).await, 1);
+
+        // Change whichever copy got the skip row (registration order is racy).
+        let skipped_rel: String = sqlx::query_scalar("SELECT rel_path FROM scan_skipped_paths")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        tokio::fs::write(
+            root.join(&skipped_rel),
+            b"now-a-totally-different-and-much-longer-image-payload",
+        )
+        .await
+        .unwrap();
+
+        // Size differs from the remembered row → stale → re-evaluated → unique
+        // content now → registers.
+        assert_eq!(
+            run_auto_scan(&pool, &root).await,
+            1,
+            "a changed file must not stay wrongly skipped"
+        );
+
+        let (photos,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM photos")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(photos, 2);
+
+        // Stale row cleared; new content is unique so no fresh dup skip.
+        let (skips,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM scan_skipped_paths")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(skips, 0);
+
+        let _ = tokio::fs::remove_dir_all(&root).await;
+    }
+
+    /// Invalidation (migration 031 trigger): deleting the photo a copy deduped
+    /// against clears the copy's skip row, so the copy can register again — the
+    /// skip cache must never change observable scan behaviour.
+    #[tokio::test]
+    async fn deleting_the_deduped_photo_clears_the_skip_row() {
+        let pool = test_pool().await;
+        sqlx::query(
+            "INSERT INTO photos (id, user_id, filename, file_path, mime_type, created_at, photo_hash) \
+             VALUES ('p1','admin-1','cat.jpg','Photos from 2020/cat.jpg','image/jpeg','2020-01-01T00:00:00.000Z','HASH-1')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO scan_skipped_paths \
+             (user_id, rel_path, size_bytes, mtime, reason, photo_hash, created_at) \
+             VALUES ('admin-1','Cats/cat.jpg',10,'2020-01-01T00:00:00.000Z','hash_duplicate','HASH-1','2020-01-01T00:00:00.000Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query("DELETE FROM photos WHERE id = 'p1'")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let (skips,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM scan_skipped_paths")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(skips, 0, "the photo-delete trigger cleared the copy's skip row");
+    }
+
+    /// The gallery-hidden analogue: removing a secure-gallery item un-hides its
+    /// content hash, so a matching file on disk must be allowed back next scan.
+    /// (Bare rows, FKs off — the trigger doesn't care about the parent graph.)
+    #[tokio::test]
+    async fn removing_a_gallery_item_clears_the_skip_row() {
+        let opts = sqlx::sqlite::SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .foreign_keys(false);
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO encrypted_gallery_items (id, gallery_id, blob_id, added_at, original_photo_hash) \
+             VALUES ('egi-1','g-1','b-1','2020-01-01T00:00:00.000Z','HASH-9')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO scan_skipped_paths \
+             (user_id, rel_path, size_bytes, mtime, reason, photo_hash, created_at) \
+             VALUES ('admin-1','Secret/x.jpg',10,'t','gallery_hidden','HASH-9','t')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query("DELETE FROM encrypted_gallery_items WHERE id = 'egi-1'")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let (skips,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM scan_skipped_paths")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(skips, 0, "the egi-delete trigger un-hides the file for re-scan");
+    }
 }

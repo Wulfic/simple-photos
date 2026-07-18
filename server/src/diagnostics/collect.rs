@@ -118,8 +118,46 @@ pub async fn collect_database_stats(pool: &SqlitePool, db_path: &Path) -> Databa
     }
 }
 
-/// Collect storage usage: directory walk + disk capacity.
+/// How long a storage-stats result stays fresh. The walk is a whole-tree scan
+/// over the (often SMB) storage root — the single most expensive diagnostics
+/// collector — and a minute-stale byte count is fine for a stats panel, so
+/// repeated diagnostics loads (and the page's 10s auto-refresh) reuse it instead
+/// of re-walking the tree each time.
+const STORAGE_STATS_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Cache keyed by storage root so a runtime storage-path change (setup wizard)
+/// busts it immediately rather than serving a stale tree's numbers.
+fn storage_stats_cache(
+) -> &'static std::sync::Mutex<Option<(std::time::Instant, std::path::PathBuf, StorageStats)>> {
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<Option<(std::time::Instant, std::path::PathBuf, StorageStats)>>,
+    > = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// Collect storage usage: directory walk + disk capacity. Cached for
+/// [`STORAGE_STATS_TTL`] (see above) — the walk is the ~13s "Storage" red bar.
 pub async fn collect_storage_stats(storage_root: &Path) -> StorageStats {
+    if let Ok(guard) = storage_stats_cache().lock() {
+        if let Some((at, path, stats)) = guard.as_ref() {
+            if path == storage_root && at.elapsed() < STORAGE_STATS_TTL {
+                return stats.clone();
+            }
+        }
+    }
+    let stats = compute_storage_stats(storage_root).await;
+    if let Ok(mut guard) = storage_stats_cache().lock() {
+        *guard = Some((
+            std::time::Instant::now(),
+            storage_root.to_path_buf(),
+            stats.clone(),
+        ));
+    }
+    stats
+}
+
+/// Uncached storage-stats computation (directory walk + disk capacity).
+async fn compute_storage_stats(storage_root: &Path) -> StorageStats {
     let (dir_bytes, file_count) = dir_usage(storage_root).await;
     let root = storage_root.to_path_buf();
     let (disk_total, disk_available) = tokio::task::spawn_blocking(move || disk_stats(&root))

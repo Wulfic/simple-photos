@@ -111,6 +111,44 @@ async fn record_source_album(
     .await;
 }
 
+/// Remember that a candidate was examined and rejected, so the auto-scan walk
+/// can skip it next pass instead of re-hashing it over the storage mount. The
+/// row is a pure cache (see migration 031) and self-heals: `INSERT OR REPLACE`
+/// keeps size/mtime current, and a delete-trigger drops it when the photo it
+/// deduped against goes away. A failure here is non-fatal — the worst case is we
+/// re-hash the file once more next pass, exactly the old behaviour.
+async fn record_scan_skip(
+    pool: &SqlitePool,
+    user_id: &str,
+    cand: &NativeCandidate,
+    reason: &str,
+    photo_hash: Option<&str>,
+    now: &str,
+) {
+    if let Err(e) = sqlx::query(
+        "INSERT OR REPLACE INTO scan_skipped_paths \
+         (user_id, rel_path, size_bytes, mtime, reason, photo_hash, created_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(user_id)
+    .bind(&cand.rel_path)
+    .bind(cand.size)
+    .bind(&cand.modified)
+    .bind(reason)
+    .bind(photo_hash)
+    .bind(now)
+    .execute(pool)
+    .await
+    {
+        tracing::warn!(
+            file = %cand.rel_path,
+            reason = %reason,
+            error = %e,
+            "Failed to record scan-skip row (file will be re-hashed next pass)"
+        );
+    }
+}
+
 /// Register a single native media file: extract metadata + subtype, hash it,
 /// exclude gallery-hidden originals, `INSERT OR IGNORE`, extract an embedded
 /// motion video (motion photos), and generate a thumbnail.
@@ -219,11 +257,14 @@ pub(crate) async fn register_native_file(
     // gallery item and must stay hidden — never register it in the main gallery.
     if let Some(ref h) = photo_hash {
         if ctx.gallery_hashes.contains(h) {
-            tracing::info!(
+            tracing::debug!(
                 file = %cand.rel_path,
                 hash = %h,
                 "Skipping — content hash matches gallery-hidden original"
             );
+            // Remember it so the walk doesn't re-hash this file every pass. The
+            // egi-delete trigger clears the row if the item is ever un-hidden.
+            record_scan_skip(pool, &ctx.user_id, cand, "gallery_hidden", Some(h), &now).await;
             return false;
         }
     }
@@ -296,6 +337,18 @@ pub(crate) async fn register_native_file(
             } else {
                 tracing::debug!(file = %cand.rel_path, "Already registered (concurrent scan or duplicate), skipping");
             }
+            // Remember this duplicate so the walk skips it next pass instead of
+            // re-hashing it (the Takeout album-copy loop). The photo-delete
+            // trigger clears the row if the photo it deduped against is removed.
+            record_scan_skip(
+                pool,
+                &ctx.user_id,
+                cand,
+                "hash_duplicate",
+                photo_hash.as_deref(),
+                &now,
+            )
+            .await;
             return false;
         }
         Err(e) => {
@@ -658,6 +711,162 @@ mod tests {
         .unwrap();
         assert_eq!(count, 1, "album membership must be recorded despite dedup");
         assert_eq!(album, "Cats");
+
+        let _ = tokio::fs::remove_dir_all(&root).await;
+    }
+
+    /// The disk-thrash fix (migration 031): a hash-duplicate copy must leave a
+    /// `scan_skipped_paths` row so the auto-scan walk stops re-hashing it every
+    /// pass. The row records the copy's own rel_path, size, mtime and the shared
+    /// content hash (the key the delete-triggers invalidate on).
+    #[tokio::test]
+    async fn duplicate_copy_records_a_scan_skip_row() {
+        let root = std::env::temp_dir().join(format!("sp-reg-test-{}", uuid::Uuid::new_v4()));
+        let year_dir = root.join("Photos from 2021");
+        let album_dir = root.join("Dogs");
+        tokio::fs::create_dir_all(&year_dir).await.unwrap();
+        tokio::fs::create_dir_all(&album_dir).await.unwrap();
+        let bytes = b"identical-dog-photo-bytes-in-two-folders";
+        tokio::fs::write(year_dir.join("dog.jpg"), bytes).await.unwrap();
+        tokio::fs::write(album_dir.join("dog.jpg"), bytes).await.unwrap();
+
+        let opts = sqlx::sqlite::SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .foreign_keys(false);
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+
+        let ctx = RegisterContext {
+            user_id: "user-1".to_string(),
+            pano_sensitivity: crate::photos::metadata::PanoSensitivity::Strict,
+            gallery_hashes: Arc::new(std::collections::HashSet::new()),
+        };
+
+        let year_cand = NativeCandidate {
+            abs_path: year_dir.join("dog.jpg"),
+            rel_path: "Photos from 2021/dog.jpg".to_string(),
+            name: "dog.jpg".to_string(),
+            mime: "image/jpeg".to_string(),
+            media_type: "photo",
+            size: bytes.len() as i64,
+            modified: Some("2021-06-01T00:00:00.000Z".to_string()),
+            sidecar_abs: None,
+            album_name: None,
+            album_title: None,
+        };
+        assert!(register_native_file(&pool, &root, &year_cand, &ctx).await);
+
+        let album_cand = NativeCandidate {
+            abs_path: album_dir.join("dog.jpg"),
+            rel_path: "Dogs/dog.jpg".to_string(),
+            name: "dog.jpg".to_string(),
+            mime: "image/jpeg".to_string(),
+            media_type: "photo",
+            size: bytes.len() as i64,
+            modified: Some("2021-06-01T00:00:00.000Z".to_string()),
+            sidecar_abs: None,
+            album_name: Some("Dogs".to_string()),
+            album_title: None,
+        };
+        assert!(!register_native_file(&pool, &root, &album_cand, &ctx).await);
+
+        // The copy is now remembered as a hash-duplicate dead end.
+        let (reason, size, mtime, hash): (String, i64, Option<String>, Option<String>) =
+            sqlx::query_as(
+                "SELECT reason, size_bytes, mtime, photo_hash FROM scan_skipped_paths \
+                 WHERE user_id = 'user-1' AND rel_path = 'Dogs/dog.jpg'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(reason, "hash_duplicate");
+        assert_eq!(size, bytes.len() as i64);
+        assert_eq!(mtime.as_deref(), Some("2021-06-01T00:00:00.000Z"));
+        assert!(hash.is_some(), "the shared content hash drives invalidation");
+
+        // Only the copy is recorded, not the first-registered original.
+        let (rows,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM scan_skipped_paths WHERE user_id = 'user-1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(rows, 1);
+
+        let _ = tokio::fs::remove_dir_all(&root).await;
+    }
+
+    /// A file whose content hash matches a gallery-hidden (secure) original is
+    /// skipped AND remembered, so the walk stops re-hashing it every pass. The
+    /// egi-delete trigger clears the row if the item is ever un-hidden.
+    #[tokio::test]
+    async fn gallery_hidden_match_records_a_scan_skip_row() {
+        let root = std::env::temp_dir().join(format!("sp-reg-test-{}", uuid::Uuid::new_v4()));
+        let dir = root.join("Photos from 2019");
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let media = dir.join("secret.jpg");
+        let bytes = b"bytes-belonging-to-a-secure-gallery-original";
+        tokio::fs::write(&media, bytes).await.unwrap();
+
+        let opts = sqlx::sqlite::SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .foreign_keys(false);
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+
+        // Pre-compute the hash the walk would compute, and mark it hidden.
+        let hidden_hash = crate::photos::utils::compute_photo_hash_streaming(&media)
+            .await
+            .expect("hash");
+        let mut hidden = std::collections::HashSet::new();
+        hidden.insert(hidden_hash.clone());
+
+        let ctx = RegisterContext {
+            user_id: "user-1".to_string(),
+            pano_sensitivity: crate::photos::metadata::PanoSensitivity::Strict,
+            gallery_hashes: Arc::new(hidden),
+        };
+        let cand = NativeCandidate {
+            abs_path: media.clone(),
+            rel_path: "Photos from 2019/secret.jpg".to_string(),
+            name: "secret.jpg".to_string(),
+            mime: "image/jpeg".to_string(),
+            media_type: "photo",
+            size: bytes.len() as i64,
+            modified: Some("2019-01-01T00:00:00.000Z".to_string()),
+            sidecar_abs: None,
+            album_name: None,
+            album_title: None,
+        };
+
+        assert!(
+            !register_native_file(&pool, &root, &cand, &ctx).await,
+            "a gallery-hidden match must never register into the main gallery"
+        );
+        // Nothing registered…
+        let (photo_count,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM photos WHERE user_id = 'user-1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(photo_count, 0);
+        // …but the skip is remembered with the right reason + hash.
+        let (reason, hash): (String, Option<String>) = sqlx::query_as(
+            "SELECT reason, photo_hash FROM scan_skipped_paths \
+             WHERE rel_path = 'Photos from 2019/secret.jpg'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(reason, "gallery_hidden");
+        assert_eq!(hash.as_deref(), Some(hidden_hash.as_str()));
 
         let _ = tokio::fs::remove_dir_all(&root).await;
     }

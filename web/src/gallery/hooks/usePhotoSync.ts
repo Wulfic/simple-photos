@@ -26,6 +26,47 @@ import {
 import { useLiveQuery } from "dexie-react-hooks";
 import type { PhotoPayload, ThumbnailPayload } from "../../types/media";
 
+/**
+ * Ensure an already-cached photo has its thumbnail bytes stored locally,
+ * downloading them **only when they're actually missing**.
+ *
+ * This is the anti-thrash guard behind the periodic sync: a photo whose
+ * thumbnail already resolves from the `thumbs` table is left untouched, so a
+ * steady-state sync pass over a fully-cached library performs zero blob
+ * downloads. Before the thumbs split + sync-interval fix, overlapping 2-second
+ * syncs raced each other's writes and re-downloaded thumbnails the racing pass
+ * hadn't yet persisted — ~28 blob downloads/second against the server
+ * (repo todo.md, "Bug B — web client runs a FULL library sync every 2s").
+ *
+ * Returns `true` iff a download + store actually happened (for tests / callers
+ * that count). Kept module-level and exported so the decision can be unit-tested
+ * directly, rather than proven only through a full hook render.
+ */
+export async function ensureThumbCached(
+  existing: CachedPhoto,
+  serverThumbId: string | undefined,
+): Promise<boolean> {
+  // Already have the bytes locally — the guard. Never re-fetch a thumbnail a
+  // previous pass already persisted.
+  if (await resolveThumb(existing)) return false;
+  const thumbId = existing.thumbnailBlobId ?? serverThumbId;
+  if (!thumbId) return false;
+  try {
+    const thumbEnc = await api.blobs.download(thumbId);
+    const thumbDec = await decrypt(thumbEnc);
+    const thumbPayload: ThumbnailPayload = JSON.parse(new TextDecoder().decode(thumbDec));
+    await putThumb(
+      existing.blobId,
+      base64ToArrayBuffer(thumbPayload.data),
+      thumbPayload.mime_type,
+      existing.mediaType,
+    );
+    return true;
+  } catch {
+    return false; // leave the cache as-is; a later pass retries
+  }
+}
+
 export interface PhotoSyncResult {
   /** Encrypted-mode photos from IndexedDB (live query, auto-updates).
    *  Returns `undefined` only until the Dexie query first resolves, then the
@@ -37,13 +78,27 @@ export interface PhotoSyncResult {
   loadEncryptedPhotos: () => Promise<void>;
 }
 
-/** Re-sync interval in milliseconds. */
-const SYNC_INTERVAL_MS = 2_000;
+/** Re-sync interval in milliseconds.
+ *
+ * This is only a safety net: realtime changes already arrive over the SSE
+ * stream (`/api/sync/events`), so the poll just catches anything a missed
+ * event dropped. It used to be 2s, which — with no re-entrancy guard and a
+ * full-library sync per tick — stacked overlapping syncs that re-paged the
+ * entire photo table and re-downloaded thumbnails ~28×/s against the server
+ * (see repo todo.md, "Idle Disk-Thrash Fix"). Five minutes is plenty for a
+ * backstop poll; the guard below stops even this from stacking on slow links. */
+const SYNC_INTERVAL_MS = 300_000;
 
 export function usePhotoSync(): PhotoSyncResult {
   const [loading, setLoading] = useState(true);
   const [encryptedDataReady, setEncryptedDataReady] = useState(false);
   const syncIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Re-entrancy guard: the in-flight sync promise, or null when idle. A full
+  // sync takes far longer than the interval on a large library, so without this
+  // the interval tick (and any explicit refresh) would stack overlapping runs —
+  // each seeing stale Dexie state and re-downloading thumbnails the others
+  // haven't persisted yet. Concurrent callers coalesce onto the same run.
+  const syncInFlightRef = useRef<Promise<void> | null>(null);
 
   // Live query — auto-updates when IDB changes
   const rawEncryptedPhotos = useLiveQuery(() =>
@@ -86,7 +141,18 @@ export function usePhotoSync(): PhotoSyncResult {
 
   // ── Core sync logic ───────────────────────────────────────────────────
 
-  async function loadEncryptedPhotos() {
+  /** Trigger a server→IDB sync. Re-entrant callers (interval tick + explicit
+   *  refresh) coalesce onto the single in-flight run instead of stacking. */
+  function loadEncryptedPhotos(): Promise<void> {
+    if (syncInFlightRef.current) return syncInFlightRef.current;
+    const run = syncEncryptedPhotos().finally(() => {
+      syncInFlightRef.current = null;
+    });
+    syncInFlightRef.current = run;
+    return run;
+  }
+
+  async function syncEncryptedPhotos() {
     if (!encryptedDataReady) setLoading(true);
     try {
       // Phase 1: Fetch metadata via encrypted-sync endpoint.
@@ -207,21 +273,10 @@ export function usePhotoSync(): PhotoSyncResult {
             } catch {
               // Download failed — leave existing thumbnail
             }
-          } else if (!(await resolveThumb(existing))) {
-            const retryThumbId = existing.thumbnailBlobId ?? photo.encrypted_thumb_blob_id;
-            if (retryThumbId) {
-              try {
-                const thumbEnc = await api.blobs.download(retryThumbId);
-                const thumbDec = await decrypt(thumbEnc);
-                const thumbPayload: ThumbnailPayload = JSON.parse(new TextDecoder().decode(thumbDec));
-                await putThumb(
-                  idbKey,
-                  base64ToArrayBuffer(thumbPayload.data),
-                  thumbPayload.mime_type,
-                  existing.mediaType,
-                );
-              } catch { /* retry next sync */ }
-            }
+          } else {
+            // Server thumb unchanged — make sure the bytes are actually cached,
+            // downloading only if they're missing (the anti-thrash guard).
+            await ensureThumbCached(existing, photo.encrypted_thumb_blob_id ?? undefined);
           }
           if (Object.keys(updates).length > 0) await db.photos.update(idbKey, updates);
           continue;

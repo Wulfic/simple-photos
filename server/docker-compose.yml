@@ -25,6 +25,15 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    # Cap the container's json log so it can't grow without bound. With no
+    # rotation a live box wrote 151 MB of logs in 5h straight to local disk (the
+    # per-file scan/BLOB_DL spam this release also fixed). Three 50 MB files =
+    # 150 MB ceiling, enough to debug a recent incident without unbounded writes.
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
 
 volumes:
   photos_db:

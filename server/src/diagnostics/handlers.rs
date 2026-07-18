@@ -157,18 +157,33 @@ pub(crate) fn disk_stats(_path: &std::path::Path) -> (u64, u64) {
 }
 
 /// Walk a directory tree and sum file sizes + count.
+///
+/// Streams the walk with an explicit stack, keeping only one directory's entries
+/// live at a time. The old version collected EVERY `DirEntry` in the whole tree
+/// into one `Vec` before stat-ing them; on a large (often SMB-mounted) library
+/// that was tens of thousands of entries and most of a ~13s diagnostics
+/// "Storage" collection. Symlinks are not followed — real files only, which also
+/// removes any symlink-cycle risk the old recursion had.
 pub(crate) async fn dir_usage(root: &std::path::Path) -> (u64, u64) {
     let root = root.to_path_buf();
     tokio::task::spawn_blocking(move || {
         let mut total_bytes: u64 = 0;
         let mut file_count: u64 = 0;
-        if let Ok(walker) = walkdir(&root) {
-            for entry in walker {
-                if let Ok(meta) = entry.metadata() {
-                    if meta.is_file() {
-                        total_bytes += meta.len();
-                        file_count += 1;
+        let mut stack = vec![root];
+        while let Some(dir) = stack.pop() {
+            let Ok(rd) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in rd.flatten() {
+                match entry.file_type() {
+                    Ok(ft) if ft.is_dir() => stack.push(entry.path()),
+                    Ok(ft) if ft.is_file() => {
+                        if let Ok(meta) = entry.metadata() {
+                            total_bytes += meta.len();
+                            file_count += 1;
+                        }
                     }
+                    _ => {}
                 }
             }
         }
@@ -176,30 +191,6 @@ pub(crate) async fn dir_usage(root: &std::path::Path) -> (u64, u64) {
     })
     .await
     .unwrap_or((0, 0))
-}
-
-/// Simple recursive directory walker (no external crate needed).
-fn walkdir(root: &std::path::Path) -> std::io::Result<Vec<std::fs::DirEntry>> {
-    let mut entries = Vec::new();
-    walk_recursive(root, &mut entries)?;
-    Ok(entries)
-}
-
-fn walk_recursive(
-    dir: &std::path::Path,
-    entries: &mut Vec<std::fs::DirEntry>,
-) -> std::io::Result<()> {
-    if dir.is_dir() {
-        for entry in std::fs::read_dir(dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            entries.push(entry);
-            if path.is_dir() {
-                walk_recursive(&path, entries)?;
-            }
-        }
-    }
-    Ok(())
 }
 
 /// GET /api/admin/diagnostics/config — read diagnostics configuration.

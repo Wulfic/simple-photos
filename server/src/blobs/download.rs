@@ -55,10 +55,15 @@ pub async fn download(
     crate::gallery::access::require_secure_access(&state, &auth.user_id, &blob_id, &gallery_token)
         .await?;
 
-    tracing::info!(
+    // Per-request, so kept at debug: a gallery scroll legitimately fetches many
+    // blobs. Carries the requester's user_id so that if a client ever hammers
+    // this again (see the 2s-sync storm in repo todo.md), the offender is
+    // identifiable instead of an anonymous torrent.
+    tracing::debug!(
         blob_id = %blob_id,
         blob_type = %_blob_type,
         size_bytes = size_bytes,
+        user_id = %auth.user_id,
         "[DIAG:BLOB_DL] Blob download requested"
     );
 

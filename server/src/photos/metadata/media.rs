@@ -427,7 +427,7 @@ pub(crate) async fn extract_media_metadata_async(file_path: std::path::PathBuf) 
         }
     }
 
-    tracing::info!(
+    tracing::debug!(
         "[metadata] extract_media_metadata_async result for {}: {}×{}, is_video={}",
         file_path.display(),
         w,

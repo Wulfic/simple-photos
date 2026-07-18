@@ -83,7 +83,7 @@ pub struct DatabaseStats {
     pub freelist_count: i64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct StorageStats {
     /// Total bytes consumed by photo/blob files
     pub total_bytes: u64,
