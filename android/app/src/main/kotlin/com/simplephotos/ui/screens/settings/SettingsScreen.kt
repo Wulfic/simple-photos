@@ -16,7 +16,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import android.util.Log
+import android.widget.Toast
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -65,6 +68,23 @@ fun SettingsScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            val uriHandler = LocalUriHandler.current
+            val browserContext = LocalContext.current
+            // Open a URL in the external browser, logging + toasting on failure
+            // (e.g. no browser installed → ActivityNotFoundException). The path
+            // is appended to serverUrl with any trailing slash trimmed.
+            val openInBrowser: (String) -> Unit = openInBrowser@{ path ->
+                val base = viewModel.serverUrl.trimEnd('/')
+                if (base.isBlank()) return@openInBrowser
+                val url = if (path.isBlank()) base else "$base/${path.trimStart('/')}"
+                try {
+                    uriHandler.openUri(url)
+                } catch (e: Exception) {
+                    Log.e("SettingsScreen", "Failed to open $url in browser", e)
+                    Toast.makeText(browserContext, "No app found to open $url", Toast.LENGTH_LONG).show()
+                }
+            }
+
             // ── Account ──────────────────────────────────────────────────
             SettingsCard(title = "Account", icon = Icons.Default.Person) {
                 SettingsRow("Server", viewModel.serverUrl)
@@ -451,7 +471,7 @@ fun SettingsScreen(
 
             // ── Active Server ────────────────────────────────────────────
             SettingsCard(title = "Active Server", icon = Icons.Default.Dns) {
-                SettingsRow("URL", viewModel.serverUrl)
+                SettingsRow("URL", viewModel.serverUrl, onClick = { openInBrowser("") })
                 SettingsRow("Status", "Connected")
             }
 
@@ -464,10 +484,12 @@ fun SettingsScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(Modifier.height(8.dp))
-                    Text(
-                        "Open ${viewModel.serverUrl} in a browser to manage users.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary
+                    SpButton(
+                        "Manage Users in Browser",
+                        onClick = { openInBrowser("settings") },
+                        variant = SpButtonVariant.Secondary,
+                        fontSize = 14,
+                        modifier = Modifier.fillMaxWidth()
                     )
                 }
             }
