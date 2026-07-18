@@ -90,6 +90,19 @@ class AlbumRepository @Inject constructor(
         return album
     }
 
+    /**
+     * Rename an album (#35). Persists the new title locally, then re-uploads the
+     * manifest so the change propagates to other devices — [syncAlbum] re-reads
+     * the entity from the DB, so it picks up the new name. Returns the refreshed
+     * (synced) entity.
+     */
+    suspend fun renameAlbum(album: AlbumEntity, newName: String): AlbumEntity {
+        val trimmed = newName.trim()
+        db.albumDao().update(album.copy(name = trimmed, syncStatus = SyncStatus.PENDING))
+        syncAlbum(album)
+        return db.albumDao().getById(album.localId) ?: album.copy(name = trimmed)
+    }
+
     suspend fun deleteAlbum(album: AlbumEntity) {
         // Tombstone FIRST for a Takeout-reconstructed album, otherwise this
         // delete is undone: the next rebuild recreates the album from the

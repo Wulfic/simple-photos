@@ -36,6 +36,7 @@ import coil.compose.AsyncImage
 import com.simplephotos.ui.components.CloudBackupBadge
 import com.simplephotos.ui.components.TileSelectionCircle
 import com.simplephotos.ui.components.rememberThumbnailRequest
+import com.simplephotos.ui.navigation.DetailNavBar
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.local.entities.SyncStatus
 import java.io.File
@@ -52,9 +53,13 @@ fun AlbumDetailScreen(
     viewModel: AlbumDetailViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
+    var menuExpanded by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
+          Column {
+            // Persistent main navbar across the albums section (#35).
+            DetailNavBar()
             if (viewModel.isSelectionMode) {
                 // ── Selection mode top bar ─────────────────────────
                 Surface(
@@ -65,7 +70,8 @@ fun AlbumDetailScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .statusBarsPadding()
+                            // AppHeader (DetailNavBar) above already consumed the
+                            // status-bar inset, so no statusBarsPadding here (#35).
                             .padding(horizontal = 12.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
@@ -118,21 +124,62 @@ fun AlbumDetailScreen(
                             )
                         }
                     },
+                    // Add-items `+` and a ⋮ overflow menu (Rename · Delete),
+                    // replacing the standalone trashcan (#35).
                     actions = {
                         if (!viewModel.isSmartAlbum) {
-                            IconButton(onClick = { viewModel.showDeleteConfirm = true }) {
+                            IconButton(onClick = { viewModel.openAddPanel() }) {
                                 Icon(
-                                    painter = painterResource(R.drawable.ic_trashcan),
-                                    contentDescription = "Delete album",
-                                    // Was 12dp — far too small (#26). 24dp is the
-                                    // standard Material action-icon size.
+                                    Icons.Default.Add,
+                                    contentDescription = "Add photos",
                                     modifier = Modifier.size(24.dp)
                                 )
                             }
+                            Box {
+                                IconButton(onClick = { menuExpanded = true }) {
+                                    Icon(
+                                        Icons.Default.MoreVert,
+                                        contentDescription = "More options",
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
+                                DropdownMenu(
+                                    expanded = menuExpanded,
+                                    onDismissRequest = { menuExpanded = false }
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text("Rename") },
+                                        onClick = {
+                                            menuExpanded = false
+                                            viewModel.showRenameDialog = true
+                                        },
+                                        leadingIcon = {
+                                            Icon(Icons.Default.Edit, contentDescription = null)
+                                        },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                                        onClick = {
+                                            menuExpanded = false
+                                            viewModel.showDeleteConfirm = true
+                                        },
+                                        leadingIcon = {
+                                            Icon(
+                                                Icons.Default.Delete,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.error,
+                                            )
+                                        },
+                                    )
+                                }
+                            }
                         }
-                    }
+                    },
+                    // AppHeader above already consumed the status-bar inset.
+                    windowInsets = WindowInsets(0),
                 )
             }
+          } // end Column (navbar + album/selection bar)
         }
     ) { padding ->
         Box(modifier = Modifier.padding(padding).fillMaxSize()) {
@@ -245,35 +292,8 @@ fun AlbumDetailScreen(
                 }
                 else -> {
                     Column(modifier = Modifier.fillMaxSize()) {
-                        // Add photos button at top of page (not for smart albums)
-                        if (!viewModel.isSmartAlbum) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    "${viewModel.photos.size} photo${if (viewModel.photos.size != 1) "s" else ""}",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                OutlinedButton(onClick = { viewModel.openAddPanel() }) {
-                                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(Modifier.width(4.dp))
-                                    Text("Add Photos", fontSize = 13.sp)
-                                }
-                            }
-                        } else {
-                            // Just show photo count for smart albums
-                            Text(
-                                "${viewModel.photos.size} item${if (viewModel.photos.size != 1) "s" else ""}",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-                            )
-                        }
+                        // #35: the photo-count text and the separate Add-Photos
+                        // header row are gone — adding is the header `+`.
 
                         // Justified grid matches the main gallery layout so
                         // albums look the same as the Photos page.
@@ -312,6 +332,34 @@ fun AlbumDetailScreen(
                 }
             }
         }
+    }
+
+    // Rename album dialog (#35)
+    if (viewModel.showRenameDialog) {
+        var name by remember(viewModel.album?.localId) {
+            mutableStateOf(viewModel.album?.name ?: "")
+        }
+        AlertDialog(
+            onDismissRequest = { viewModel.showRenameDialog = false },
+            title = { Text("Rename Album") },
+            text = {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    singleLine = true,
+                    label = { Text("Name") },
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { viewModel.renameAlbum(name) },
+                    enabled = name.trim().isNotEmpty(),
+                ) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.showRenameDialog = false }) { Text("Cancel") }
+            }
+        )
     }
 
     // Delete album confirmation

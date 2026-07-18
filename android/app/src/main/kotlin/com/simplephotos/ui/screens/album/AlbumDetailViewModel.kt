@@ -60,6 +60,7 @@ class AlbumDetailViewModel @Inject constructor(
     var showAddPanel by mutableStateOf(false)
     var selectedToAdd by mutableStateOf<Set<String>>(emptySet())
     var showDeleteConfirm by mutableStateOf(false)
+    var showRenameDialog by mutableStateOf(false)
 
     var serverBaseUrl by mutableStateOf("")
         private set
@@ -188,6 +189,23 @@ class AlbumDetailViewModel @Inject constructor(
             } catch (e: Exception) {
                 error = e.message
             }
+        }
+    }
+
+    /** Rename this album (#35). No-op for a blank/unchanged name. Optimistically
+     *  updates the title on success; logs + surfaces the error on failure. */
+    fun renameAlbum(newName: String) {
+        val a = album ?: run { showRenameDialog = false; return }
+        val trimmed = newName.trim()
+        if (trimmed.isEmpty() || trimmed == a.name) { showRenameDialog = false; return }
+        viewModelScope.launch {
+            try {
+                album = albumRepository.renameAlbum(a, trimmed)
+            } catch (e: Exception) {
+                error = e.message
+                android.util.Log.e("AlbumDetailViewModel", "rename album failed", e)
+            }
+            showRenameDialog = false
         }
     }
 

@@ -4,11 +4,16 @@
 package com.simplephotos.ui.navigation
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.simplephotos.ui.components.HeaderNavigation
+import com.simplephotos.ui.theme.ThemeState
 import androidx.navigation.NavController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -70,6 +75,31 @@ fun NavGraph(startRoute: String? = null) {
     val capBack = shouldJumpToGalleryOnBack(backStack.map { it.destination.route }, currentRoute)
     BackHandler(enabled = capBack) { navController.navigateHome() }
 
+    // Shared navbar state (#35) — one HeaderNavigation reused by every album /
+    // library detail screen so the main navbar stays visible there, provided via
+    // [LocalAppNav] instead of threading eight callbacks through each route.
+    val username by viewModel.username.collectAsState()
+    val isSystemDark = isSystemInDarkTheme()
+    val appNav = remember(isAdmin, username, isSystemDark) {
+        AppNavState(
+            username = username,
+            navigation = HeaderNavigation(
+                onGalleryClick = { navController.navigateHome() },
+                onAlbumsClick = { navController.navigateTopLevel(Screen.AlbumList.route) },
+                onSearchClick = { navController.navigateTopLevel(Screen.Search.route) },
+                onTrashClick = { navController.navigateTopLevel(Screen.Trash.route) },
+                onSettingsClick = { navController.navigateTopLevel(Screen.Settings.route) },
+                onSecureGalleryClick = { navController.navigateTopLevel(Screen.SecureGallery.route) },
+                onSharedAlbumsClick = { navController.navigateTopLevel(Screen.SharedAlbums.route) },
+                onDiagnosticsClick = { navController.navigateTopLevel(Screen.Diagnostics.route) },
+                onLogout = { viewModel.logout { navController.navigate(Screen.Login.route) { popUpTo(0) } } },
+                onToggleTheme = { ThemeState.toggle(viewModel.dataStore, ThemeState.isDark(isSystemDark)) },
+                isAdmin = isAdmin,
+            ),
+        )
+    }
+
+    CompositionLocalProvider(LocalAppNav provides appNav) {
     NavHost(
         navController = navController,
         startDestination = startDestination!!
@@ -290,6 +320,7 @@ fun NavGraph(startRoute: String? = null) {
             )
         }
     }
+    } // end CompositionLocalProvider(LocalAppNav)
 
     // A second window's deep-link (#21). Pushed on top of the resolved start
     // destination rather than replacing it, so Back leaves the user in the

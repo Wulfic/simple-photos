@@ -37,6 +37,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import coil.compose.AsyncImage
 import com.simplephotos.ui.components.rememberThumbnailRequest
+import com.simplephotos.ui.navigation.DetailNavBar
 import com.simplephotos.data.repository.AiRepository
 import com.simplephotos.data.repository.GeoRepository
 import com.simplephotos.data.repository.PhotoRepository
@@ -81,14 +82,20 @@ private fun <T> GridScaffold(
 ) {
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-            )
+            Column {
+                // Persistent main navbar across the albums/library section (#35).
+                DetailNavBar()
+                TopAppBar(
+                    title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        }
+                    },
+                    // AppHeader above already consumed the status-bar inset.
+                    windowInsets = WindowInsets(0),
+                )
+            }
         }
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
@@ -222,15 +229,21 @@ private fun PhotoIdsGridScaffold(
 ) {
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                actions = actions,
-            )
+            Column {
+                // Persistent main navbar across the albums/library section (#35).
+                DetailNavBar()
+                TopAppBar(
+                    title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        }
+                    },
+                    actions = actions,
+                    // AppHeader above already consumed the status-bar inset.
+                    windowInsets = WindowInsets(0),
+                )
+            }
         }
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
