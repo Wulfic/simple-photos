@@ -312,7 +312,7 @@ fun SettingsScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column {
+                    Column(modifier = Modifier.weight(1f, fill = false).padding(end = 12.dp)) {
                         Text("Thumbnail Size")
                         Text(
                             if (viewModel.thumbnailSize == "large") "Large — fewer, bigger thumbnails"
@@ -321,10 +321,16 @@ fun SettingsScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(
+                        modifier = Modifier.wrapContentWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
                         Text(
                             "Normal",
                             style = MaterialTheme.typography.labelSmall,
+                            softWrap = false,
+                            maxLines = 1,
                             color = if (viewModel.thumbnailSize == "normal") MaterialTheme.colorScheme.primary
                                     else MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -335,6 +341,8 @@ fun SettingsScreen(
                         Text(
                             "Large",
                             style = MaterialTheme.typography.labelSmall,
+                            softWrap = false,
+                            maxLines = 1,
                             color = if (viewModel.thumbnailSize == "large") MaterialTheme.colorScheme.primary
                                     else MaterialTheme.colorScheme.onSurfaceVariant
                         )
