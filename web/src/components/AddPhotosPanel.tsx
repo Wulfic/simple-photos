@@ -45,20 +45,20 @@ export default function AddPhotosPanel({ photos, onAdd, onCancel }: AddPhotosPan
   return (
     <div className="mb-6 p-4 bg-accent-50 dark:bg-accent-900/30 rounded-lg">
       <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
-        <p className="text-sm font-medium text-accent-800 dark:text-accent-300">
+        <p className="text-sm font-medium text-accent-800 dark:text-accent-300 min-w-0 truncate tabular-nums">
           Select photos to add ({selected.size} selected)
         </p>
-        <div className="flex gap-2">
+        <div className="flex gap-2 shrink-0">
           <button
             onClick={() => onAdd(Array.from(selected))}
             disabled={selected.size === 0}
-            className="btn btn-primary btn-sm"
+            className="btn btn-primary btn-sm whitespace-nowrap"
           >
             Add Selected
           </button>
           <button
             onClick={onCancel}
-            className="btn btn-secondary btn-sm"
+            className="btn btn-secondary btn-sm whitespace-nowrap"
           >
             Cancel
           </button>

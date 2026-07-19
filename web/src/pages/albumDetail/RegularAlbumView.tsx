@@ -471,22 +471,22 @@ export default function RegularAlbumView({ albumId }: { albumId: string | undefi
 
       {/* Album photo grid */}
       {(isSelectionMode || secureAddTarget) && (
-        <div className="flex items-center justify-between gap-3 mb-4 p-3 bg-accent-50 dark:bg-accent-900/30 rounded-lg">
-          <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-4 p-3 bg-accent-50 dark:bg-accent-900/30 rounded-lg">
+          <div className="flex items-center gap-3 min-w-0">
             <button
               onClick={clearSelection}
-              className="text-fg-muted hover:text-fg"
+              className="text-fg-muted hover:text-fg shrink-0"
             >
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
-            <span className="text-sm font-medium">
+            <span className="text-sm font-medium truncate tabular-nums">
               {secureAddTarget ? `${selectedIds.size} selected to add to 🔒 ${secureAddTarget.galleryName}` : `${selectedIds.size} selected`}
             </span>
             <button
               onClick={selectAll}
-              className="text-accent-600 dark:text-accent-400 text-sm hover:underline"
+              className="text-accent-600 dark:text-accent-400 text-sm hover:underline shrink-0 whitespace-nowrap"
             >
               Select All
             </button>
@@ -495,7 +495,7 @@ export default function RegularAlbumView({ albumId }: { albumId: string | undefi
             <button
               onClick={addSelectedToSecure}
               disabled={selectedIds.size === 0 || addingSecure}
-              className="btn btn-primary btn-md inline-flex items-center gap-1.5"
+              className="btn btn-primary btn-md inline-flex items-center gap-1.5 shrink-0 whitespace-nowrap tabular-nums"
               title={`Add to ${secureAddTarget.galleryName}`}
             >
               <span>🔒</span>
@@ -504,7 +504,7 @@ export default function RegularAlbumView({ albumId }: { albumId: string | undefi
           ) : (
             <button
               onClick={removeSelected}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium bg-orange-600 text-white hover:bg-orange-700 shadow-sm"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium bg-orange-600 text-white hover:bg-orange-700 shadow-sm shrink-0 whitespace-nowrap tabular-nums"
             >
               Remove ({selectedIds.size})
             </button>

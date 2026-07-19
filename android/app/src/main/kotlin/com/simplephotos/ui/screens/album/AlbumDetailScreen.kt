@@ -29,6 +29,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -76,7 +77,12 @@ fun AlbumDetailScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        // weight(1f) so a large count truncates instead of shoving
+                        // the Remove button off-screen (#36).
+                        Row(
+                            modifier = Modifier.weight(1f),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                             IconButton(onClick = { viewModel.clearSelection() }, modifier = Modifier.size(32.dp)) {
                                 Icon(Icons.Default.Close, contentDescription = "Cancel", modifier = Modifier.size(20.dp))
                             }
@@ -84,16 +90,20 @@ fun AlbumDetailScreen(
                             Text(
                                 "${viewModel.selectedIds.size} selected",
                                 style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.Medium
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false)
                             )
                             Spacer(Modifier.width(8.dp))
                             TextButton(
                                 onClick = { viewModel.selectAll() },
                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                             ) {
-                                Text("Select All", fontSize = 12.sp)
+                                Text("Select All", fontSize = 12.sp, maxLines = 1)
                             }
                         }
+                        Spacer(Modifier.width(8.dp))
                         Button(
                             onClick = { viewModel.removeSelectedFromAlbum() },
                             enabled = viewModel.selectedIds.isNotEmpty(),
@@ -203,7 +213,12 @@ fun AlbumDetailScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                // weight(1f) so a large count truncates instead of shoving
+                                // the Add button off-screen (#36).
+                                Row(
+                                    modifier = Modifier.weight(1f),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
                                     IconButton(onClick = { viewModel.showAddPanel = false }, modifier = Modifier.size(32.dp)) {
                                         Icon(Icons.Default.Close, contentDescription = "Cancel", modifier = Modifier.size(20.dp))
                                     }
@@ -211,16 +226,20 @@ fun AlbumDetailScreen(
                                     Text(
                                         "${viewModel.selectedToAdd.size} selected",
                                         style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.Medium
+                                        fontWeight = FontWeight.Medium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f, fill = false)
                                     )
                                     Spacer(Modifier.width(8.dp))
                                     TextButton(
                                         onClick = { viewModel.selectAllAvailable() },
                                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                                     ) {
-                                        Text("Select All", fontSize = 12.sp)
+                                        Text("Select All", fontSize = 12.sp, maxLines = 1)
                                     }
                                 }
+                                Spacer(Modifier.width(8.dp))
                                 Button(
                                     onClick = { viewModel.confirmAdd() },
                                     enabled = viewModel.selectedToAdd.isNotEmpty(),
