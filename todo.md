@@ -150,9 +150,52 @@ Remaining (the protocol itself):
 - [x] Unified snapshot: counts **and** head sequence in one round trip. — `31fc322`
 - [x] The eligibility predicate had been copy-pasted into 3 queries (delta adds 2 more) — now one const in `gallery/eligibility.rs`. A delta whose eligibility differs from the full walk's by one arm hands clients rows the grid will never show. — `31fc322`
 - [x] Web: batch Phase 3 writes with `bulkPut` — already done in `f31b27b`.
-- [ ] **Web: adopt `?since=`.** Persist the last-seen sequence; poll `summary.head_seq` first and skip sync entirely when unchanged. Steady state must transfer **zero rows** and perform **zero** IDB writes.
-- [ ] **Perf gate**, and it belongs on the client where it is observable: a 10k-row fixture must complete a steady-state sync with zero blob downloads and zero IDB writes. Assert operation *counts* — the mirror is correct either way, so only a count assertion can catch a silent regression to full-walking (the lesson from `f31b27b`).
-- [ ] Android: same `?since=` adoption in `syncFromServerEncrypted`.
+> **Web `?since=` landed — `6a1b711`.** Android untouched.
+>
+> The pass moved out of `usePhotoSync` into `syncPass.ts` (skip / delta /
+> full) with the cursor in `syncCursor.ts`. `usePhotoSync` is now only the
+> React shell. **The full walk is kept as the recovery path, not as legacy** —
+> it is self-healing (re-sends everything, client set-differences), and a delta
+> feed is not. Every uncertainty in the new code therefore resolves to "full
+> walk", because a needless full walk costs one slow pass while a wrongly-
+> trusted cursor costs rows no future response will ever mention again.
+>
+> **Four hazards the plan above did not anticipate, each verified RED:**
+> - **The cursor must live in IndexedDB next to the mirror, not localStorage.**
+>   Separate stores get wiped independently and the failure is silent *and*
+>   permanent: eviction empties `photos`, the surviving cursor says "already
+>   current", and the gallery is empty forever. `readSyncCursor` additionally
+>   refuses a cursor over an empty mirror — the partial wipe co-location can't
+>   catch. `clearAllUserData` wipes it (Dexie v11 `syncState`).
+> - **A pre-#38 server ignores `since` and answers with a FULL walk**, whose
+>   `photos` are indistinguishable from a delta's. Reading it as a delta prunes
+>   nothing while believing it pruned, then persists a cursor making that
+>   permanent. The handshake is `deleted`: present-possibly-empty on a delta,
+>   absent on a full walk — which is exactly why the server author made it
+>   "empty rather than absent". Absent now forces the full path.
+> - **Persist the FIRST page's head, not the last** (the server doc says so;
+>   it is easy to get backwards). A change committed mid-walk lands above the
+>   first page's head — keep the first and it is re-delivered, keep the last
+>   and it is lost.
+> - **A tombstone names a photo id, which may be the row's primary key OR its
+>   `serverPhotoId`** (rows bound to a local upload's blob id). Resolving only
+>   by primary key strands locally-uploaded rows forever.
+>
+> **Deliberate, documented narrowing — do not "fix" it by restoring the walks:**
+> delta passes skip the four `fetchAllPages` blob enumerations. The change-log
+> triggers cover `photos` and `encrypted_gallery_items` only, so a blob with no
+> `photos` row does not move `head_seq`. That state is a *failed registration*,
+> not a normal one (web uploads only `album_manifest` directly; Android always
+> follows `uploadBlob` with `registerEncryptedPhoto`, which inserts the row and
+> fires the trigger), and the next cold start repairs it.
+>
+> Also fixed in passing: deleting a photo now deletes its cached thumbnail
+> bytes. The pre-#38 prune did not, so decrypted image content of deleted
+> photos accumulated in IDB without bound.
+
+- [x] **Web: adopt `?since=`.** Persist the last-seen sequence; poll `summary.head_seq` first and skip sync entirely when unchanged. — `6a1b711`
+- [x] **Perf gate** on the client where it is observable: a 10k-row fixture at an unchanged head calls `encrypted-sync` **0×**, `blobs.list` **0×**, `blobs.download` **0×**, `bulkPut`/`bulkDelete` **0×**, and `photos.toArray` **0×**. Verified RED by disabling *only* the skip fast-path — that test fails and nothing else does. 13 tests, 213 green (was 200). — `6a1b711`
+- [ ] Android: same `?since=` adoption in `syncFromServerEncrypted`. **Read `web/src/gallery/hooks/syncPass.ts` first** — all four hazards above apply verbatim, and three of them (cursor lifetime, the `deleted` handshake, first-page head) are protocol-level, not web-specific. Android's equivalent of the co-location rule is: the cursor belongs in the Room DB that holds the mirror, cleared by whatever clears `photos` — NOT in `SharedPreferences`, which survives a database wipe.
 - [ ] **Tombstone retention.** Rows for deleted photos accumulate without bound. Pruning needs a policy (e.g. drop after 90d) — a client offline longer than the retention window must be forced through a full reconcile, which is what `head_seq`/`total` are for. Not urgent at current library sizes; do not forget it.
 - [ ] **Deploy required.** `033` backfills on first boot against the live 14,874-row library — cheap, but it is the first migration here with a data backfill, so watch it.
 
