@@ -122,15 +122,22 @@ pub async fn list_photos(
 
     let photos = query.fetch_all(&state.read_pool).await?;
 
-    let next_cursor = if photos.len() as i64 > limit {
+    // Truncate before deriving the cursor: the extra row exists only to detect
+    // a next page, and the next-page predicate (`COALESCE(taken_at, created_at)
+    // < ?`) is strict, so a cursor built from the peeked row skips it
+    // permanently. See `gallery::sync::fetch_page` for the same fix and its
+    // regression test.
+    let has_more = photos.len() as i64 > limit;
+    let mut photos = photos;
+    photos.truncate(limit as usize);
+
+    let next_cursor = if has_more {
         photos
             .last()
             .map(|p| p.taken_at.clone().unwrap_or_else(|| p.created_at.clone()))
     } else {
         None
     };
-
-    let photos: Vec<PhotoRecord> = photos.into_iter().take(limit as usize).collect();
 
     Ok(Json(PhotoListResponse {
         photos,

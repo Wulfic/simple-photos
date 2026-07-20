@@ -53,13 +53,19 @@ pub async fn list_trash(
         .await?
     };
 
-    let next_cursor = if items.len() as i64 > limit {
+    // Truncate before deriving the cursor: the extra row exists only to detect
+    // a next page, and the next-page predicate (`deleted_at < ?`) is strict, so
+    // a cursor built from the peeked row skips it permanently. See
+    // `gallery::sync::fetch_page` for the same fix and its regression test.
+    let has_more = items.len() as i64 > limit;
+    let mut items = items;
+    items.truncate(limit as usize);
+
+    let next_cursor = if has_more {
         items.last().map(|i| i.deleted_at.clone())
     } else {
         None
     };
-
-    let items: Vec<TrashItem> = items.into_iter().take(limit as usize).collect();
 
     Ok(Json(TrashListResponse { items, next_cursor }))
 }

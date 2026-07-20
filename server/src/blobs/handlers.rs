@@ -415,13 +415,19 @@ pub async fn list(
         .await?
     };
 
-    let next_cursor = if blobs.len() as i64 > limit {
+    // Truncate before deriving the cursor: the extra row exists only to detect
+    // a next page, and the next-page predicate (`upload_time > ?`) is strict, so
+    // a cursor built from the peeked row skips it permanently. See
+    // `gallery::sync::fetch_page` for the same fix and its regression test.
+    let has_more = blobs.len() as i64 > limit;
+    let mut blobs = blobs;
+    blobs.truncate(limit as usize);
+
+    let next_cursor = if has_more {
         blobs.last().map(|b| b.upload_time.clone())
     } else {
         None
     };
-
-    let blobs: Vec<BlobRecord> = blobs.into_iter().take(limit as usize).collect();
 
     Ok(Json(BlobListResponse { blobs, next_cursor }))
 }
