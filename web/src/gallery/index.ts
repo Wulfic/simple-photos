@@ -16,7 +16,6 @@ export type {
 
 // Cache layer
 export { thumbnailCache } from "./cache/thumbnailCache";
-export { blobUrlManager } from "./cache/blobUrlManager";
 
 // Hooks
 export { useThumbnailLoader } from "./hooks/useThumbnailLoader";
