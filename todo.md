@@ -169,12 +169,43 @@ This interacts lethally with the thumbnail cache. [web/src/gallery/cache/thumbna
 Secondary: `_evict()` ([line 83-95](web/src/gallery/cache/thumbnailCache.ts#L83-L95)) sorts the entire map on every insert past capacity — O(n log n) per insert where an LRU should be O(1).
 
 **Fix:**
-- [ ] Virtualize `JustifiedGrid`. Row heights are already computed up-front in `computeRows`, so a windowed render is straightforward: prefix-sum the row offsets, render only rows intersecting the viewport plus an overscan band, and spacer-pad above/below to preserve scroll height. Do **not** reach for a heavyweight dependency — the layout math already exists.
-- [ ] Make cache capacity a function of the render window (window + overscan × a small factor), not a magic 500 that is unrelated to what is mounted.
-- [ ] Replace the sort-based eviction with a proper O(1) LRU (`Map` insertion order is already LRU-ordered — `delete` + re-`set` on access, evict via `map.keys().next()`).
-- [ ] Verify no `URL.revokeObjectURL` can fire for a currently-mounted tile. Add a regression test.
-- [ ] Test: render a 10k-item fixture, assert mounted `[data-testid="justified-grid-item"]` count stays bounded (< ~200) regardless of list length, and that scroll height is correct.
-- [ ] Android: confirm the gallery uses `LazyVerticalGrid` with stable keys and that Coil's memory cache is bounded. **HYPOTHESIS** — the issue says "app/server crash," so also check server memory during a long scroll; a thumbnail request storm from an unvirtualized client can be the server-side half.
+
+> **Web half landed — `20690ad`.** Android untouched.
+>
+> **The cache defect was worse than described above, and in a way that changes
+> the symptom.** This file said eviction "revokes blob URLs out from under
+> mounted images," implying the tile re-fetches and recovers. It cannot.
+> `useThumbnailLoader` minted URLs via `blobUrlManager.acquire()` (ref-counted)
+> while `thumbnailCache` revoked them with a raw `URL.revokeObjectURL` — two
+> owners, and the one revoking was not the one counting refs. **Nothing in the
+> tree ever called `blobUrlManager.release()`.** So after an eviction the
+> manager still held a live entry pointing at a dead URL, and the next
+> `acquire()` returned it. A cache *miss* is what re-entered the poisoned path,
+> so the recovery mechanism was the failure mechanism. Tiles blanked
+> **permanently**, for the rest of the session.
+>
+> Verified RED against the pre-fix code by reconstructing the old
+> cache + manager collaboration: the reload returned `blob:mock/1` — the exact
+> URL eviction had already revoked — and the "mounted" URL appeared in the
+> revoked list. Both assertions fail on `HEAD~1`, both pass now.
+>
+> `blobUrlManager` is **deleted**, not left in place. It had no callers once the
+> cache owned its own URLs, and leaving the second owner around is an invitation
+> to reintroduce exactly this bug. It also installed a permanent 60s
+> `setInterval` leak-detector in every session.
+
+- [x] Virtualize `JustifiedGrid` — prefix-summed row offsets, rows intersecting the viewport plus a half-viewport overscan band, spacer-padded above/below. No new dependency. — `20690ad`
+- [x] Cache capacity is now `max(base, pinned × 3)` — a function of what is actually mounted rather than a magic 500. — `20690ad`
+- [x] O(1) LRU via `Map` insertion order (`delete` + re-`set` on access), replacing the full sort on every insert past capacity. — `20690ad`
+- [x] Mounted tiles hold a **counted pin** (`pin`/`unpin` from `useThumbnailLoader`) and are skipped by eviction, so a revoke for a live `<img>` is structurally impossible rather than merely unlikely. Pins are counted because one blob can be mounted by several tiles at once. — `20690ad`
+- [x] Test: bounded mount count over a 10k-item fixture, asserted on the **pure windowing math** (`gridWindow.ts`) rather than a rendered DOM — this repo has no jsdom/testing-library and the mounted count is decided entirely by that math. Also pins the invariant `padTop + rendered + padBottom == totalHeight` at every scroll offset, which is what keeps document height independent of what is mounted (and `useScrollMemory` therefore correct). 25 tests, 200 green. — `20690ad`
+- [ ] **Android: still open.** Confirm the gallery uses `LazyVerticalGrid` with stable keys and that Coil's memory cache is bounded. **HYPOTHESIS** — the issue says "app/server crash," so also check server memory during a long scroll; a thumbnail request storm from an unvirtualized client can be the server-side half.
+- [ ] **Deploy/observe.** The virtualization is client-only, so a redeploy of the web bundle is enough — but the fix is only *observable* against a large library. Verify on CT132 with the 14,874-row account, not a test fixture.
+
+**Note for whoever does the Android half:** do not port the pin/unpin design
+blindly. Coil owns its own bitmap cache and does not have the two-owner problem
+that made the web bug permanent; the web fix is about *ownership*, and Android's
+equivalent question is whether the memory cache is bounded at all.
 
 ---
 
