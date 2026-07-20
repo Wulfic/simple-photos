@@ -75,6 +75,22 @@ pub struct PhotoSummary {
     /// Tiles in "Recently Added" — the whole library, capped at
     /// [`RECENT_ALBUM_LIMIT`].
     pub smart_recent: i64,
+
+    /// Head of the change log (#38). Two jobs, both cheap:
+    ///
+    /// * **Change detection.** A client that already holds this sequence knows
+    ///   nothing has changed and can skip `encrypted-sync` altogether — no
+    ///   pagination, no IndexedDB writes, no blob downloads. That is the
+    ///   steady-state property #38 is about, and it costs one `MAX(seq)` here
+    ///   instead of a full-library walk there.
+    /// * **Integrity backstop.** Delta sync's residual risk is a write path
+    ///   that bypasses triggers entirely (a wholesale DB restore, say). A
+    ///   client comparing its mirror against `total` can detect that drift and
+    ///   fall back to a full walk, so a missed change degrades to "stale until
+    ///   the next check" rather than "silently wrong forever".
+    ///
+    /// Never served from the TTL cache — see [`photos_summary`].
+    pub head_seq: i64,
 }
 
 /// The grid collapses every set of frames sharing a `burst_id` into a single
@@ -143,7 +159,7 @@ pub async fn compute_summary(
     // and `COUNT(DISTINCT CASE WHEN <pred> THEN burst_id END)` narrows that to
     // the groups a given smart-album filter matches, which is what makes
     // filter-then-collapse expressible in a single aggregate.
-    let r: SummaryRow = sqlx::query_as(
+    let r: SummaryRow = sqlx::query_as(&format!(
         "SELECT \
            COUNT(*) AS total, \
            COALESCE(SUM(CASE WHEN media_type = 'photo' THEN 1 ELSE 0 END), 0) AS photos, \
@@ -163,12 +179,10 @@ pub async fn compute_summary(
            COUNT(DISTINCT CASE WHEN media_type = 'audio' THEN burst_id END) AS audio_bg, \
            COALESCE(SUM(CASE WHEN is_favorite AND burst_id IS NULL THEN 1 ELSE 0 END), 0) AS favorites_nb, \
            COUNT(DISTINCT CASE WHEN is_favorite THEN burst_id END) AS favorites_bg \
-         FROM photos \
-         WHERE user_id = ?1 \
-           AND id NOT IN (SELECT blob_id FROM encrypted_gallery_items) \
-           AND id NOT IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL) \
-           AND (encrypted_blob_id IS NULL OR encrypted_blob_id NOT IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL))",
-    )
+         FROM photos p \
+         WHERE {eligible}",
+        eligible = crate::gallery::eligibility::eligible_for_user()
+    ))
     .bind(user_id)
     .fetch_one(pool)
     .await?;
@@ -188,6 +202,7 @@ pub async fn compute_summary(
         smart_audio: collapsed_total(r.audio_nb, r.audio_bg),
         smart_favorites: collapsed_total(r.favorites_nb, r.favorites_bg),
         smart_recent: collapsed.min(RECENT_ALBUM_LIMIT),
+        head_seq: crate::gallery::sync::head_seq(pool).await?,
     })
 }
 
@@ -223,7 +238,13 @@ pub async fn photos_summary(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<PhotoSummary>, AppError> {
-    if let Some(cached) = state.summary_cache.get_fresh(&auth.user_id) {
+    // Counts tolerate the TTL; `head_seq` must not. Clients use it to decide
+    // whether to sync at all, so serving a cached (stale, lower) head would
+    // make them re-fetch changes they already have on every poll for up to the
+    // TTL — the exact busywork #38 is removing. One indexed MAX(seq) is far
+    // cheaper than the aggregate the cache is actually protecting.
+    if let Some(mut cached) = state.summary_cache.get_fresh(&auth.user_id) {
+        cached.head_seq = crate::gallery::sync::head_seq(&state.read_pool).await?;
         return Ok(Json(cached));
     }
 

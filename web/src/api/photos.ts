@@ -159,6 +159,9 @@ export const photosApi = {
       smart_audio: number;
       smart_favorites: number;
       smart_recent: number;
+      /** Change-log head (#38) — compare against the last synced sequence to
+       *  decide whether `encrypted-sync` needs to run at all. */
+      head_seq: number;
     }>("/photos/summary"),
 
   /** Authoritative `album_name → [photo_id]` mapping captured at Takeout import

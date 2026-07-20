@@ -22,6 +22,7 @@ function summary(over: Partial<PhotoSummary> = {}): PhotoSummary {
     smart_audio: 0,
     smart_favorites: 0,
     smart_recent: 0,
+    head_seq: 0,
     ...over,
   };
 }

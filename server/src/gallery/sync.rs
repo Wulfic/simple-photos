@@ -13,13 +13,29 @@ use serde::{Deserialize, Serialize};
 
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
+use crate::gallery::eligibility::ELIGIBLE_PREDICATE;
 use crate::state::AppState;
+
+/// Columns every sync record is built from. Interpolated rather than repeated:
+/// the full walk and the delta feed must project identical shapes, and the two
+/// hand-maintained copies that used to live here had already begun to rot.
+const RECORD_COLUMNS: &str = "id, filename, mime_type, media_type, size_bytes, width, height, \
+     duration_secs, taken_at, created_at, encrypted_blob_id, encrypted_thumb_blob_id, \
+     is_favorite, crop_metadata, photo_hash, source_path, \
+     photo_subtype, burst_id, motion_video_blob_id";
 
 /// Query parameters for the encrypted sync endpoint.
 #[derive(Debug, Deserialize)]
 pub struct SyncQuery {
     pub after: Option<String>,
     pub limit: Option<i64>,
+    /// Delta mode (#38): return only photos whose change-log sequence exceeds
+    /// this, plus tombstones for those that left the feed. Absent = full walk.
+    ///
+    /// `since=0` is not special-cased. Migration 033 backfills a change-log row
+    /// for every pre-existing photo, so `since=0` naturally enumerates the whole
+    /// library — a cold-start client and a long-offline client take one path.
+    pub since: Option<i64>,
 }
 
 /// Photo metadata record for encrypted-mode sync (no file content).
@@ -55,24 +71,81 @@ pub struct EncryptedSyncRecord {
 pub struct EncryptedSyncResponse {
     pub photos: Vec<EncryptedSyncRecord>,
     pub next_cursor: Option<String>,
+
+    /// Ids of photos that have left the feed since the requested sequence —
+    /// deleted outright, or claimed by a secure gallery. Delta mode only; the
+    /// full walk needs no tombstones because the client set-differences.
+    ///
+    /// Empty rather than absent so a client cannot mistake "no removals" for
+    /// "this server does not send removals".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deleted: Option<Vec<String>>,
+
+    /// The change-log head at the time this page was built. Clients persist it
+    /// and pass it back as `since` on the next sync.
+    ///
+    /// **Persist the value from the FIRST page of a walk, not the last.** A
+    /// change committed while a multi-page walk is in flight lands at a
+    /// sequence above the first page's head, so keeping the first head
+    /// re-delivers it next time. Keeping the last head would step over it and
+    /// lose the change permanently.
+    pub head_seq: i64,
 }
 
 /// GET /api/photos/encrypted-sync
 /// Returns metadata for encrypted photos — lightweight sync for mobile clients.
+///
+/// Two modes. Without `since`, the historical full keyset walk over the whole
+/// eligible library. With `since`, only what changed after that sequence, plus
+/// tombstones. Both paginate with `after`/`limit`, and both report `head_seq`.
 pub async fn encrypted_sync(
     State(state): State<AppState>,
     auth: AuthUser,
     Query(params): Query<SyncQuery>,
 ) -> Result<Json<EncryptedSyncResponse>, AppError> {
     let limit = params.limit.unwrap_or(500).min(1000);
-    let page = fetch_page(
-        &state.read_pool,
-        &auth.user_id,
-        params.after.as_deref(),
-        limit,
-    )
-    .await?;
+    let page = match params.since {
+        Some(since) => {
+            fetch_delta(
+                &state.read_pool,
+                &auth.user_id,
+                since,
+                params.after.as_deref(),
+                limit,
+            )
+            .await
+        }
+        None => {
+            fetch_page(
+                &state.read_pool,
+                &auth.user_id,
+                params.after.as_deref(),
+                limit,
+            )
+            .await
+        }
+    }
+    .map_err(|e| {
+        tracing::error!(
+            user_id = %auth.user_id, since = ?params.since, error = ?e,
+            "encrypted_sync page failed"
+        );
+        e
+    })?;
     Ok(Json(page))
+}
+
+/// Current head of the change log — the sequence a client should resume from.
+///
+/// Global rather than per-user (see migration 033): cheap, monotonic, and a
+/// client's cursor only ever needs to be comparable against itself. A user with
+/// no changes simply has a sparse range, which costs one empty delta query.
+pub async fn head_seq(pool: &sqlx::SqlitePool) -> Result<i64, AppError> {
+    let head: i64 =
+        sqlx::query_scalar("SELECT COALESCE(MAX(seq), 0) FROM photo_change_log")
+            .fetch_one(pool)
+            .await?;
+    Ok(head)
 }
 
 /// Fetch one keyset page of the encrypted-sync feed.
@@ -98,21 +171,16 @@ pub async fn fetch_page(
             // at the boundary timestamp are included via <=.
             (after.to_string(), String::new())
         };
-        sqlx::query_as::<_, EncryptedSyncRecord>(
-            "SELECT id, filename, mime_type, media_type, size_bytes, width, height, \
-             duration_secs, taken_at, created_at, encrypted_blob_id, encrypted_thumb_blob_id, \
-             is_favorite, crop_metadata, photo_hash, source_path, \
-             photo_subtype, burst_id, motion_video_blob_id \
-             FROM photos \
-             WHERE user_id = ? \
-             AND id NOT IN (SELECT blob_id FROM encrypted_gallery_items) \
-             AND id NOT IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL) \
-             AND (encrypted_blob_id IS NULL OR encrypted_blob_id NOT IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL)) \
-             AND (COALESCE(taken_at, created_at) < ? \
-                  OR (COALESCE(taken_at, created_at) = ? AND id > ?)) \
-             ORDER BY COALESCE(taken_at, created_at) DESC, id ASC \
-             LIMIT ?",
-        )
+        sqlx::query_as::<_, EncryptedSyncRecord>(&format!(
+            "SELECT {RECORD_COLUMNS} \
+             FROM photos p \
+             WHERE p.user_id = ? \
+             AND {ELIGIBLE_PREDICATE} \
+             AND (COALESCE(p.taken_at, p.created_at) < ? \
+                  OR (COALESCE(p.taken_at, p.created_at) = ? AND p.id > ?)) \
+             ORDER BY COALESCE(p.taken_at, p.created_at) DESC, p.id ASC \
+             LIMIT ?"
+        ))
         .bind(user_id)
         .bind(&cursor_ts)
         .bind(&cursor_ts)
@@ -121,19 +189,14 @@ pub async fn fetch_page(
         .fetch_all(pool)
         .await?
     } else {
-        sqlx::query_as::<_, EncryptedSyncRecord>(
-            "SELECT id, filename, mime_type, media_type, size_bytes, width, height, \
-             duration_secs, taken_at, created_at, encrypted_blob_id, encrypted_thumb_blob_id, \
-             is_favorite, crop_metadata, photo_hash, source_path, \
-             photo_subtype, burst_id, motion_video_blob_id \
-             FROM photos \
-             WHERE user_id = ? \
-             AND id NOT IN (SELECT blob_id FROM encrypted_gallery_items) \
-             AND id NOT IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL) \
-             AND (encrypted_blob_id IS NULL OR encrypted_blob_id NOT IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL)) \
-             ORDER BY COALESCE(taken_at, created_at) DESC, id ASC \
-             LIMIT ?",
-        )
+        sqlx::query_as::<_, EncryptedSyncRecord>(&format!(
+            "SELECT {RECORD_COLUMNS} \
+             FROM photos p \
+             WHERE p.user_id = ? \
+             AND {ELIGIBLE_PREDICATE} \
+             ORDER BY COALESCE(p.taken_at, p.created_at) DESC, p.id ASC \
+             LIMIT ?"
+        ))
         .bind(user_id)
         .bind(limit + 1)
         .fetch_all(pool)
@@ -161,7 +224,154 @@ pub async fn fetch_page(
     Ok(EncryptedSyncResponse {
         photos,
         next_cursor,
+        deleted: None,
+        head_seq: head_seq(pool).await?,
     })
+}
+
+/// Fetch one page of the **delta** feed: everything that changed after `since`.
+///
+/// ## Why this is safe despite nine `DELETE FROM photos` sites
+///
+/// `photo_change_log` is a hint, not a source of truth. Its triggers say only
+/// "photo X may have changed"; they never claim X was deleted or is eligible.
+/// This function re-derives both from the live tables using
+/// [`ELIGIBLE_PREDICATE`] — the exact predicate [`fetch_page`] uses. So the
+/// upsert/tombstone split is always computed against current reality, and a
+/// trigger that fires spuriously costs one redundant row, never a wrong answer.
+///
+/// That is what lets a single trigger cover every delete site at once, and what
+/// makes the secure-album case work at all: adding a photo to a secure gallery
+/// never touches its `photos` row, so no amount of care on the `photos` table
+/// alone could have caught it.
+///
+/// ## Pagination
+///
+/// The cursor is composite — `"<seq>|<photo_id>"` — and NOT a bare `seq`.
+/// Sequences are **not unique**: `MAX(seq) + 1` is evaluated once per statement,
+/// so when one secure-gallery insert touches several photos they all land on the
+/// same sequence. A `seq > last` cursor would drop every member of such a group
+/// after the first whenever a page boundary fell inside it — the identical
+/// off-by-one that lost one photo per page in #42, reintroduced in a new place.
+/// Ordering by `(seq, photo_id)` and comparing lexicographically makes the
+/// boundary exact. `rows_sharing_a_sequence_survive_a_page_boundary` covers it.
+pub async fn fetch_delta(
+    pool: &sqlx::SqlitePool,
+    user_id: &str,
+    since: i64,
+    after: Option<&str>,
+    limit: i64,
+) -> Result<EncryptedSyncResponse, AppError> {
+    // Capture the head BEFORE reading, so a change landing mid-page is
+    // re-delivered next time rather than stepped over.
+    let head = head_seq(pool).await?;
+
+    // Step 1: page the change log. This decides the page boundary and the
+    // cursor; eligibility is deliberately not consulted yet, because a photo
+    // that became INELIGIBLE still has to occupy a slot on this page — it is
+    // the tombstone.
+    let mut changed: Vec<ChangedRow> = if let Some(after) = after {
+        let (cur_seq, cur_id) = parse_delta_cursor(after);
+        sqlx::query_as::<_, ChangedRow>(
+            "SELECT photo_id, seq FROM photo_change_log \
+             WHERE user_id = ? AND seq > ? \
+               AND (seq > ? OR (seq = ? AND photo_id > ?)) \
+             ORDER BY seq ASC, photo_id ASC \
+             LIMIT ?",
+        )
+        .bind(user_id)
+        .bind(since)
+        .bind(cur_seq)
+        .bind(cur_seq)
+        .bind(&cur_id)
+        .bind(limit + 1)
+        .fetch_all(pool)
+        .await?
+    } else {
+        sqlx::query_as::<_, ChangedRow>(
+            "SELECT photo_id, seq FROM photo_change_log \
+             WHERE user_id = ? AND seq > ? \
+             ORDER BY seq ASC, photo_id ASC \
+             LIMIT ?",
+        )
+        .bind(user_id)
+        .bind(since)
+        .bind(limit + 1)
+        .fetch_all(pool)
+        .await?
+    };
+
+    // Same peek-then-truncate discipline as `fetch_page`, and for the same
+    // reason: derive the cursor from the last row actually RETURNED.
+    let has_more = changed.len() as i64 > limit;
+    changed.truncate(limit as usize);
+    let next_cursor = if has_more {
+        changed
+            .last()
+            .map(|c| format!("{}|{}", c.seq, c.photo_id))
+    } else {
+        None
+    };
+
+    if changed.is_empty() {
+        // The steady state: nothing changed, so no rows and no blob work. This
+        // is the whole point of #38 — assert it in tests, it is the property
+        // that regresses silently.
+        return Ok(EncryptedSyncResponse {
+            photos: Vec::new(),
+            next_cursor: None,
+            deleted: Some(Vec::new()),
+            head_seq: head,
+        });
+    }
+
+    // Step 2: of this page's ids, fetch the ones that are currently eligible.
+    // Anything the query does not return is, by definition, no longer in the
+    // feed — deleted or secure-hidden, which the client treats identically.
+    let ids: Vec<&str> = changed.iter().map(|c| c.photo_id.as_str()).collect();
+    let placeholders = vec!["?"; ids.len()].join(",");
+    let sql = format!(
+        "SELECT {RECORD_COLUMNS} FROM photos p \
+         WHERE p.id IN ({placeholders}) AND p.user_id = ? AND {ELIGIBLE_PREDICATE} \
+         ORDER BY COALESCE(p.taken_at, p.created_at) DESC, p.id ASC"
+    );
+    let mut q = sqlx::query_as::<_, EncryptedSyncRecord>(&sql);
+    for id in &ids {
+        q = q.bind(*id);
+    }
+    let photos = q.bind(user_id).fetch_all(pool).await?;
+
+    let alive: std::collections::HashSet<&str> =
+        photos.iter().map(|p| p.id.as_str()).collect();
+    let deleted: Vec<String> = changed
+        .iter()
+        .filter(|c| !alive.contains(c.photo_id.as_str()))
+        .map(|c| c.photo_id.clone())
+        .collect();
+
+    Ok(EncryptedSyncResponse {
+        photos,
+        next_cursor,
+        deleted: Some(deleted),
+        head_seq: head,
+    })
+}
+
+/// One change-log entry: which photo, and at what sequence.
+#[derive(Debug, sqlx::FromRow)]
+struct ChangedRow {
+    photo_id: String,
+    seq: i64,
+}
+
+/// Split a `"<seq>|<photo_id>"` delta cursor. A malformed or unparseable
+/// cursor degrades to `(0, "")`, which restarts the delta from `since` — a
+/// duplicate page, never a skipped one.
+fn parse_delta_cursor(after: &str) -> (i64, String) {
+    match after.split_once('|') {
+        Some((seq, id)) => (seq.parse().unwrap_or(0), id.to_string()),
+        None => (after.parse().unwrap_or(0), String::new()),
+    }
 }
 
 #[cfg(test)]
@@ -293,6 +503,322 @@ mod tests {
             let got = paginate_all(&pool, u, limit).await;
             assert_round_trip(&got, &seeded);
         }
+    }
+
+    // ── Delta feed (#38) ───────────────────────────────────────────────────
+
+    /// Seed the FK parents a secure-gallery item needs, then hide `photo_id`
+    /// inside a secure gallery. Mirrors what `gallery::secure` does: it inserts
+    /// an `encrypted_gallery_items` row and never touches `photos`.
+    async fn secure_hide(pool: &sqlx::SqlitePool, item: &str, photo_id: &str) {
+        sqlx::query("INSERT OR IGNORE INTO users (id, username, password_hash, created_at) VALUES ('user-1','u','h','2026-01-01T00:00:00Z')")
+            .execute(pool).await.unwrap();
+        sqlx::query("INSERT OR IGNORE INTO encrypted_galleries (id, user_id, name, password_hash, created_at) VALUES ('g1','user-1','sec','h','2026-01-01T00:00:00Z')")
+            .execute(pool).await.unwrap();
+        sqlx::query("INSERT OR IGNORE INTO blobs (id, user_id, blob_type, size_bytes, upload_time, storage_path) VALUES (?,'user-1','photo',0,'2026-01-01T00:00:00Z','s')")
+            .bind(photo_id).execute(pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO encrypted_gallery_items (id, gallery_id, blob_id, added_at) VALUES (?, 'g1', ?, '2026-01-01T00:00:00Z')",
+        )
+        .bind(item)
+        .bind(photo_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    /// Walk the delta feed to exhaustion, returning (upserted ids, tombstones).
+    async fn delta_all(
+        pool: &sqlx::SqlitePool,
+        user: &str,
+        since: i64,
+        limit: i64,
+    ) -> (Vec<String>, Vec<String>) {
+        let (mut up, mut del) = (Vec::new(), Vec::new());
+        let mut cursor: Option<String> = None;
+        for _ in 0..100 {
+            let page = fetch_delta(pool, user, since, cursor.as_deref(), limit)
+                .await
+                .unwrap();
+            up.extend(page.photos.iter().map(|p| p.id.clone()));
+            del.extend(page.deleted.clone().unwrap_or_default());
+            match page.next_cursor {
+                Some(c) => cursor = Some(c),
+                None => return (up, del),
+            }
+        }
+        panic!("delta pagination did not terminate — cursor is not advancing");
+    }
+
+    /// The headline property: an unchanged library transfers NOTHING. This is
+    /// the entire point of #38, and it is the property that will regress
+    /// silently, because a client that re-downloads everything still shows the
+    /// correct gallery — just slowly, exactly as before.
+    #[tokio::test]
+    async fn steady_state_delta_is_empty() {
+        let pool = test_pool().await;
+        for i in 0..20 {
+            insert(&pool, &format!("s{i:02}"), "user-1", "2026-01-01T00:00:00Z").await;
+        }
+        let head = head_seq(&pool).await.unwrap();
+
+        let page = fetch_delta(&pool, "user-1", head, None, 500).await.unwrap();
+        assert!(page.photos.is_empty(), "no rows should move when nothing changed");
+        assert_eq!(page.deleted, Some(Vec::new()));
+        assert_eq!(page.next_cursor, None, "no pagination for an empty delta");
+        assert_eq!(page.head_seq, head, "head must not drift on a read");
+    }
+
+    /// Migration 033 backfills every pre-existing photo, so `since = 0` must be
+    /// indistinguishable from a full walk. That is what lets a cold-start
+    /// client and a long-offline client share one code path.
+    #[tokio::test]
+    async fn since_zero_returns_the_whole_library() {
+        let pool = test_pool().await;
+        let mut seeded = Vec::new();
+        for i in 0..7 {
+            let id = format!("z{i:02}");
+            insert(&pool, &id, "user-1", &format!("2026-01-{:02}T00:00:00Z", i + 1)).await;
+            seeded.push(id);
+        }
+
+        let full = paginate_all(&pool, "user-1", 3).await;
+        let (delta, tombs) = delta_all(&pool, "user-1", 0, 3).await;
+
+        assert!(tombs.is_empty(), "nothing was removed");
+        assert_round_trip(&delta, &seeded);
+        assert_eq!(
+            delta.iter().collect::<HashSet<_>>(),
+            full.iter().collect::<HashSet<_>>(),
+            "delta from 0 must equal the full walk"
+        );
+    }
+
+    /// A deleted photo must be named explicitly. The full walk was self-healing
+    /// — it simply stopped returning the row and the client set-differenced it
+    /// away. A delta feed that fails to emit the tombstone leaves a ghost row
+    /// in every client forever, which is why #38 was a regression risk.
+    #[tokio::test]
+    async fn deleting_a_photo_emits_a_tombstone() {
+        let pool = test_pool().await;
+        insert(&pool, "keep", "user-1", "2026-01-01T00:00:00Z").await;
+        insert(&pool, "gone", "user-1", "2026-01-02T00:00:00Z").await;
+        let head = head_seq(&pool).await.unwrap();
+
+        sqlx::query("DELETE FROM photos WHERE id = 'gone'")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let (up, del) = delta_all(&pool, "user-1", head, 500).await;
+        assert!(up.is_empty(), "nothing was added or modified");
+        assert_eq!(del, vec!["gone".to_string()]);
+    }
+
+    /// The case a `photos`-only trigger cannot see, and the reason this design
+    /// watches `encrypted_gallery_items` too: securing a photo removes it from
+    /// the feed WITHOUT updating, or even touching, its `photos` row.
+    #[tokio::test]
+    async fn securing_a_photo_emits_a_tombstone_without_touching_the_row() {
+        let pool = test_pool().await;
+        insert(&pool, "keep", "user-1", "2026-01-01T00:00:00Z").await;
+        insert(&pool, "secret", "user-1", "2026-01-02T00:00:00Z").await;
+        let head = head_seq(&pool).await.unwrap();
+
+        secure_hide(&pool, "i1", "secret").await;
+
+        // Precondition: the photo row itself is untouched.
+        let still_there: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM photos WHERE id = 'secret'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(still_there, 1, "the row must still exist — only eligibility changed");
+
+        let (up, del) = delta_all(&pool, "user-1", head, 500).await;
+        assert!(up.is_empty());
+        assert_eq!(del, vec!["secret".to_string()], "secure-hidden reads as removed");
+    }
+
+    /// The mirror image: removing the secure-gallery item puts the photo back
+    /// in the feed, and the delta must re-deliver the full record so the client
+    /// can render it again.
+    #[tokio::test]
+    async fn unsecuring_a_photo_re_delivers_it() {
+        let pool = test_pool().await;
+        insert(&pool, "secret", "user-1", "2026-01-02T00:00:00Z").await;
+        secure_hide(&pool, "i1", "secret").await;
+        let head = head_seq(&pool).await.unwrap();
+
+        sqlx::query("DELETE FROM encrypted_gallery_items WHERE id = 'i1'")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let (up, del) = delta_all(&pool, "user-1", head, 500).await;
+        assert_eq!(up, vec!["secret".to_string()], "back in the feed as an upsert");
+        assert!(del.is_empty());
+    }
+
+    /// Deleting a whole secure gallery removes its items by ON DELETE CASCADE,
+    /// never by an explicit `DELETE FROM encrypted_gallery_items`. SQLite fires
+    /// AFTER DELETE triggers for cascaded rows — this test pins that, because
+    /// the entire tombstone design collapses if a future SQLite (or a schema
+    /// change) stops firing them.
+    #[tokio::test]
+    async fn cascade_deleting_a_gallery_re_delivers_its_photos() {
+        let pool = test_pool().await;
+        insert(&pool, "secret", "user-1", "2026-01-02T00:00:00Z").await;
+        secure_hide(&pool, "i1", "secret").await;
+        let head = head_seq(&pool).await.unwrap();
+
+        // Cascade path — note this never names encrypted_gallery_items.
+        sqlx::query("PRAGMA foreign_keys = ON")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM encrypted_galleries WHERE id = 'g1'")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let items: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM encrypted_gallery_items")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(items, 0, "precondition: the cascade actually removed the item");
+
+        let (up, _) = delta_all(&pool, "user-1", head, 500).await;
+        assert_eq!(
+            up,
+            vec!["secret".to_string()],
+            "cascade must fire the trigger, else the photo stays invisible forever"
+        );
+    }
+
+    /// Sequences are NOT unique: `MAX(seq) + 1` is evaluated once per
+    /// statement, so one secure-gallery insert touching several photos lands
+    /// them all on the same sequence. A bare `seq > last` cursor drops every
+    /// member of the group after the first when a page boundary falls inside
+    /// it — the same class of off-by-one that lost a photo per page in #42.
+    ///
+    /// `limit = 1` maximises boundaries, so this fails loudly if the composite
+    /// `(seq, photo_id)` cursor is ever simplified back to a bare sequence.
+    #[tokio::test]
+    async fn rows_sharing_a_sequence_survive_a_page_boundary() {
+        let pool = test_pool().await;
+        // Three photos all pointing at one encrypted blob, so a single EGI
+        // insert matches all three at once.
+        for id in ["m1", "m2", "m3"] {
+            insert(&pool, id, "user-1", "2026-01-01T00:00:00Z").await;
+            sqlx::query("UPDATE photos SET encrypted_blob_id = 'shared-blob' WHERE id = ?")
+                .bind(id)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let head = head_seq(&pool).await.unwrap();
+
+        sqlx::query("INSERT OR IGNORE INTO users (id, username, password_hash, created_at) VALUES ('user-1','u','h','2026-01-01T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT OR IGNORE INTO encrypted_galleries (id, user_id, name, password_hash, created_at) VALUES ('g1','user-1','sec','h','2026-01-01T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT OR IGNORE INTO blobs (id, user_id, blob_type, size_bytes, upload_time, storage_path) VALUES ('shared-blob','user-1','photo',0,'2026-01-01T00:00:00Z','s')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO encrypted_gallery_items (id, gallery_id, blob_id, original_blob_id, added_at) VALUES ('i1','g1','shared-blob','shared-blob','2026-01-01T00:00:00Z')")
+            .execute(&pool).await.unwrap();
+
+        // Precondition: they really do share one sequence.
+        let distinct: i64 = sqlx::query_scalar(
+            "SELECT COUNT(DISTINCT seq) FROM photo_change_log WHERE photo_id IN ('m1','m2','m3')",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(distinct, 1, "precondition: one statement, one sequence");
+
+        for limit in [1, 2, 3, 5] {
+            let (_, del) = delta_all(&pool, "user-1", head, limit).await;
+            let got: HashSet<&String> = del.iter().collect();
+            let want = ["m1".to_string(), "m2".to_string(), "m3".to_string()];
+            let want: HashSet<&String> = want.iter().collect();
+            assert_eq!(got, want, "tombstones lost at limit={limit}");
+        }
+    }
+
+    /// The invariant tying the two feeds together: applying the delta to a
+    /// mirror must land on exactly the same set as a fresh full walk. This is
+    /// the test that would catch the delta and the full walk drifting apart —
+    /// e.g. someone editing the eligibility predicate in only one of them.
+    #[tokio::test]
+    async fn applying_the_delta_matches_a_fresh_full_walk() {
+        let pool = test_pool().await;
+        let u = "user-1";
+        for i in 0..6 {
+            insert(&pool, &format!("w{i:02}"), u, &format!("2026-01-{:02}T00:00:00Z", i + 1)).await;
+        }
+
+        // A client that has fully synced holds exactly the full walk.
+        let mut mirror: HashSet<String> = paginate_all(&pool, u, 2).await.into_iter().collect();
+        let head = head_seq(&pool).await.unwrap();
+
+        // Now churn the library through every mutation kind at once.
+        sqlx::query("DELETE FROM photos WHERE id = 'w00'").execute(&pool).await.unwrap();
+        sqlx::query("UPDATE photos SET is_favorite = 1 WHERE id = 'w01'").execute(&pool).await.unwrap();
+        insert(&pool, "w99", u, "2026-02-01T00:00:00Z").await;
+        secure_hide(&pool, "i1", "w02").await;
+
+        // Apply the delta the way a client would.
+        let (up, del) = delta_all(&pool, u, head, 2).await;
+        for id in del {
+            mirror.remove(&id);
+        }
+        mirror.extend(up);
+
+        let fresh: HashSet<String> = paginate_all(&pool, u, 2).await.into_iter().collect();
+        assert_eq!(
+            mirror, fresh,
+            "delta-applied mirror diverged from a full walk"
+        );
+    }
+
+    /// Tombstones outlive the rows they describe — that is their entire job —
+    /// so they must still be attributable to the right user afterwards.
+    /// Leaking one user's deletions into another's feed would be a privacy bug,
+    /// not merely a correctness one.
+    #[tokio::test]
+    async fn delta_is_scoped_to_the_requesting_user() {
+        let pool = test_pool().await;
+        insert(&pool, "mine", "user-1", "2026-01-01T00:00:00Z").await;
+        insert(&pool, "theirs", "user-2", "2026-01-01T00:00:00Z").await;
+        let head = head_seq(&pool).await.unwrap();
+
+        sqlx::query("DELETE FROM photos WHERE id = 'theirs'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE photos SET is_favorite = 1 WHERE id = 'mine'")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let (up, del) = delta_all(&pool, "user-1", head, 500).await;
+        assert_eq!(up, vec!["mine".to_string()]);
+        assert!(del.is_empty(), "another user's tombstone must not leak: {del:?}");
+    }
+
+    /// A malformed cursor must re-serve a page, never skip one. Cursors survive
+    /// client restarts and storage round-trips, so "unparseable" is a real
+    /// state, and silently advancing past it would lose rows invisibly.
+    #[test]
+    fn malformed_delta_cursors_restart_rather_than_skip() {
+        assert_eq!(parse_delta_cursor("12|abc"), (12, "abc".to_string()));
+        assert_eq!(parse_delta_cursor("12"), (12, String::new()));
+        assert_eq!(parse_delta_cursor("garbage"), (0, String::new()));
+        assert_eq!(parse_delta_cursor(""), (0, String::new()));
+        // An id containing the separator must split on the FIRST '|' so the
+        // sequence parses; the remainder stays part of the id.
+        assert_eq!(parse_delta_cursor("7|a|b"), (7, "a|b".to_string()));
     }
 
     /// Another user's rows must never leak into a page, and must not consume

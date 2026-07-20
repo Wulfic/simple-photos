@@ -48,6 +48,14 @@ export interface PhotoSummary {
   smart_favorites: number;
   /** Tiles in "Recently Added" (whole library, capped at 100). */
   smart_recent: number;
+  /** Head of the server's photo change log (#38).
+   *
+   *  If this equals the sequence the client last synced to, nothing has
+   *  changed and `encrypted-sync` can be skipped entirely — no pagination, no
+   *  IndexedDB writes, no blob downloads. Served fresh even when the rest of
+   *  the summary comes from the server's TTL cache, so it is safe to compare
+   *  on every poll. */
+  head_seq: number;
 }
 
 /** localStorage key holding `{ user, summary }` for the last-seen summary. */
