@@ -3,10 +3,19 @@
  *
  * Fetches `GET /api/photos/summary` — a cheap, server-side, TTL-cached aggregate
  * of the smart-album counts — so badges can render **instantly on a cold cache**
- * without paginating the whole `encrypted-sync` endpoint to recount. Once the
- * local IndexedDB mirror is populated, callers should prefer the live local
- * counts (they update instantly on favorite toggles etc.); the summary only
- * bridges the gap before/while that mirror fills.
+ * without paginating the whole `encrypted-sync` endpoint to recount.
+ *
+ * This is the **authoritative** count source (#42). It previously served only as
+ * a cold-start bridge, with callers preferring live counts derived from the
+ * local IndexedDB mirror — but that mirror only holds rows carrying an encrypted
+ * blob, so it under-reports the library by the entire pending-encryption
+ * backlog. Measured on the live server: 2,494 of 14,874 rows, i.e. the badge was
+ * short by ~17%. Local counts are now only a fallback for when this endpoint has
+ * not answered yet.
+ *
+ * Responsiveness is preserved server-side: mutations that move a count
+ * (favorite toggle, trash, import) call `SummaryCache::invalidate`, so the next
+ * fetch recomputes rather than waiting out the TTL.
  *
  * The last-seen summary is persisted to localStorage (keyed by user) and
  * hydrated **synchronously** on mount, so reopening the Albums page paints the
@@ -22,13 +31,23 @@ import { useAuthStore } from "../store/auth";
 import { useSyncSignal } from "../store/syncSignal";
 
 export interface PhotoSummary {
+  /** Raw eligible ROW count — no burst collapse. */
   total: number;
+  /** Tiles the main gallery grid renders (bursts collapsed). */
   collapsed_total: number;
   photos: number;
   gifs: number;
   videos: number;
   audio: number;
   favorites: number;
+  /** Tiles in the "Photos" smart album — photo + gif, burst-collapsed. */
+  smart_photos: number;
+  smart_gifs: number;
+  smart_videos: number;
+  smart_audio: number;
+  smart_favorites: number;
+  /** Tiles in "Recently Added" (whole library, capped at 100). */
+  smart_recent: number;
 }
 
 /** localStorage key holding `{ user, summary }` for the last-seen summary. */

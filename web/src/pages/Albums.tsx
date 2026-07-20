@@ -23,6 +23,7 @@ import { useAuthStore } from "../store/auth";
 import { useSecureAdd } from "../store/secureAdd";
 import { useSecureBlobFilter } from "../gallery/hooks/useSecureBlobFilter";
 import { countRegularAlbum, reconcileAlbumCount } from "../hooks/useAlbumPhotos";
+import { resolveSmartAlbumCounts } from "../gallery/smartAlbumCounts";
 import type { FaceCluster, PetCluster } from "../api/ai";
 
 type SharedAlbumInfo = {
@@ -325,10 +326,7 @@ export default function Albums() {
     return () => { cancelled = true; created.forEach((u) => URL.revokeObjectURL(u)); };
   }, [trips, accessToken]);
 
-  // Compute encrypted smart album counts + first thumbnails from IndexedDB
-  // Live local counts from the IndexedDB mirror. Preferred whenever the mirror
-  // holds any photos: they update instantly (favorite toggle, trash) with no
-  // round-trip. Null while the Dexie query is still resolving.
+  // Compute encrypted smart album counts + first thumbnails from IndexedDB.
   //
   // Secure-excluded: photos moved into a secure gallery stay in db.photos but
   // are hidden from the main gallery + smart album grids, so their counts must
@@ -338,31 +336,10 @@ export default function Albums() {
         ? encryptedPhotos.filter(p => !secureBlobIds.has(p.blobId))
         : encryptedPhotos)
     : encryptedPhotos;
-  const localCounts = visiblePhotos && visiblePhotos.length > 0 ? {
-    all: visiblePhotos.length,
-    // "Recently Added" is capped at the 100 most-recently-imported items.
-    recent: Math.min(visiblePhotos.length, 100),
-    favorites: visiblePhotos.filter(p => !!p.isFavorite).length,
-    photos: visiblePhotos.filter(p => p.mediaType === "photo" || p.mediaType === "gif").length,
-    gifs: visiblePhotos.filter(p => p.mediaType === "gif").length,
-    videos: visiblePhotos.filter(p => p.mediaType === "video").length,
-    audio: visiblePhotos.filter(p => p.mediaType === "audio").length,
-  } : null;
 
-  // Fall back to the server summary until the local mirror has data, so a cold
-  // cache shows real counts immediately instead of zeros/spinner (Issue 3). The
-  // "Photos" card counts photos+gifs, mirroring the local filter above.
-  const summaryCounts = photoSummary ? {
-    all: photoSummary.total,
-    recent: Math.min(photoSummary.total, 100),
-    favorites: photoSummary.favorites,
-    photos: photoSummary.photos + photoSummary.gifs,
-    gifs: photoSummary.gifs,
-    videos: photoSummary.videos,
-    audio: photoSummary.audio,
-  } : null;
-
-  const encryptedPhotoCounts = localCounts ?? summaryCounts;
+  // Server-summary-first (#42). See `smartAlbumCounts` for why the mirror is
+  // only a fallback: it omits every row still awaiting client-side encryption.
+  const encryptedPhotoCounts = resolveSmartAlbumCounts(photoSummary, visiblePhotos);
 
   // Find the first photo for each category (secure-excluded so a secured photo
   // can't surface as a smart-album cover). Note this no longer filters on the

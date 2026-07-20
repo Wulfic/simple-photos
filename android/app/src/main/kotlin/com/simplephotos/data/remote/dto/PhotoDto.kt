@@ -92,11 +92,23 @@ data class EncryptedSyncResponse(
     @SerializedName("next_cursor") val nextCursor: String?
 )
 
-// ── Precomputed gallery count summary (Issue 3) ──────────────────────────────
-// GET /api/photos/summary — cheap server-side aggregate so smart-album badges
-// render instantly on a cold Room mirror instead of showing 0 until a full
-// encrypted-sync pagination completes. `collapsedTotal` accounts for burst
-// collapse; per-category counts are raw (match the local filters).
+// ── Precomputed gallery count summary (Issue 3, revised by #42) ──────────────
+// GET /api/photos/summary — cheap server-side aggregate, and the AUTHORITATIVE
+// source for smart-album badges. The Room mirror only holds rows that carry an
+// encrypted blob, so counting it under-reports the library by the whole
+// pending-encryption backlog (measured live: 2,494 of 14,874 rows).
+//
+// Two families of number, NOT interchangeable — mirrors `PhotoSummary` in
+// server/src/gallery/summary.rs:
+//   - total/photos/gifs/videos/audio/favorites are raw media-type ROW counts.
+//   - smart* are TILE counts: the smart-album filter applied first, burst
+//     frames collapsed second. Badges must use these.
+// `smartPhotos` counts photos AND gifs, because the "Photos" smart album is
+// defined that way on both clients.
+//
+// Defaults of -1 on the smart* fields are load-bearing: Gson leaves absent
+// fields at their default, so a server on a pre-#42 binary is detectable via
+// `hasTileCounts` rather than silently reporting zero photos.
 
 data class PhotoSummaryDto(
     val total: Long = 0,
@@ -106,7 +118,18 @@ data class PhotoSummaryDto(
     val videos: Long = 0,
     val audio: Long = 0,
     val favorites: Long = 0,
-)
+    @SerializedName("smart_photos") val smartPhotos: Long = -1,
+    @SerializedName("smart_gifs") val smartGifs: Long = -1,
+    @SerializedName("smart_videos") val smartVideos: Long = -1,
+    @SerializedName("smart_audio") val smartAudio: Long = -1,
+    @SerializedName("smart_favorites") val smartFavorites: Long = -1,
+    @SerializedName("smart_recent") val smartRecent: Long = -1,
+) {
+    /** False when the server predates #42 and sent no tile counts, in which
+     *  case the caller must fall back to local mirror counts rather than
+     *  rendering -1 (or 0) into every badge. */
+    val hasTileCounts: Boolean get() = smartPhotos >= 0
+}
 
 // ── Authoritative Takeout source albums (Issue 2) ────────────────────────────
 // GET /api/photos/source-albums — album membership captured at import time,

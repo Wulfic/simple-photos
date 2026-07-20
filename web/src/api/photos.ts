@@ -134,9 +134,16 @@ export const photosApi = {
   },
 
   /** Cheap precomputed gallery counts (server-side aggregate, TTL-cached).
-   *  Lets smart-album badges render instantly on a cold cache without
-   *  paginating the whole encrypted-sync to recount. Counts mirror the grid's
-   *  eligibility filter; `collapsed_total` accounts for burst collapse. */
+   *  This is the **authoritative** source for smart-album badges (#42): the
+   *  local IndexedDB mirror only holds rows that carry an encrypted blob, so
+   *  counting it under-reports the library by however many photos are still
+   *  awaiting client-side encryption.
+   *
+   *  Two families of number, NOT interchangeable — see `PhotoSummary` in
+   *  `server/src/gallery/summary.rs`:
+   *  - `total`/`photos`/`gifs`/... are raw media-type ROW counts.
+   *  - `smart_*` are TILE counts: the client's smart-album filter applied
+   *    first, burst frames collapsed second. Badges must use these. */
   summary: () =>
     request<{
       total: number;
@@ -146,6 +153,12 @@ export const photosApi = {
       videos: number;
       audio: number;
       favorites: number;
+      smart_photos: number;
+      smart_gifs: number;
+      smart_videos: number;
+      smart_audio: number;
+      smart_favorites: number;
+      smart_recent: number;
     }>("/photos/summary"),
 
   /** Authoritative `album_name → [photo_id]` mapping captured at Takeout import
