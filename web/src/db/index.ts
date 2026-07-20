@@ -165,6 +165,33 @@ export interface CachedEditCopy {
   createdAt: number;
 }
 
+/**
+ * A single piece of sync bookkeeping, keyed by name.
+ *
+ * Currently holds exactly one row — the delta-sync cursor (#38): the change-log
+ * sequence the local mirror has been brought up to date with.
+ *
+ * **This lives in IndexedDB, next to the mirror it describes, and not in
+ * localStorage — deliberately.** The cursor is only meaningful relative to the
+ * contents of `photos`; it asserts "the mirror already contains every change up
+ * to seq N". Keeping the two in separate stores lets them be wiped
+ * independently, and the failure that creates is silent and permanent: an
+ * IndexedDB eviction under storage pressure (or a devtools clear, or a future
+ * bug in `clearAllUserData`) would empty the mirror while a localStorage cursor
+ * survived, so the next sync would ask for changes *after* N, receive none, and
+ * present an empty gallery forever. Same store, same lifecycle, one eviction
+ * unit. {@link readSyncCursor} additionally refuses a cursor over an empty
+ * mirror as a belt-and-braces check.
+ */
+export interface SyncStateRow {
+  /** Bookkeeping key. Only {@link SYNC_CURSOR_KEY} is used today. */
+  key: string;
+  /** Change-log sequence the mirror is current as of. */
+  seq: number;
+  /** When this cursor was last advanced (diagnostics only). */
+  updatedAt: number;
+}
+
 class SimplePhotosDB extends Dexie {
   photos!: Table<CachedPhoto, string>;
   albums!: Table<CachedAlbum, string>;
@@ -172,6 +199,7 @@ class SimplePhotosDB extends Dexie {
   fullPhotos!: Table<CachedFullPhoto, string>;
   editCopies!: Table<CachedEditCopy, string>;
   thumbs!: Table<CachedThumb, string>;
+  syncState!: Table<SyncStateRow, string>;
 
   constructor() {
     super("simple-photos");
@@ -286,6 +314,19 @@ class SimplePhotosDB extends Dexie {
       editCopies: "copyId, photoBlobId, createdAt",
       thumbs: "blobId",
     });
+
+    // v11 — delta-sync bookkeeping (#38). Schema-only: absent simply means
+    //       "no cursor yet", which is exactly the cold-start state that makes
+    //       the first pass a full walk. Nothing to migrate.
+    this.version(11).stores({
+      photos: "blobId, takenAt, mediaType, *albumIds, contentHash, serverPhotoId, burstId",
+      albums: "albumId, name",
+      trash: "trashId, blobId, deletedAt",
+      fullPhotos: "photoId, cachedAt",
+      editCopies: "copyId, photoBlobId, createdAt",
+      thumbs: "blobId",
+      syncState: "key",
+    });
   }
 }
 
@@ -298,7 +339,8 @@ export const db = new SimplePhotosDB();
  * flash of the previous user's photos when another account signs in.
  *
  * Clears:
- *  - All 6 IndexedDB tables (photos, albums, trash, fullPhotos, editCopies, thumbs)
+ *  - All 7 IndexedDB tables (photos, albums, trash, fullPhotos, editCopies,
+ *    thumbs, syncState)
  *  - The Cache API thumbnail cache (sp-thumbnails-v1)
  *
  * The in-memory thumbnail Map (thumbMemoryCache) is cleared separately
@@ -314,6 +356,12 @@ export async function clearAllUserData(): Promise<void> {
     // Thumbnails are decrypted image bytes — the most obviously private thing
     // in the cache. Missing this would flash the previous user's photos.
     db.thumbs.clear(),
+    // The delta-sync cursor (#38) MUST die with the mirror it describes.
+    // Leaving it behind would tell the next user's first sync that a mirror we
+    // just emptied is already current, so it would request only changes *after*
+    // that sequence and render an empty gallery — permanently, since nothing
+    // would ever ask for the rows again. Not a cache miss; a silent data loss.
+    db.syncState.clear(),
   ]);
 
   // Wipe persistent thumbnail cache

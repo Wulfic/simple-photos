@@ -1,25 +1,17 @@
 /**
  * Hook that synchronises server-side encrypted photo records into IndexedDB.
  *
- * Handles cursor-based pagination, stale-entry cleanup, thumbnail decryption,
- * dimension healing, and periodic background re-sync.
+ * This is now only the React shell: lifecycle, the live query, the re-entrancy
+ * guard and the backstop interval. The pass itself — skip / delta / full walk,
+ * pagination, pruning, thumbnail decryption and dimension healing — lives in
+ * `syncPass.ts`, where it can be tested by *operation count* rather than only
+ * through a rendered hook (#38).
  */
 import { useEffect, useRef, useState } from "react";
-import { api } from "../../api/client";
-import { decrypt } from "../../crypto/crypto";
-import { decryptBlobMetadata } from "../../crypto/blobEnvelope";
-import {
-  db,
-  type CachedPhoto,
-  type CachedThumb,
-  mediaTypeFromMime,
-} from "../../db";
+import { db, type CachedPhoto } from "../../db";
 import { startThumbBackfill } from "../../db/thumbs";
-import { base64ToArrayBuffer } from "../../utils/media";
-import { fetchAllPages } from "../../utils/gallery";
-import { reconcileSyncedPhotos, RECONCILE_CHUNK, type SyncRecord } from "./syncReconcile";
+import { runSyncPass } from "./syncPass";
 import { useLiveQuery } from "dexie-react-hooks";
-import type { PhotoPayload, ThumbnailPayload } from "../../types/media";
 
 export interface PhotoSyncResult {
   /** Encrypted-mode photos from IndexedDB (live query, auto-updates).
@@ -40,7 +32,11 @@ export interface PhotoSyncResult {
  * full-library sync per tick — stacked overlapping syncs that re-paged the
  * entire photo table and re-downloaded thumbnails ~28×/s against the server
  * (see repo todo.md, "Idle Disk-Thrash Fix"). Five minutes is plenty for a
- * backstop poll; the guard below stops even this from stacking on slow links. */
+ * backstop poll; the guard below stops even this from stacking on slow links.
+ *
+ * Since #38 a tick on an unchanged library costs one small JSON request and
+ * nothing else — see `syncPass.ts`. The interval is no longer load-bearing for
+ * performance, only for staleness. */
 const SYNC_INTERVAL_MS = 300_000;
 
 export function usePhotoSync(): PhotoSyncResult {
@@ -109,142 +105,12 @@ export function usePhotoSync(): PhotoSyncResult {
   async function syncEncryptedPhotos() {
     if (!encryptedDataReady) setLoading(true);
     try {
-      // Phase 1: Fetch metadata via encrypted-sync endpoint.
-      const allSyncPhotos: SyncRecord[] = [];
-      let cursor: string | undefined;
-      do {
-        const res = await api.photos.encryptedSync({ after: cursor, limit: 500 });
-        allSyncPhotos.push(...res.photos);
-        cursor = res.next_cursor ?? undefined;
-      } while (cursor);
-
-      const serverPhotoIds = new Set<string>();
-      const serverBlobIds = new Set<string>();
-      for (const p of allSyncPhotos) {
-        serverPhotoIds.add(p.id);
-        if (p.encrypted_blob_id) serverBlobIds.add(p.encrypted_blob_id);
-      }
-
-      // Phase 2: Include directly-uploaded encrypted blobs.
-      const allBlobMedia = [
-        ...(await fetchAllPages("photo")),
-        ...(await fetchAllPages("gif")),
-        ...(await fetchAllPages("video")),
-        ...(await fetchAllPages("audio")),
-      ];
-      for (const blob of allBlobMedia) serverBlobIds.add(blob.id);
-
-      // Remove stale IDB entries
-      const currentCached = await db.photos.toArray();
-      const staleIds = new Set(
-        currentCached
-          .filter((p) => {
-            if (p.serverPhotoId) return !serverPhotoIds.has(p.serverPhotoId);
-            const underlyingId = p.storageBlobId || p.blobId;
-            return !serverBlobIds.has(underlyingId) && !serverPhotoIds.has(underlyingId);
-          })
-          .map((p) => p.blobId),
-      );
-      if (staleIds.size > 0) await db.photos.bulkDelete([...staleIds]);
-
-      setEncryptedDataReady(true);
-
-      // Derived, not re-read: the previous version issued a second full
-      // `toArray()` here purely to see the effect of the delete it had just
-      // performed. On a large library that is a second full deserialization of
-      // the mirror for information already in hand.
-      const survivingCached = currentCached.filter((p) => !staleIds.has(p.blobId));
-
-      // Phase 3: Populate IDB from sync records.
-      //
-      // Batched, chunked and staged — see `syncReconcile.ts`. This was a
-      // per-photo loop with an awaited IndexedDB read *and* write inside it, so
-      // a 10k library meant 10k+ serialized transactions on the main thread
-      // every pass. That is the bulk of "photo libraries are slow" (#38).
-      await reconcileSyncedPhotos(allSyncPhotos, survivingCached);
-
-      // Phase 4: Handle directly-uploaded encrypted blobs not in photos table.
-      const syncedBlobIds = new Set(
-        allSyncPhotos.map((p) => p.encrypted_blob_id).filter((id): id is string => !!id),
-      );
-      // Membership is answered by ONE indexed key scan rather than a
-      // `db.photos.get()` per blob as this previously did. `primaryKeys()` reads
-      // the index without deserializing rows, and — unlike the pre-reconcile
-      // snapshot — it includes anything Phase 3 just inserted. That matters:
-      // `photos.id` and blob ids share a namespace on client-upload paths (hence
-      // the `id NOT IN (SELECT blob_id ...)` guard in the sync query), so a
-      // stale snapshot here could re-insert a row Phase 3 had just written.
-      const cachedBlobIds = new Set((await db.photos.toCollection().primaryKeys()) as string[]);
-      const unsyncedBlobs = allBlobMedia.filter(
-        (b) => !syncedBlobIds.has(b.id) && !cachedBlobIds.has(b.id),
-      );
-
-      const directPhotos: CachedPhoto[] = [];
-      const directThumbs: CachedThumb[] = [];
-
-      /** Commit what Phase 4 has accumulated so far, then clear the buffers. */
-      const flushDirect = async () => {
-        if (directPhotos.length === 0 && directThumbs.length === 0) return;
-        const photoRows = directPhotos.splice(0);
-        const thumbRows = directThumbs.splice(0);
-        try {
-          await db.transaction("rw", db.photos, db.thumbs, async () => {
-            if (photoRows.length > 0) await db.photos.bulkPut(photoRows);
-            if (thumbRows.length > 0) await db.thumbs.bulkPut(thumbRows);
-          });
-        } catch (e) {
-          // One bad chunk must not abandon the rest; the next pass retries it.
-          console.warn("[sync] direct-blob chunk failed to commit", e);
-        }
-      };
-
-      for (const blob of unsyncedBlobs) {
-        try {
-          const encrypted = await api.blobs.download(blob.id);
-          // Only metadata is needed here — decryptBlobMetadata avoids
-          // reconstructing media bytes (and, for v2, avoids decrypting every
-          // chunk frame just to read fields). Handles both blob formats.
-          const payload = await decryptBlobMetadata<PhotoPayload>(encrypted);
-
-          let thumbnailData: ArrayBuffer | undefined;
-          let unsyncedThumbMime: string | undefined;
-          if (payload.thumbnail_blob_id) {
-            try {
-              const thumbEnc = await api.blobs.download(payload.thumbnail_blob_id);
-              const thumbDec = await decrypt(thumbEnc);
-              const thumbPayload: ThumbnailPayload = JSON.parse(new TextDecoder().decode(thumbDec));
-              thumbnailData = base64ToArrayBuffer(thumbPayload.data);
-              unsyncedThumbMime = thumbPayload.mime_type;
-            } catch { /* placeholder */ }
-          }
-
-          const thumbMime =
-            unsyncedThumbMime || (payload.media_type === "gif" ? "image/gif" : "image/jpeg");
-          directPhotos.push({
-            blobId: blob.id,
-            thumbnailBlobId: payload.thumbnail_blob_id,
-            filename: payload.filename,
-            takenAt: new Date(payload.taken_at).getTime(),
-            mimeType: payload.mime_type,
-            mediaType: payload.media_type ?? mediaTypeFromMime(payload.mime_type),
-            width: payload.width,
-            height: payload.height,
-            duration: payload.duration,
-            latitude: payload.latitude,
-            longitude: payload.longitude,
-            albumIds: payload.album_ids ?? [],
-            contentHash: blob.content_hash ?? undefined,
-            ...(thumbnailData ? { thumbnailMimeType: thumbMime } : {}),
-          });
-          if (thumbnailData) {
-            directThumbs.push({ blobId: blob.id, data: thumbnailData, mime: thumbMime });
-          }
-          if (directPhotos.length >= RECONCILE_CHUNK) await flushDirect();
-        } catch {
-          // Skip undecryptable items
-        }
-      }
-      await flushDirect();
+      // The pass itself lives in `syncPass.ts`: it picks between skipping
+      // outright (nothing changed), a delta, and the full self-healing walk.
+      // `onDataReady` fires once the mirror is safe to present — after any
+      // pruning, before the reconcile — which is where this hook used to flip
+      // the flag inline.
+      await runSyncPass({ onDataReady: () => setEncryptedDataReady(true) });
     } catch (err: unknown) {
       // Propagate to caller — useGalleryData will set the error
       throw err;

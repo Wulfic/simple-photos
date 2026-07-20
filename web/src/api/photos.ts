@@ -102,10 +102,24 @@ export const photosApi = {
 
   /** Lightweight encrypted-mode sync — returns photo metadata from the photos table
    *  without requiring blob decryption. Both web and mobile use this for consistent sort order. */
-  encryptedSync: (params?: { after?: string; limit?: number }) => {
+  /**
+   * Photo metadata for encrypted-mode sync.
+   *
+   * Two modes. Without `since`, the full keyset walk over the whole eligible
+   * library — self-healing, because the client set-differences what it receives
+   * against what it holds. With `since`, only what changed after that
+   * change-log sequence, plus `deleted` tombstones naming everything that left
+   * the feed (#38).
+   *
+   * `since: 0` is not a special case — migration 033 backfilled a change-log
+   * row for every pre-existing photo, so it degenerates into a full enumeration.
+   */
+  encryptedSync: (params?: { after?: string; limit?: number; since?: number }) => {
     const query = new URLSearchParams();
     if (params?.after) query.set("after", params.after);
     if (params?.limit) query.set("limit", params.limit.toString());
+    // `since: 0` is meaningful, so test for undefined rather than falsiness.
+    if (params?.since !== undefined) query.set("since", params.since.toString());
     const qs = query.toString();
     return request<{
       photos: Array<{
@@ -130,6 +144,24 @@ export const photosApi = {
         motion_video_blob_id: string | null;
       }>;
       next_cursor: string | null;
+      /**
+       * Ids of photos that have left the feed — deleted outright, or claimed by
+       * a secure gallery. The client treats both identically: drop the row.
+       *
+       * **Present (possibly empty) on every delta response; absent on a full
+       * walk.** That distinction is the protocol handshake, not a detail: a
+       * server too old to know `since` ignores the parameter and answers with a
+       * full walk, which is indistinguishable from a delta by its `photos` alone.
+       * Reading `deleted === undefined` as "nothing was removed" would make the
+       * client prune nothing and accumulate ghost rows forever. `syncPass`
+       * therefore treats an absent `deleted` as "this server does not speak
+       * delta" and falls back to the full walk.
+       */
+      deleted?: string[];
+      /** Change-log head at the time this page was built. Persist the value
+       *  from the FIRST page of a walk — see `syncPass.ts` for why the last
+       *  page's head loses concurrent writes. */
+      head_seq: number;
     }>(`/photos/encrypted-sync${qs ? `?${qs}` : ""}`);
   },
 
