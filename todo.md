@@ -108,15 +108,53 @@ The 5-minute interval and re-entrancy guard (added in the idle-thrash fix) stop 
 > right mirror, just slowly, so no correctness test could ever catch a regression.
 
 Remaining (the protocol itself):
-- [ ] Add `updated_at` (or a monotonic `change_seq`) to `photos`, indexed, maintained by trigger. New migration `033_photo_change_seq.sql`.
-- [ ] **Tombstones are the hard part and this file previously understated them.** `DELETE FROM photos` happens at **9 call sites across 7 files**, and eligibility is not even a column — it is `NOT IN (SELECT ... FROM encrypted_gallery_items)`, so moving a photo into a secure album makes it vanish from sync *without the row being deleted*. Any delta protocol that misses one path leaves ghost rows in every client **forever**; today's full-walk set-difference is self-healing, so a naive delta sync is a **regression**. Use triggers, per the precedent argued at length in `031_scan_skipped_paths.sql` ("ANY of the ~10 delete sites — a trigger covers every site at once").
-- [ ] **Note the asymmetry vs 031:** that trigger is safe to over-fire because a stray delete only costs a re-hash. A tombstone trigger that *under*-fires costs correctness, permanently. So ship a backstop: reuse A1's authoritative `summary.total` as a cheap integrity check — client row count ≠ server total forces a full reconcile. A missed trigger then degrades to "stale until next check" instead of "silently wrong forever". Non-negotiable before any client adopts `?since=`.
-- [ ] `GET /api/photos/encrypted-sync` gains `?since=<seq>` returning only changed/deleted rows since that sequence, plus the current head sequence. Full sync becomes the cold-start case only.
-- [ ] Extend `SummaryCache` ([summary.rs:53-99](server/src/gallery/summary.rs#L53-L99)) into the unified snapshot the issue asks for: counts **and** the head sequence, one round trip, TTL-cached, invalidated on write.
-- [ ] Web: persist the last-seen sequence; steady-state sync should transfer **zero rows** and perform **zero** IDB writes on an unchanged library. Assert this in a test — it is the only way this stays fixed.
-- [ ] Web: batch Phase 3 writes with `db.transaction('rw', ...)` + `bulkPut` instead of per-row `await`. Resolve thumb presence with one `bulkGet` on the key set, not one read per photo.
+
+> **Server half landed — `31fc322`.** Clients untouched; they still full-walk.
+> The plan below assumed a `change_seq` column on `photos`. That is NOT what
+> shipped, and the difference is the whole safety argument.
+>
+> **`photo_change_log` is a HINT, not a source of truth.** Its triggers say only
+> "photo X may have changed" — never that X was deleted or that X is eligible.
+> `fetch_delta` re-derives both from the live tables using the *same*
+> `ELIGIBLE_PREDICATE` the full walk uses. So a trigger that over-fires costs one
+> redundant row in one page and **cannot** produce a wrong answer. That inverts
+> the asymmetry this file worried about: there is no longer an under-fire
+> failure mode to protect against, because the log never asserts anything a
+> reader trusts. One trigger covers all 9 delete sites, and "deleted" and
+> "secure-hidden" collapse into a single branch.
+>
+> **Two things measurement changed, neither of which was in this plan:**
+> - **Sequences are NOT unique.** `MAX(seq)+1` is evaluated once per *statement*,
+>   so one secure-gallery insert touching several photos lands them all on the
+>   same seq. A bare `seq > last` cursor drops every member of the group after
+>   the first at a page boundary — **exactly #42's off-by-one, reintroduced
+>   somewhere new.** Cursor is composite `"<seq>|<photo_id>"`. Verified RED:
+>   bare-seq at `limit=1` returns `m1`, loses `m2`+`m3`.
+> - A `UNIQUE` index on `seq` — the obvious "make the cursor simple" move —
+>   would have made every multi-photo secure-add **fail outright**.
+>
+> **Confirmed by experiment, not assumed:** SQLite fires `AFTER DELETE` triggers
+> for rows removed by `ON DELETE CASCADE`. Deleting a secure gallery cascades to
+> its items, and that must un-hide its photos. The entire tombstone design rests
+> on this, so a test pins it.
+>
+> Also verified RED by disabling the EGI insert trigger: three tests fail, and
+> `applying_the_delta_matches_a_fresh_full_walk` fails by **retaining** the
+> secured photo the full walk dropped — the ghost-row regression this file
+> warned about, now under test rather than under discussion.
+
+- [x] Monotonic change sequence maintained by trigger — shipped as `photo_change_log` (migration `033`), a keyed log rather than a column on `photos`. No FK on `photo_id`: a tombstone must outlive the row it describes. — `31fc322`
+- [x] Tombstones covering all **9 delete sites across 7 files** + the eligibility subquery. Solved by the hint-not-truth design above rather than by exhaustively enumerating paths. — `31fc322`
+- [x] Backstop. `photos_summary` now returns `head_seq`, deliberately **not** served from the TTL cache — a stale head would recreate exactly the busywork this removes. A client holding the current head skips `encrypted-sync` altogether. — `31fc322`
+- [x] `GET /api/photos/encrypted-sync?since=<seq>` returning changed rows + `deleted[]` + `head_seq`. Migration backfills every existing photo, so `since=0` degenerates into a full sync and **cold-start needs no special branch**. — `31fc322`
+- [x] Unified snapshot: counts **and** head sequence in one round trip. — `31fc322`
+- [x] The eligibility predicate had been copy-pasted into 3 queries (delta adds 2 more) — now one const in `gallery/eligibility.rs`. A delta whose eligibility differs from the full walk's by one arm hands clients rows the grid will never show. — `31fc322`
+- [x] Web: batch Phase 3 writes with `bulkPut` — already done in `f31b27b`.
+- [ ] **Web: adopt `?since=`.** Persist the last-seen sequence; poll `summary.head_seq` first and skip sync entirely when unchanged. Steady state must transfer **zero rows** and perform **zero** IDB writes.
+- [ ] **Perf gate**, and it belongs on the client where it is observable: a 10k-row fixture must complete a steady-state sync with zero blob downloads and zero IDB writes. Assert operation *counts* — the mirror is correct either way, so only a count assertion can catch a silent regression to full-walking (the lesson from `f31b27b`).
 - [ ] Android: same `?since=` adoption in `syncFromServerEncrypted`.
-- [ ] Perf gate: a 10k-row fixture must complete a steady-state sync in < 500 ms and issue no blob downloads. Fail the test if it regresses.
+- [ ] **Tombstone retention.** Rows for deleted photos accumulate without bound. Pruning needs a policy (e.g. drop after 90d) — a client offline longer than the retention window must be forced through a full reconcile, which is what `head_seq`/`total` are for. Not urgent at current library sizes; do not forget it.
+- [ ] **Deploy required.** `033` backfills on first boot against the live 14,874-row library — cheap, but it is the first migration here with a data backfill, so watch it.
 
 ---
 
