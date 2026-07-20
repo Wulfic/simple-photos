@@ -11,61 +11,15 @@ import { decryptBlobMetadata } from "../../crypto/blobEnvelope";
 import {
   db,
   type CachedPhoto,
-  type MediaType,
+  type CachedThumb,
   mediaTypeFromMime,
 } from "../../db";
-import { putThumb, resolveThumb, startThumbBackfill } from "../../db/thumbs";
+import { startThumbBackfill } from "../../db/thumbs";
 import { base64ToArrayBuffer } from "../../utils/media";
 import { fetchAllPages } from "../../utils/gallery";
-import { decodeThumbnailDimensions } from "../utils/thumbnailGenerate";
-import {
-  isTransposed as checkTransposed,
-  correctDimensionsFromThumbnail,
-  queueDimensionUpdate,
-} from "./useDimensionSync";
+import { reconcileSyncedPhotos, RECONCILE_CHUNK, type SyncRecord } from "./syncReconcile";
 import { useLiveQuery } from "dexie-react-hooks";
 import type { PhotoPayload, ThumbnailPayload } from "../../types/media";
-
-/**
- * Ensure an already-cached photo has its thumbnail bytes stored locally,
- * downloading them **only when they're actually missing**.
- *
- * This is the anti-thrash guard behind the periodic sync: a photo whose
- * thumbnail already resolves from the `thumbs` table is left untouched, so a
- * steady-state sync pass over a fully-cached library performs zero blob
- * downloads. Before the thumbs split + sync-interval fix, overlapping 2-second
- * syncs raced each other's writes and re-downloaded thumbnails the racing pass
- * hadn't yet persisted — ~28 blob downloads/second against the server
- * (repo todo.md, "Bug B — web client runs a FULL library sync every 2s").
- *
- * Returns `true` iff a download + store actually happened (for tests / callers
- * that count). Kept module-level and exported so the decision can be unit-tested
- * directly, rather than proven only through a full hook render.
- */
-export async function ensureThumbCached(
-  existing: CachedPhoto,
-  serverThumbId: string | undefined,
-): Promise<boolean> {
-  // Already have the bytes locally — the guard. Never re-fetch a thumbnail a
-  // previous pass already persisted.
-  if (await resolveThumb(existing)) return false;
-  const thumbId = existing.thumbnailBlobId ?? serverThumbId;
-  if (!thumbId) return false;
-  try {
-    const thumbEnc = await api.blobs.download(thumbId);
-    const thumbDec = await decrypt(thumbEnc);
-    const thumbPayload: ThumbnailPayload = JSON.parse(new TextDecoder().decode(thumbDec));
-    await putThumb(
-      existing.blobId,
-      base64ToArrayBuffer(thumbPayload.data),
-      thumbPayload.mime_type,
-      existing.mediaType,
-    );
-    return true;
-  } catch {
-    return false; // leave the cache as-is; a later pass retries
-  }
-}
 
 export interface PhotoSyncResult {
   /** Encrypted-mode photos from IndexedDB (live query, auto-updates).
@@ -156,7 +110,6 @@ export function usePhotoSync(): PhotoSyncResult {
     if (!encryptedDataReady) setLoading(true);
     try {
       // Phase 1: Fetch metadata via encrypted-sync endpoint.
-      type SyncRecord = Awaited<ReturnType<typeof api.photos.encryptedSync>>["photos"][number];
       const allSyncPhotos: SyncRecord[] = [];
       let cursor: string | undefined;
       do {
@@ -183,185 +136,69 @@ export function usePhotoSync(): PhotoSyncResult {
 
       // Remove stale IDB entries
       const currentCached = await db.photos.toArray();
-      const staleIds = currentCached
-        .filter((p) => {
-          if (p.serverPhotoId) return !serverPhotoIds.has(p.serverPhotoId);
-          const underlyingId = p.storageBlobId || p.blobId;
-          return !serverBlobIds.has(underlyingId) && !serverPhotoIds.has(underlyingId);
-        })
-        .map((p) => p.blobId);
-      if (staleIds.length > 0) await db.photos.bulkDelete(staleIds);
+      const staleIds = new Set(
+        currentCached
+          .filter((p) => {
+            if (p.serverPhotoId) return !serverPhotoIds.has(p.serverPhotoId);
+            const underlyingId = p.storageBlobId || p.blobId;
+            return !serverBlobIds.has(underlyingId) && !serverPhotoIds.has(underlyingId);
+          })
+          .map((p) => p.blobId),
+      );
+      if (staleIds.size > 0) await db.photos.bulkDelete([...staleIds]);
 
       setEncryptedDataReady(true);
 
-      const survivingCached = await db.photos.toArray();
-      const idbByServerId = new Map(
-        survivingCached.filter((p) => p.serverPhotoId).map((p) => [p.serverPhotoId!, p]),
-      );
-      const idbByBlobId = new Map(survivingCached.map((p) => [p.blobId, p]));
+      // Derived, not re-read: the previous version issued a second full
+      // `toArray()` here purely to see the effect of the delete it had just
+      // performed. On a large library that is a second full deserialization of
+      // the mirror for information already in hand.
+      const survivingCached = currentCached.filter((p) => !staleIds.has(p.blobId));
 
       // Phase 3: Populate IDB from sync records.
-      for (const photo of allSyncPhotos) {
-        if (!photo.encrypted_blob_id) continue;
-
-        let existing = idbByServerId.get(photo.id);
-        if (!existing && photo.encrypted_blob_id) {
-          const boundByBlob = idbByBlobId.get(photo.encrypted_blob_id);
-          if (boundByBlob && !boundByBlob.serverPhotoId) {
-            existing = boundByBlob;
-            existing.serverPhotoId = photo.id;
-            idbByServerId.set(photo.id, existing);
-          }
-        }
-
-        const idbKey = existing ? existing.blobId : photo.id;
-
-        if (existing) {
-          const updates: Partial<CachedPhoto> = {};
-          if (existing.isFavorite !== photo.is_favorite) updates.isFavorite = photo.is_favorite;
-          if (existing.serverPhotoId !== photo.id) updates.serverPhotoId = photo.id;
-          const serverBlobIdVal = photo.encrypted_blob_id ?? undefined;
-          if (serverBlobIdVal && existing.storageBlobId !== serverBlobIdVal) updates.storageBlobId = serverBlobIdVal;
-          const serverSourcePath = photo.source_path ?? undefined;
-          if (existing.sourcePath !== serverSourcePath) updates.sourcePath = serverSourcePath;
-          const serverSubtype = photo.photo_subtype ?? undefined;
-          if (existing.photoSubtype !== serverSubtype) updates.photoSubtype = serverSubtype;
-          // Backfill addedAt (library import order) for entries cached before
-          // the field existed. created_at never changes, so set-once is safe.
-          if (existing.addedAt === undefined) {
-            const added = new Date(photo.created_at).getTime();
-            if (!Number.isNaN(added)) updates.addedAt = added;
-          }
-          const serverBurstId = photo.burst_id ?? undefined;
-          if (existing.burstId !== serverBurstId) updates.burstId = serverBurstId;
-          const serverMotionBlob = photo.motion_video_blob_id ?? undefined;
-          if (existing.motionVideoBlobId !== serverMotionBlob) updates.motionVideoBlobId = serverMotionBlob;
-          const serverCrop = photo.crop_metadata ?? undefined;
-          if (existing.cropData !== serverCrop) updates.cropData = serverCrop;
-
-          // Dimension sync with transpose guard
-          if (photo.width > 0 && photo.height > 0 &&
-              (existing.width !== photo.width || existing.height !== photo.height)) {
-            if (!checkTransposed(existing.width, existing.height, photo.width, photo.height)) {
-              updates.width = photo.width;
-              updates.height = photo.height;
-            }
-          }
-
-          // Re-download thumbnail when server's thumb blob ID changed
-          const serverThumbId = photo.encrypted_thumb_blob_id ?? undefined;
-          if (serverThumbId && existing.thumbnailBlobId !== serverThumbId) {
-            updates.thumbnailBlobId = serverThumbId;
-            try {
-              const thumbEnc = await api.blobs.download(serverThumbId);
-              const thumbDec = await decrypt(thumbEnc);
-              const thumbPayload: ThumbnailPayload = JSON.parse(new TextDecoder().decode(thumbDec));
-              const freshData = base64ToArrayBuffer(thumbPayload.data);
-              await putThumb(idbKey, freshData, thumbPayload.mime_type, existing.mediaType);
-              const curW = updates.width ?? existing.width;
-              const curH = updates.height ?? existing.height;
-              if (curW > 0 && curH > 0) {
-                try {
-                  const td = await decodeThumbnailDimensions(freshData, thumbPayload.mime_type);
-                  const correction = correctDimensionsFromThumbnail(td.width, td.height, curW, curH);
-                  if (correction) {
-                    updates.width = correction.width;
-                    updates.height = correction.height;
-                  }
-                } catch { /* ignore */ }
-              }
-            } catch {
-              // Download failed — leave existing thumbnail
-            }
-          } else {
-            // Server thumb unchanged — make sure the bytes are actually cached,
-            // downloading only if they're missing (the anti-thrash guard).
-            await ensureThumbCached(existing, photo.encrypted_thumb_blob_id ?? undefined);
-          }
-          if (Object.keys(updates).length > 0) await db.photos.update(idbKey, updates);
-          continue;
-        }
-
-        // New entry — parse and insert
-        let takenAt: number;
-        try {
-          takenAt = photo.taken_at
-            ? new Date(photo.taken_at).getTime()
-            : new Date(photo.created_at).getTime();
-        } catch {
-          takenAt = new Date(photo.created_at).getTime();
-        }
-
-        let thumbnailData: ArrayBuffer | undefined;
-        let thumbnailMimeType: string | undefined;
-        const thumbBlobId = photo.encrypted_thumb_blob_id;
-        if (thumbBlobId) {
-          try {
-            const thumbEnc = await api.blobs.download(thumbBlobId);
-            const thumbDec = await decrypt(thumbEnc);
-            const thumbPayload: ThumbnailPayload = JSON.parse(new TextDecoder().decode(thumbDec));
-            thumbnailData = base64ToArrayBuffer(thumbPayload.data);
-            thumbnailMimeType = thumbPayload.mime_type;
-          } catch { /* placeholder */ }
-        }
-
-        let displayWidth = photo.width;
-        let displayHeight = photo.height;
-        if (thumbnailData && displayWidth > 0 && displayHeight > 0) {
-          try {
-            const thumbDims = await decodeThumbnailDimensions(thumbnailData, thumbnailMimeType);
-            const correction = correctDimensionsFromThumbnail(
-              thumbDims.width, thumbDims.height, displayWidth, displayHeight,
-            );
-            if (correction) {
-              displayWidth = correction.width;
-              displayHeight = correction.height;
-              queueDimensionUpdate(photo.id, displayWidth, displayHeight);
-            }
-          } catch { /* use server dimensions */ }
-        }
-
-        await db.photos.put({
-          blobId: idbKey,
-          storageBlobId: photo.encrypted_blob_id ?? undefined,
-          thumbnailBlobId: photo.encrypted_thumb_blob_id ?? undefined,
-          filename: photo.filename,
-          takenAt,
-          mimeType: photo.mime_type,
-          mediaType: (photo.media_type as MediaType) ?? mediaTypeFromMime(photo.mime_type),
-          width: displayWidth,
-          height: displayHeight,
-          duration: photo.duration_secs ?? undefined,
-          albumIds: [],
-          contentHash: photo.photo_hash ?? undefined,
-          cropData: photo.crop_metadata ?? undefined,
-          isFavorite: photo.is_favorite ?? false,
-          serverPhotoId: photo.id,
-          sourcePath: photo.source_path ?? undefined,
-          addedAt: (() => {
-            const added = new Date(photo.created_at).getTime();
-            return Number.isNaN(added) ? takenAt : added;
-          })(),
-          photoSubtype: photo.photo_subtype ?? undefined,
-          burstId: photo.burst_id ?? undefined,
-          motionVideoBlobId: photo.motion_video_blob_id ?? undefined,
-        });
-        // Thumbnail bytes go to their own table — keeping them on the photo row
-        // is what made every count query deserialize the whole library.
-        if (thumbnailData) {
-          await putThumb(idbKey, thumbnailData, thumbnailMimeType, photo.media_type ?? undefined);
-        }
-      }
+      //
+      // Batched, chunked and staged — see `syncReconcile.ts`. This was a
+      // per-photo loop with an awaited IndexedDB read *and* write inside it, so
+      // a 10k library meant 10k+ serialized transactions on the main thread
+      // every pass. That is the bulk of "photo libraries are slow" (#38).
+      await reconcileSyncedPhotos(allSyncPhotos, survivingCached);
 
       // Phase 4: Handle directly-uploaded encrypted blobs not in photos table.
       const syncedBlobIds = new Set(
         allSyncPhotos.map((p) => p.encrypted_blob_id).filter((id): id is string => !!id),
       );
-      const unsyncedBlobs = allBlobMedia.filter((b) => !syncedBlobIds.has(b.id));
+      // Membership is answered by ONE indexed key scan rather than a
+      // `db.photos.get()` per blob as this previously did. `primaryKeys()` reads
+      // the index without deserializing rows, and — unlike the pre-reconcile
+      // snapshot — it includes anything Phase 3 just inserted. That matters:
+      // `photos.id` and blob ids share a namespace on client-upload paths (hence
+      // the `id NOT IN (SELECT blob_id ...)` guard in the sync query), so a
+      // stale snapshot here could re-insert a row Phase 3 had just written.
+      const cachedBlobIds = new Set((await db.photos.toCollection().primaryKeys()) as string[]);
+      const unsyncedBlobs = allBlobMedia.filter(
+        (b) => !syncedBlobIds.has(b.id) && !cachedBlobIds.has(b.id),
+      );
+
+      const directPhotos: CachedPhoto[] = [];
+      const directThumbs: CachedThumb[] = [];
+
+      /** Commit what Phase 4 has accumulated so far, then clear the buffers. */
+      const flushDirect = async () => {
+        if (directPhotos.length === 0 && directThumbs.length === 0) return;
+        const photoRows = directPhotos.splice(0);
+        const thumbRows = directThumbs.splice(0);
+        try {
+          await db.transaction("rw", db.photos, db.thumbs, async () => {
+            if (photoRows.length > 0) await db.photos.bulkPut(photoRows);
+            if (thumbRows.length > 0) await db.thumbs.bulkPut(thumbRows);
+          });
+        } catch (e) {
+          // One bad chunk must not abandon the rest; the next pass retries it.
+          console.warn("[sync] direct-blob chunk failed to commit", e);
+        }
+      };
 
       for (const blob of unsyncedBlobs) {
-        const existing = await db.photos.get(blob.id);
-        if (existing) continue;
         try {
           const encrypted = await api.blobs.download(blob.id);
           // Only metadata is needed here — decryptBlobMetadata avoids
@@ -381,7 +218,9 @@ export function usePhotoSync(): PhotoSyncResult {
             } catch { /* placeholder */ }
           }
 
-          await db.photos.put({
+          const thumbMime =
+            unsyncedThumbMime || (payload.media_type === "gif" ? "image/gif" : "image/jpeg");
+          directPhotos.push({
             blobId: blob.id,
             thumbnailBlobId: payload.thumbnail_blob_id,
             filename: payload.filename,
@@ -395,14 +234,17 @@ export function usePhotoSync(): PhotoSyncResult {
             longitude: payload.longitude,
             albumIds: payload.album_ids ?? [],
             contentHash: blob.content_hash ?? undefined,
+            ...(thumbnailData ? { thumbnailMimeType: thumbMime } : {}),
           });
           if (thumbnailData) {
-            await putThumb(blob.id, thumbnailData, unsyncedThumbMime, payload.media_type);
+            directThumbs.push({ blobId: blob.id, data: thumbnailData, mime: thumbMime });
           }
+          if (directPhotos.length >= RECONCILE_CHUNK) await flushDirect();
         } catch {
           // Skip undecryptable items
         }
       }
+      await flushDirect();
     } catch (err: unknown) {
       // Propagate to caller — useGalleryData will set the error
       throw err;
