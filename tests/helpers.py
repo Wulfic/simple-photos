@@ -244,6 +244,40 @@ class APIClient:
         r.raise_for_status()
         return r.json()
 
+    def photos_summary(self) -> dict:
+        """Precomputed gallery counts — the authoritative badge source (#42)."""
+        r = self.get("/api/photos/summary")
+        r.raise_for_status()
+        return r.json()
+
+    def encrypted_sync_all(self, limit: int = 500) -> list:
+        """Walk EVERY page of encrypted-sync the way a real client does.
+
+        Returns the records in page order, including any duplicates, so callers
+        can assert exact round-trip completeness rather than set membership.
+        That distinction is the whole point: the #42 cursor off-by-one dropped
+        exactly one row per page boundary, and a set-based check over a
+        partially-returned library still looks self-consistent.
+
+        Note this deliberately does NOT reuse the paginate-and-collect logic in
+        `web_gallery_items` — that helper paginated the same way the buggy
+        client did, and only ever checked the data it *did* receive.
+        """
+        records = []
+        cursor = None
+        # Safety valve: a cursor that fails to advance must fail the test rather
+        # than hang the suite.
+        for _ in range(1000):
+            params = {"limit": limit}
+            if cursor:
+                params["after"] = cursor
+            res = self.encrypted_sync(**params)
+            records.extend(res.get("photos", []))
+            cursor = res.get("next_cursor")
+            if not cursor:
+                return records
+        raise AssertionError("encrypted-sync pagination did not terminate")
+
     # ── Edit copies ──────────────────────────────────────────────────
 
     def create_edit_copy(self, photo_id: str, name: str = None, edit_metadata: str = "{}") -> dict:
