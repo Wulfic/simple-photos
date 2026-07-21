@@ -513,8 +513,49 @@ Phased plan:
 > same field; Gson ignores it silently today, which is why the server change did
 > not break either client.
 
-- [ ] **Web player.** Gear icon bottom-right of `web/src/components/viewer/VideoControls.tsx` → resolution menu. Default via the Network Information API where available (`navigator.connection.effectiveType` / `saveData`), falling back to highest.
-- [ ] **Android player.** Same picker in `VideoPlayer.kt`; default from `ConnectivityManager` (`NET_CAPABILITY_NOT_METERED` → highest, metered → ≤1080p).
+> **Web picker landed — `163dcc0`. Android is now the only client half left.**
+> 244 web tests green, was 213.
+>
+> **The mirror had to be widened first, and that was the load-bearing part.**
+> `renditions` was arriving on every sync record and being dropped on the floor
+> by `syncReconcile`'s fixed column set. Verified RED: 4 of the 5 new reconcile
+> tests fail with the writes removed. Note *which* 4 — the fifth is a negative
+> test asserting no write happens, so it passes in both states, which is the
+> honest result rather than a broken test.
+>
+> **Three traps, none of them visible from the server contract:**
+> - **The source rung is not a separate download.** `is_source` points at the
+>   blob the photo *already owns* — the same second-reference fact `037` needed
+>   to stop the orphan trigger queueing the user's original. So "Original"
+>   reuses the URL the viewer already holds and fetches nothing. Treating it as
+>   just another rung re-pulls a full 4K video the browser has in hand.
+> - **Rendition bytes must never enter `db.fullPhotos` or the preload cache.**
+>   Both are keyed by the *route* blob id — the original. The obvious
+>   implementation (reuse `loadEncryptedMedia` with the rendition's blob id)
+>   caches the downscale under the original's key, so the next open serves it as
+>   the original and "Original" in the picker plays the rendition. That reuse is
+>   the bug, so the download path deliberately bypasses that hook.
+> - **Only URLs the hook minted are revoked.** `mediaUrl` is owned by the
+>   preload cache; revoking it from the picker would blank the video on the next
+>   swipe back — the two-owners-of-one-blob-URL defect that made the thumbnail
+>   cache bug *permanent* in #51.
+>
+> **Edit mode reverts the selection, not just the gear icon.** Hiding a control
+> does not change what `mediaUrl` points at, and a crop or trim saved while a
+> 1080p rung is on screen would re-encode the downscale over the 4K master.
+>
+> **`undefined` and `[]` renditions are the same state** ("one quality") and
+> arrive from different places — a pre-#49 server yields the former, a #49
+> server sends the latter for the ~600 videos needing no rung. Collapsing them
+> keeps the first pass after a server upgrade from rewriting the whole library.
+>
+> Rungs with a null `blob_id` are filtered out. The viewer has no plaintext
+> path, so on an unencrypted install the picker is genuinely absent rather than
+> offering a menu entry that silently does nothing.
+
+- [x] **Web player.** Gear icon in `VideoControls.tsx` → resolution menu; choice logic is pure in `gallery/renditionChoice.ts`, URL/lifetime ownership in `hooks/useVideoRendition.ts`. Default via the Network Information API (`saveData` / `type === "cellular"` / slow `effectiveType`), falling back to highest — absent all three (Safari, Firefox) it defaults to highest, which is the right way to be wrong. The cellular cap is absolute (1080p), not one-rung-down: on an 8K source one rung down is 4K. — `163dcc0`
+- [ ] **Web: device-verify against a real >1080p video on CT132.** The picker is unit-tested on pure logic and typechecks, but the quality *swap* (playhead restore, pause-state restore, no flash of the original) has never run in a browser — this repo has no jsdom. Do it with the 14,874-row account, not a fixture.
+- [ ] **Android player.** Same picker in `VideoPlayer.kt`; default from `ConnectivityManager` (`NET_CAPABILITY_NOT_METERED` → highest, metered → ≤1080p). **Read `web/src/hooks/useVideoRendition.ts` first** — the source-rung-is-not-a-download rule and the never-cache-a-rendition-under-the-original's-key rule are protocol-level, not web-specific. Android's equivalent of the second is `MediaBlobDataSource`/Coil-adjacent caching keyed by blob id. Also needs `renditions` on `PhotoDto.kt`: Gson ignores it silently today, which is why the server change broke nothing.
 - [ ] **Android setting.** "Cellular data saver" toggle; when OFF, always serve highest regardless of network, per the issue.
 - [ ] **Backfill.** Task to generate 1080p rungs for existing >1080p videos. It runs automatically — the project is in beta and breaking changes are expected. Measured cost is bounded and known — 136 files, 126 of them 3840x2160 and 4 of them 8K — so run it at the ladder's low priority and let it drain. The 8K files are a 2-rung decision each and are not a background afterthought.
 - [ ] Tests: ladder selection logic (which rungs for which source height) as a pure unit test; rendition serving + range requests in E2E; picker default selection per network state.
