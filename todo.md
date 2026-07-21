@@ -447,8 +447,72 @@ Phased plan:
 > is slow.
 - [ ] **Cost control.** This doubles encode work for every 4K video. Sequencing is done (`60d555d` runs the sweep after `run_conversion_pass`, one file at a time, under a wall-clock budget) and the encode shares the batch thread budget. Still open: the sweep is **serial**, so a 114-file backlog of mostly-4K sources drains slowly. Decide whether to give it a lane of the existing two-lane parallelism (`SIMPLE_PHOTOS_CONVERSION_JOBS`) or leave it serial deliberately.
 - [ ] **Orphan sweeper.** `035`'s cascade queues unreferenced rendition blobs into `orphaned_rendition_blobs`, and **nothing drains it yet** — so deleted 4K videos leak their rendition bytes. The sweeper must re-check references before unlinking, and must remember that `blobs.content_hash` dedup means one blob can back several photos. **`037` removed the worst trap** — source rungs no longer reach this queue at all, so it can only name bytes a rendition owns.
-- [ ] **Serving.** Extend the video endpoint with a rendition selector; keep range-request support intact (`server/src/http_utils.rs`). Note the mode split `035` designed for: in encrypted mode a client fetches the rendition's **blob**, so "serving" is mostly authorising a blob id — `idx_video_renditions_blob` exists to confirm a requested blob really is a rendition of a photo the caller may read. Do not let a rendition blob be fetchable by anyone who guesses its id.
-- [ ] **API.** Expose available renditions per video so clients can populate the picker. `renditions::list_renditions` is written and tested and has **no production caller** — this item is its consumer, and the three remaining `dead_code` warnings in the crate all resolve when it lands.
+> **Serving + API landed — `8564636`. The server half of #49 is now complete;
+> everything remaining is client work.** 378 tests green, was 363.
+>
+> **This item was hiding a live secure-album bypass, and shipping the picker
+> without noticing would have published it.** `is_secure_item` matched a photo's
+> own id, its encrypted blob and its thumb blob — every id a secure-gallery row
+> actually *records*. A rendition is derived content in its own blob, and
+> `encrypted_gallery_items` has no column that will ever name it, so
+> `GET /api/blobs/<rung>` needed **only an account session, no unlock token**.
+> The ladder generates only for *eligible* photos, so the exposure is created by
+> securing a video **after** its rung was produced — ordinary use — and what
+> leaks is a full-quality copy of the video the album exists to hide. The new
+> third arm resolves the other way: blob → owning photo → is that photo secure.
+> Verified RED. **Consequence to keep in mind: any future derived-content blob
+> (a preview, a sprite sheet, an audio extract) has this same hole by default.**
+>
+> **The change-log triggers decided the API shape, not preference.** `035`/`036`
+> nominate the photo when its *playable* rendition set changes — machinery that
+> only pays for itself if renditions ride the sync record. A per-video endpoint
+> would have made those triggers dead weight *and* put a round trip in front of
+> every video opened. So renditions are hydrated onto `EncryptedSyncRecord` by
+> one batched query per page, shared by the full walk and the delta. Verified RED
+> by hydrating only `fetch_page`: a client cannot tell which feed produced a row,
+> and #38 makes the full walk the delta's *recovery* path — a ladder visible
+> through one and not the other is a "repair" that strips the user's picker.
+>
+> **Encrypted mode needed no new route.** A rendition is a blob, which is how
+> both clients already play video, so serving reduced to the authorisation fix.
+> `?rendition=<short_edge>` on `/photos/:id/file` exists for **unencrypted
+> installs only** (`store_plaintext`), and works by swapping the locator so
+> renditions inherit range support, chunked streaming and conditional requests
+> instead of reimplementing them.
+>
+> **Two silent defects found reviewing the swap:**
+> - The rung was served under the **parent photo's** mime type. The ladder always
+>   emits H.264 in MP4; 10 live videos are `.mov`, so their downscales would have
+>   gone out as `video/quicktime`. `ServeTarget` is now destructured
+>   exhaustively (**no `..`**) so a field added to it cannot compile until the
+>   handler applies it — this is the one that was missed on the first pass, and a
+>   unit test on the pure function provably cannot catch it.
+> - Rungs shared the photo's ETag. Sizes differ between rungs *today*, so it
+>   would usually work — and would return a cached 4K copy for a 1080p request
+>   the moment two rungs ever coincided in size.
+>
+> `file_path` is deliberately **absent from the wire shape**: a client cannot
+> fetch a storage path, so shipping one publishes the storage layout for nothing.
+> `short_edge` doubles as the selector.
+
+- [x] **Serving.** Encrypted mode: authorising the blob, via the `is_secure_item` arm above. Unencrypted mode: `?rendition=<short_edge>` on `/photos/:id/file`, range support intact. — `8564636`
+- [x] **API.** `renditions` on the sync record, from `list_renditions_for_photos` (one query per page). `list_renditions` gained its first production caller — the `?rendition=` lookup goes through it so "unproduced rungs are not offerable" has one home. — `8564636`
+- [ ] **`rung_queue::geometry_is_known` is still dead** (the last `dead_code` warning). Its doc claims "the generation pass branches on this" — `rung_generate` does not. Either use it to distinguish "narrowed by the prefilter" from "selected blind" in the sweep's log, or delete it and the doc. Do not leave a comment asserting a caller that does not exist.
+- [ ] **Securing a video now removes its picker**, because the sync feed is the only delivery path and secure photos are not in it. Not a regression (there was no picker before) and arguably correct, but the secure viewer will show a single-quality video where the main gallery showed a choice. Decide whether the secure gallery's own item listing should carry the ladder too.
+> **Both players read the same field — no new fetch.** `renditions[]` arrives on
+> every sync record (highest first, `is_source` marking the original) and is
+> already in the local mirror by the time the viewer opens. Per entry: use
+> `blob_id` with the existing blob-download path when set; otherwise
+> `GET /photos/:id/file?rendition=<short_edge>` (unencrypted installs only).
+> An **empty array is the normal case** — it means one quality, so render no gear
+> icon at all rather than a picker with a single entry.
+>
+> Web needs the mirror widened first: `syncReconcile.ts` persists a fixed column
+> set into IDB, so `renditions` must be added there or the viewer will never see
+> it however correct the server is. Android's Gson DTO (`PhotoDto.kt`) needs the
+> same field; Gson ignores it silently today, which is why the server change did
+> not break either client.
+
 - [ ] **Web player.** Gear icon bottom-right of `web/src/components/viewer/VideoControls.tsx` → resolution menu. Default via the Network Information API where available (`navigator.connection.effectiveType` / `saveData`), falling back to highest.
 - [ ] **Android player.** Same picker in `VideoPlayer.kt`; default from `ConnectivityManager` (`NET_CAPABILITY_NOT_METERED` → highest, metered → ≤1080p).
 - [ ] **Android setting.** "Cellular data saver" toggle; when OFF, always serve highest regardless of network, per the issue.
