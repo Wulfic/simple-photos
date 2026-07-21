@@ -674,6 +674,10 @@ pub async fn convert_file(
                 gpu.map(|g| &g.hwaccel),
                 gpu.map(|g| g.fallback_to_cpu).unwrap_or(true),
                 video_threads,
+                // First-pass conversion always targets source resolution. Ladder
+                // rungs are a separate, lower-priority pass — a user must never
+                // wait on a secondary rendition to see their video at all.
+                None,
             )
             .await
         }
@@ -742,6 +746,7 @@ pub(crate) async fn convert_video(
     hwaccel: Option<&HwAccelCapability>,
     fallback_to_cpu: bool,
     video_threads: Option<usize>,
+    rung: crate::transcode::ffmpeg_gpu::RungSize,
 ) -> bool {
     // Diagnostics: log exactly which path was selected for every video.
     // Without this, operators report "still using CPU!" and we have no
@@ -765,7 +770,8 @@ pub(crate) async fn convert_video(
     // Try GPU path first if available
     if let Some(hw) = hwaccel {
         if hw.is_gpu() {
-            let args = crate::transcode::ffmpeg_gpu::build_video_transcode_args(input, output, hw);
+            let args =
+                crate::transcode::ffmpeg_gpu::build_video_transcode_args(input, output, hw, rung);
             tracing::info!(
                 encoder = %hw.video_encoder,
                 accel = %hw.accel_type,
@@ -843,29 +849,16 @@ pub(crate) async fn convert_video(
     // Bound the encoder's thread count when the caller runs several encodes in
     // parallel (bulk import), so `video_lane * video_threads` cores aren't
     // oversubscribed. `0` = ffmpeg auto (all cores) for a lone/interactive encode.
-    let threads_arg = video_threads.map(|n| n.max(1)).unwrap_or(0).to_string();
-    cmd.args([
-        "-y",
-        "-i",
+    // MUST honour the same rung the GPU path above was given. These args used
+    // to be an inline copy holding their own hardcoded scale filter; see
+    // `build_cpu_fallback_args` for why that becomes a silent correctness bug
+    // once a rung can be requested.
+    cmd.args(crate::transcode::ffmpeg_gpu::build_cpu_fallback_args(
         input,
-        "-threads",
-        &threads_arg,
-        "-vf",
-        "scale=trunc(iw*sar/2)*2:trunc(ih/2)*2,setsar=1",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "medium",
-        "-crf",
-        "20",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "192k",
-        "-movflags",
-        "+faststart",
         output,
-    ])
+        video_threads,
+        rung,
+    ))
     .stdout(std::process::Stdio::null())
     .stderr(std::process::Stdio::null());
     let status = crate::process::status_with_timeout(&mut cmd, CPU_TRANSCODE_TIMEOUT).await;

@@ -372,7 +372,7 @@ Phased plan:
 - [ ] **Web player.** Gear icon bottom-right of `web/src/components/viewer/VideoControls.tsx` → resolution menu. Default via the Network Information API where available (`navigator.connection.effectiveType` / `saveData`), falling back to highest.
 - [ ] **Android player.** Same picker in `VideoPlayer.kt`; default from `ConnectivityManager` (`NET_CAPABILITY_NOT_METERED` → highest, metered → ≤1080p).
 - [ ] **Android setting.** "Cellular data saver" toggle; when OFF, always serve highest regardless of network, per the issue.
-- [ ] **Backfill.** Admin task to generate 1080p rungs for existing >1080p videos. Opt-in — do not silently start re-encoding someone's whole library.
+- [ ] **Backfill.** Task to generate 1080p rungs for existing >1080p videos. **Automatic, not opt-in (Tyler, 2026-07-20): the project is in beta and breaking changes are expected**, so the earlier "do not silently re-encode someone's library" caveat does not apply. Measured cost is bounded and known — 136 files, 126 of them 3840x2160 and 4 of them 8K — so run it at the ladder's low priority and let it drain. The 8K files are a 2-rung decision each and are not a background afterthought.
 - [ ] Tests: ladder selection logic (which rungs for which source height) as a pure unit test; rendition serving + range requests in E2E; picker default selection per network state.
 
 ---

@@ -161,7 +161,12 @@ BEGIN
         changed_at = excluded.changed_at;
 END;
 
--- No backfill. Unlike `033`, an absent row here is not a gap in a sequence —
--- it means "this photo has no ladder yet", which is the correct state for every
--- existing video until the opt-in backfill task is run against it. Seeding
--- source rows for 742 videos would claim renditions that do not exist on disk.
+-- No backfill IN THIS MIGRATION. Unlike `033`, an absent row here is not a gap
+-- in a sequence — it means "this photo has no ladder yet", which is the correct
+-- state for every existing video until the backfill pass has encoded it.
+-- Seeding source rows for 742 videos would claim renditions that do not exist
+-- on disk, and a picker would offer them.
+--
+-- The backfill itself is a background task, not SQL: it has to run ffprobe and
+-- ffmpeg per file. It runs automatically (the project is in beta, 2026-07-20)
+-- rather than behind an opt-in, at the ladder's low priority.

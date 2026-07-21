@@ -98,7 +98,10 @@ async fn generate_web_preview(input_path: &Path, output_path: &Path, preview_ext
             // A single on-the-fly preview is a lone transcode — let ffmpeg
             // auto-detect threads (all cores). The per-encode thread cap is only
             // for the bulk ingest pass that runs many encodes in parallel.
-            crate::conversion::convert_video(input_str, output_str, hwaccel, fallback, None).await
+            // Source resolution: a web preview replaces an unplayable original,
+            // it is not a ladder rung.
+            crate::conversion::convert_video(input_str, output_str, hwaccel, fallback, None, None)
+                .await
         }
         _ => false,
     };
