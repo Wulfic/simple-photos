@@ -8,6 +8,7 @@
  */
 package com.simplephotos.ui.screens.library
 
+import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -47,6 +48,8 @@ import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+private const val TAG = "LibraryFeatures"
 
 // ── Face-zoom crop for People tiles ──────────────────────────────────────────
 
@@ -400,15 +403,20 @@ class PersonDetailViewModel @Inject constructor(
     }
 
     /** Rename this person (face cluster). Optimistically updates the title; on
-     *  failure surfaces the error and leaves the old label. */
+     *  failure logs, surfaces the error and leaves the old label. */
     fun rename(clusterId: Long, name: String, onDone: () -> Unit) {
-        val trimmed = name.trim()
-        if (trimmed.isEmpty()) { onDone(); return }
         viewModelScope.launch {
-            try {
-                withContext(Dispatchers.IO) { repo.renameFaceCluster(clusterId.toString(), trimmed) }
-                label = trimmed
-            } catch (e: Exception) { error = e.message }
+            val outcome = performClusterRename(name) {
+                withContext(Dispatchers.IO) { repo.renameFaceCluster(clusterId.toString(), it) }
+            }
+            when (outcome) {
+                is RenameOutcome.Renamed -> { label = outcome.label; error = null }
+                is RenameOutcome.Failed -> {
+                    Log.e(TAG, "Rename of face cluster $clusterId failed: ${outcome.message}")
+                    error = outcome.message
+                }
+                RenameOutcome.Skipped -> Unit
+            }
             onDone()
         }
     }
@@ -441,23 +449,29 @@ fun PersonDetailScreen(
     if (showRename) {
         RenameClusterDialog(
             current = vm.label,
+            title = "Rename person",
             onDismiss = { showRename = false },
             onConfirm = { newName -> vm.rename(clusterId, newName) { showRename = false } },
         )
     }
 }
 
-/** Shared rename dialog for a person/pet cluster. */
+/** Shared rename dialog for a person/pet cluster.
+ *
+ * [title] is a parameter because the dialog was already documented as being
+ * "for a person/pet cluster" while hardcoding "Rename person" — reusing it for
+ * pets (#39) without this would have shown a pet owner the word "person". */
 @Composable
 private fun RenameClusterDialog(
     current: String,
+    title: String,
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit,
 ) {
     var value by remember { mutableStateOf(current) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Rename person") },
+        title = { Text(title) },
         text = {
             OutlinedTextField(
                 value = value,
@@ -548,6 +562,27 @@ class PetDetailViewModel @Inject constructor(
             loading = false
         }
     }
+
+    /** Rename this pet cluster (#39). The whole backend path already existed
+     *  (`ApiService.renamePetCluster` → `AiRepository.renamePetCluster`); only
+     *  this and the dialog wiring were missing. Mirrors
+     *  [PersonDetailViewModel.rename] via the shared [performClusterRename]. */
+    fun rename(clusterId: Long, name: String, onDone: () -> Unit) {
+        viewModelScope.launch {
+            val outcome = performClusterRename(name) {
+                withContext(Dispatchers.IO) { repo.renamePetCluster(clusterId.toString(), it) }
+            }
+            when (outcome) {
+                is RenameOutcome.Renamed -> { label = outcome.label; error = null }
+                is RenameOutcome.Failed -> {
+                    Log.e(TAG, "Rename of pet cluster $clusterId failed: ${outcome.message}")
+                    error = outcome.message
+                }
+                RenameOutcome.Skipped -> Unit
+            }
+            onDone()
+        }
+    }
 }
 
 @Composable
@@ -558,6 +593,7 @@ fun PetDetailScreen(
     vm: PetDetailViewModel = hiltViewModel(),
 ) {
     LaunchedEffect(clusterId) { vm.load(clusterId) }
+    var showRename by remember { mutableStateOf(false) }
     PhotoIdsGridScaffold(
         title = vm.label,
         onBack = onBack,
@@ -567,7 +603,20 @@ fun PetDetailScreen(
         serverBaseUrl = vm.serverBaseUrl,
         onPhotoClick = onPhotoClick,
         emptyHint = "No photos for this pet.",
+        actions = {
+            IconButton(onClick = { showRename = true }) {
+                Icon(Icons.Default.Edit, contentDescription = "Rename pet")
+            }
+        },
     )
+    if (showRename) {
+        RenameClusterDialog(
+            current = vm.label,
+            title = "Rename pet",
+            onDismiss = { showRename = false },
+            onConfirm = { newName -> vm.rename(clusterId, newName) { showRename = false } },
+        )
+    }
 }
 
 // ── Memories list + detail ───────────────────────────────────────────────────
