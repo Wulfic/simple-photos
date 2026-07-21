@@ -9,9 +9,18 @@
 //! `file_path` when the server is running unencrypted. See that migration for
 //! why the plaintext-file-only design does not work.
 
+use std::collections::HashMap;
+
 use serde::Serialize;
 
 use crate::error::AppError;
+
+/// Columns both readers project. Interpolated rather than written twice for the
+/// same reason `gallery::sync::RECORD_COLUMNS` is: two hand-maintained copies of
+/// one projection drift, and here the drift would be a picker offering a
+/// quality the other reader knows is unplayable.
+const RENDITION_COLUMNS: &str = "photo_id, short_edge, width, height, is_source, blob_id, \
+     file_path, codec, bitrate, size_bytes";
 
 /// One stored rendition of a video.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, sqlx::FromRow)]
@@ -96,6 +105,48 @@ pub async fn upsert_rendition(
     Ok(())
 }
 
+/// One quality a client may offer in its picker.
+///
+/// Deliberately **not** [`StoredRendition`] on the wire. `file_path` is a
+/// server-side storage path: a client cannot fetch it (no route serves an
+/// arbitrary path) and publishing the storage layout to every device buys
+/// nothing. What a client needs instead is *how to fetch these bytes*, and
+/// `short_edge` doubles as that selector — see [`RenditionDto::blob_id`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RenditionDto {
+    /// Identity of the rung, and the `?rendition=` selector on the file route.
+    pub short_edge: i64,
+    pub width: i64,
+    pub height: i64,
+    /// True for the untouched original. A picker labels this "Original" and a
+    /// "default to highest" client picks it when unmetered.
+    pub is_source: bool,
+    /// Encrypted mode: fetch with `GET /api/blobs/{blob_id}`, which is how both
+    /// clients already play video.
+    ///
+    /// `None` on an unencrypted install, where the bytes are a plaintext file:
+    /// fetch `GET /api/photos/{photo_id}/file?rendition={short_edge}` instead.
+    /// Exactly one of the two is always available, because `list_renditions`
+    /// filters out rows with neither locator.
+    pub blob_id: Option<String>,
+    pub codec: Option<String>,
+    pub size_bytes: i64,
+}
+
+impl From<StoredRendition> for RenditionDto {
+    fn from(r: StoredRendition) -> Self {
+        Self {
+            short_edge: r.short_edge,
+            width: r.width,
+            height: r.height,
+            is_source: r.is_source(),
+            blob_id: r.blob_id,
+            codec: r.codec,
+            size_bytes: r.size_bytes,
+        }
+    }
+}
+
 /// Every rendition of a photo, highest quality first — the order a picker
 /// displays and the order a "default to highest" client reads.
 ///
@@ -105,11 +156,10 @@ pub async fn list_renditions(
     pool: &sqlx::SqlitePool,
     photo_id: &str,
 ) -> Result<Vec<StoredRendition>, AppError> {
-    let rows: Vec<StoredRendition> = sqlx::query_as(
-        "SELECT photo_id, short_edge, width, height, is_source, blob_id, \
-                file_path, codec, bitrate, size_bytes \
-         FROM video_renditions WHERE photo_id = ? ORDER BY short_edge DESC",
-    )
+    let rows: Vec<StoredRendition> = sqlx::query_as(&format!(
+        "SELECT {RENDITION_COLUMNS} \
+         FROM video_renditions WHERE photo_id = ? ORDER BY short_edge DESC"
+    ))
     .bind(photo_id)
     .fetch_all(pool)
     .await
@@ -119,6 +169,52 @@ pub async fn list_renditions(
     })?;
 
     Ok(rows.into_iter().filter(StoredRendition::is_playable).collect())
+}
+
+/// Renditions for many photos at once, keyed by photo id.
+///
+/// **One query, not one per photo.** This hydrates the sync feed, which pages up
+/// to 1,000 rows at a time; a per-photo lookup there would be exactly the
+/// serialized-round-trip pattern #38 spent a workstream removing. Photos with no
+/// renditions are simply absent from the map — the overwhelming majority, since
+/// only videos above the 1080p tier ever get a rung.
+///
+/// Callers must pass **video ids only**. That is not correctness (a still has no
+/// rendition rows, so it would return nothing) but cost: it keeps the bound
+/// parameter list proportional to the videos on a page rather than to the page.
+pub async fn list_renditions_for_photos(
+    pool: &sqlx::SqlitePool,
+    photo_ids: &[&str],
+) -> Result<HashMap<String, Vec<RenditionDto>>, AppError> {
+    if photo_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let placeholders = vec!["?"; photo_ids.len()].join(",");
+    // Ordered so each photo's rungs arrive highest-first and contiguously,
+    // matching `list_renditions` — `both_readers_agree_for_one_photo` pins it.
+    let sql = format!(
+        "SELECT {RENDITION_COLUMNS} FROM video_renditions \
+         WHERE photo_id IN ({placeholders}) \
+         ORDER BY photo_id ASC, short_edge DESC"
+    );
+    let mut q = sqlx::query_as::<_, StoredRendition>(&sql);
+    for id in photo_ids {
+        q = q.bind(*id);
+    }
+    let rows = q.fetch_all(pool).await.map_err(|e| {
+        tracing::error!(
+            photos = photo_ids.len(),
+            "failed to batch-list video renditions: {e}"
+        );
+        AppError::from(e)
+    })?;
+
+    let mut out: HashMap<String, Vec<RenditionDto>> = HashMap::new();
+    for row in rows.into_iter().filter(StoredRendition::is_playable) {
+        out.entry(row.photo_id.clone()).or_default().push(row.into());
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -345,6 +441,130 @@ mod tests {
             "a source rung shares the photo's blob; queueing it points the sweeper \
              at the user's original video, got {orphans:?}"
         );
+    }
+
+    /// The batch reader hydrates the sync feed and the single reader backs the
+    /// file route, so a disagreement means a client is offered a quality one
+    /// half of the server will not serve. Same rows, same order, same
+    /// playability filter.
+    #[tokio::test]
+    async fn both_readers_agree_for_one_photo() {
+        let pool = test_pool().await;
+        insert_photo(&pool, "p1").await;
+        insert_blob(&pool, "b1").await;
+        insert_blob(&pool, "b2").await;
+
+        upsert_rendition(&pool, &rendition("p1", 1080, Some("b1")))
+            .await
+            .unwrap();
+        let mut source = rendition("p1", 2160, Some("b2"));
+        source.is_source = 1;
+        upsert_rendition(&pool, &source).await.unwrap();
+        // An unproduced rung that neither reader may surface.
+        upsert_rendition(&pool, &rendition("p1", 720, None))
+            .await
+            .unwrap();
+
+        let single: Vec<RenditionDto> = list_renditions(&pool, "p1")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(Into::into)
+            .collect();
+        let batch = list_renditions_for_photos(&pool, &["p1"]).await.unwrap();
+
+        assert_eq!(batch.get("p1"), Some(&single));
+        assert_eq!(
+            single.iter().map(|r| r.short_edge).collect::<Vec<_>>(),
+            vec![2160, 1080],
+            "highest first, and the unproduced 720 rung must not appear"
+        );
+    }
+
+    /// One query for a whole page, and each photo gets only its own rungs. The
+    /// grouping is done in Rust off a single ordered result set, so a boundary
+    /// bug here would silently hand one video another's quality options.
+    #[tokio::test]
+    async fn the_batch_reader_groups_by_photo_and_skips_photos_with_no_rungs() {
+        let pool = test_pool().await;
+        for id in ["p1", "p2", "p3"] {
+            insert_photo(&pool, id).await;
+        }
+        insert_blob(&pool, "b1").await;
+        insert_blob(&pool, "b2").await;
+        insert_blob(&pool, "b3").await;
+
+        upsert_rendition(&pool, &rendition("p1", 1080, Some("b1")))
+            .await
+            .unwrap();
+        let mut p1_source = rendition("p1", 2160, Some("b2"));
+        p1_source.is_source = 1;
+        upsert_rendition(&pool, &p1_source).await.unwrap();
+        upsert_rendition(&pool, &rendition("p2", 1080, Some("b3")))
+            .await
+            .unwrap();
+        // p3 has a claimed-but-unproduced rung: it must be absent, not empty.
+        upsert_rendition(&pool, &rendition("p3", 1080, None))
+            .await
+            .unwrap();
+
+        let got = list_renditions_for_photos(&pool, &["p1", "p2", "p3"])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            got["p1"].iter().map(|r| r.short_edge).collect::<Vec<_>>(),
+            vec![2160, 1080]
+        );
+        assert_eq!(
+            got["p2"].iter().map(|r| r.short_edge).collect::<Vec<_>>(),
+            vec![1080]
+        );
+        assert!(!got.contains_key("p3"), "no playable rung means no entry");
+        assert_eq!(got.len(), 2);
+    }
+
+    /// An empty page must not build `WHERE photo_id IN ()`, which is a syntax
+    /// error in SQLite. Most sync pages contain no videos at all, so this is the
+    /// common path, not a degenerate one.
+    #[tokio::test]
+    async fn the_batch_reader_makes_no_query_for_an_empty_page() {
+        let pool = test_pool().await;
+        assert!(list_renditions_for_photos(&pool, &[])
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    /// `file_path` is a server storage path and must never cross the wire. A
+    /// client cannot fetch it — no route serves an arbitrary path — so shipping
+    /// it publishes the storage layout for nothing.
+    #[test]
+    fn the_wire_shape_carries_no_storage_path() {
+        let dto: RenditionDto = StoredRendition {
+            photo_id: "p1".into(),
+            short_edge: 1080,
+            width: 1920,
+            height: 1080,
+            is_source: 0,
+            blob_id: None,
+            file_path: Some("renditions/u1/p1.1080.mp4".into()),
+            codec: Some("h264".into()),
+            bitrate: None,
+            size_bytes: 2048,
+        }
+        .into();
+
+        let json = serde_json::to_string(&dto).unwrap();
+        assert!(
+            !json.contains("renditions/u1"),
+            "storage path leaked to the client: {json}"
+        );
+        assert!(!json.contains("file_path"), "{json}");
+        // What the client DOES need: the selector for the file route, since
+        // this rung has no blob to fetch.
+        assert!(json.contains("\"short_edge\":1080"), "{json}");
+        assert!(json.contains("\"is_source\":false"), "{json}");
     }
 
     /// Renditions land minutes-to-hours after the photo, by which time every

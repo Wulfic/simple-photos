@@ -64,6 +64,22 @@ pub struct EncryptedSyncRecord {
     pub photo_subtype: Option<String>,
     pub burst_id: Option<String>,
     pub motion_video_blob_id: Option<String>,
+
+    /// Video quality ladder (#49), highest first. Empty for everything that is
+    /// not a video above the 1080p tier, which is almost everything.
+    ///
+    /// Carried on the sync record rather than fetched from a per-video endpoint,
+    /// because that is what the change-log triggers in `035`/`036` were built
+    /// for: a rung lands minutes-to-hours after its photo, long after every
+    /// client has synced it, so the rendition becoming playable *nominates the
+    /// photo* and the next delta re-delivers this record. An on-demand endpoint
+    /// would make that machinery pointless and put a round trip in front of
+    /// every video the user opens.
+    ///
+    /// Not a DB column — `skip` keeps it out of the projection entirely, and
+    /// [`hydrate_renditions`] fills it after the row is read.
+    #[sqlx(skip)]
+    pub renditions: Vec<crate::transcode::renditions::RenditionDto>,
 }
 
 /// Paginated response from `GET /api/photos/encrypted-sync`.
@@ -133,6 +149,36 @@ pub async fn encrypted_sync(
         e
     })?;
     Ok(Json(page))
+}
+
+/// Attach the video quality ladder to a page of records.
+///
+/// Called by **both** feeds. The full walk and the delta must hand a client
+/// identical records — a client cannot tell which path produced a row, and #38
+/// treats the full walk as the recovery path for the delta, so a rendition
+/// visible through one and not the other would mean a "repair" that silently
+/// removes the user's quality picker.
+///
+/// Costs one query per page, and none at all for a page with no videos.
+async fn hydrate_renditions(
+    pool: &sqlx::SqlitePool,
+    records: &mut [EncryptedSyncRecord],
+) -> Result<(), AppError> {
+    let video_ids: Vec<&str> = records
+        .iter()
+        .filter(|r| r.media_type == "video")
+        .map(|r| r.id.as_str())
+        .collect();
+
+    let mut by_photo =
+        crate::transcode::renditions::list_renditions_for_photos(pool, &video_ids).await?;
+
+    for record in records.iter_mut() {
+        if let Some(rungs) = by_photo.remove(&record.id) {
+            record.renditions = rungs;
+        }
+    }
+    Ok(())
 }
 
 /// Current head of the change log — the sequence a client should resume from.
@@ -220,6 +266,9 @@ pub async fn fetch_page(
     } else {
         None
     };
+
+    // After truncation, so a peeked row never costs a rendition lookup.
+    hydrate_renditions(pool, &mut photos).await?;
 
     Ok(EncryptedSyncResponse {
         photos,
@@ -339,7 +388,8 @@ pub async fn fetch_delta(
     for id in &ids {
         q = q.bind(*id);
     }
-    let photos = q.bind(user_id).fetch_all(pool).await?;
+    let mut photos = q.bind(user_id).fetch_all(pool).await?;
+    hydrate_renditions(pool, &mut photos).await?;
 
     let alive: std::collections::HashSet<&str> =
         photos.iter().map(|p| p.id.as_str()).collect();
@@ -819,6 +869,112 @@ mod tests {
         // An id containing the separator must split on the FIRST '|' so the
         // sequence parses; the remainder stays part of the id.
         assert_eq!(parse_delta_cursor("7|a|b"), (7, "a|b".to_string()));
+    }
+
+    // ── Video quality ladder (#49) ─────────────────────────────────────────
+
+    /// Register a video with a produced 1080p rung, the way the ladder does.
+    async fn insert_video_with_rung(pool: &sqlx::SqlitePool, id: &str, user: &str) {
+        sqlx::query(
+            "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
+             size_bytes, width, height, created_at, taken_at, is_favorite) \
+             VALUES (?, ?, ?, '', 'video/mp4', 'video', 0, 3840, 2160, \
+                     '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 0)",
+        )
+        .bind(id)
+        .bind(user)
+        .bind(format!("{id}.mp4"))
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO video_renditions (photo_id, short_edge, width, height, is_source, \
+             blob_id, size_bytes, created_at) \
+             VALUES (?, 1080, 1920, 1080, 0, ?, 2048, '2026-01-01T00:00:00Z')",
+        )
+        .bind(id)
+        .bind(format!("rb-{id}"))
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    /// **The drift test.** A client cannot tell which feed produced a record,
+    /// and #38 treats the full walk as the *recovery* path for the delta — so a
+    /// ladder visible through one and not the other means a "repair" pass that
+    /// silently strips the user's quality picker.
+    ///
+    /// Verified RED by hydrating only `fetch_page`: the delta returns the same
+    /// video with an empty ladder.
+    #[tokio::test]
+    async fn both_feeds_carry_the_video_quality_ladder() {
+        let pool = test_pool().await;
+        insert_video_with_rung(&pool, "vid", "user-1").await;
+        insert(&pool, "still", "user-1", "2026-01-02T00:00:00Z").await;
+
+        let full = fetch_page(&pool, "user-1", None, 500).await.unwrap();
+        let delta = fetch_delta(&pool, "user-1", 0, None, 500).await.unwrap();
+
+        for (label, page) in [("full walk", &full), ("delta", &delta)] {
+            let video = page
+                .photos
+                .iter()
+                .find(|p| p.id == "vid")
+                .unwrap_or_else(|| panic!("{label} did not return the video"));
+            assert_eq!(
+                video.renditions.len(),
+                1,
+                "{label} must carry the ladder, got {:?}",
+                video.renditions
+            );
+            assert_eq!(video.renditions[0].short_edge, 1080);
+            assert_eq!(video.renditions[0].blob_id.as_deref(), Some("rb-vid"));
+
+            let still = page.photos.iter().find(|p| p.id == "still").unwrap();
+            assert!(
+                still.renditions.is_empty(),
+                "{label} gave a still a quality ladder"
+            );
+        }
+    }
+
+    /// A rung becoming playable nominates its photo (migrations 035/036), and
+    /// the point of that nomination is that the *next delta* delivers the
+    /// picker. Without this the ladder is invisible until a full walk which,
+    /// post-#38, may never happen.
+    #[tokio::test]
+    async fn a_new_rung_reaches_a_synced_client_through_the_delta() {
+        let pool = test_pool().await;
+        sqlx::query(
+            "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
+             size_bytes, width, height, created_at, taken_at, is_favorite) \
+             VALUES ('vid', 'user-1', 'v.mp4', '', 'video/mp4', 'video', 0, 3840, 2160, \
+                     '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // A client that has fully synced, before any rung exists.
+        let synced = fetch_page(&pool, "user-1", None, 500).await.unwrap();
+        assert!(synced.photos[0].renditions.is_empty());
+        let head = head_seq(&pool).await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO video_renditions (photo_id, short_edge, width, height, is_source, \
+             blob_id, size_bytes, created_at) \
+             VALUES ('vid', 1080, 1920, 1080, 0, 'rb1', 2048, '2026-01-01T00:00:00Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let (up, del) = delta_all(&pool, "user-1", head, 500).await;
+        assert!(del.is_empty());
+        assert_eq!(up, vec!["vid".to_string()], "the rung must nominate the photo");
+
+        let page = fetch_delta(&pool, "user-1", head, None, 500).await.unwrap();
+        assert_eq!(page.photos[0].renditions.len(), 1, "picker must arrive with it");
     }
 
     /// Another user's rows must never leak into a page, and must not consume
