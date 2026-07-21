@@ -404,11 +404,51 @@ Phased plan:
 - [x] **Transcode.** `build_video_transcode_args` takes a target rung; dimensions arrive precomputed from `ladder::rung_dimensions` rather than as an ffmpeg scale expression, so the orientation-preserving arithmetic is a unit test instead of a device test. Found in passing: `convert_video`'s **CPU fallback held its own hardcoded copy of the scale filter** — harmless at source resolution, a silent correctness bug under the ladder (GPU asks for a rung, hardware encode fails, fallback runs at full resolution, result is recorded as the 1080p rendition). — `f3cd439`
 - [x] **The source rendition must actually be playable.** Gated on `is_browser_native` + decode health. A lone unplayable source yields *no* picker rather than a one-entry picker whose only option fails. — `7a12582`
 - [x] **Candidate queue + 3-strike cap** (`036`). The candidate set is self-limiting on success — a produced rung leaves it forever — but **not on failure**, so without a cap every sweep re-attempts a 4K-class re-encode forever on 114 candidates. Attempts are charged **before** the encode: a file that OOMs or hard-kills ffmpeg never reaches an error handler, and that is precisely the file needing retirement. Cheapest-first ordering keeps the 4 8K sources off the head of the queue. `rung_threshold` is shared with the SQL prefilter rather than re-derived, and a test requires the two to agree on every live shape. — `d1a3079`
-- [ ] **Generation pass.** Decrypt → probe → plan → transcode → encrypt → record. **Take geometry from the probe, never from `photos.width/height`** (see above). Encrypted mode must use the **chunked** (`SPCHNKB2`) writer — `crypto::encrypt` on a 4K video is the v1 OOM at ~5× RAM. `photos/server_migrate_encrypt.rs::encrypt_one_photo_chunked` is the working template. Leave `blobs.content_hash` NULL on rendition blobs, as thumbnail blobs already do, so a rendition can never be dedup-linked to a photo.
-- [ ] **Cost control.** This doubles encode work for every 4K video. Reuse the existing two-lane parallelism (`SIMPLE_PHOTOS_CONVERSION_JOBS`) and enqueue the 1080p rung at lower priority than first-pass conversions — a user must never wait on a secondary rendition to see their video at all. Queue *ordering* is done (`d1a3079`); the parallelism wiring is not.
-- [ ] **Orphan sweeper.** `035`'s cascade queues unreferenced rendition blobs into `orphaned_rendition_blobs`, and **nothing drains it yet** — so deleted 4K videos leak their rendition bytes. The sweeper must re-check references before unlinking, and must remember that `blobs.content_hash` dedup means one blob can back several photos.
-- [ ] **Serving.** Extend the video endpoint with a rendition selector; keep range-request support intact (`server/src/http_utils.rs`).
-- [ ] **API.** Expose available renditions per video so clients can populate the picker.
+- [x] **Generation pass.** Decrypt → probe → plan → transcode → encrypt → record, in `transcode/rung_generate.rs`, wired after `run_conversion_pass` at all three autoscan sites. Chunked writer, `content_hash` NULL, geometry from the probe. — `60d555d`
+
+> **Generation pass landed — `60d555d`. The ladder now produces renditions;
+> nothing serves them yet.**
+>
+> **The transposition trap is real and now under test.** A portrait `1440x2560`
+> source registered with the live transposition (`2560x1440`) is encoded by
+> driving real ffmpeg, and the assertion is on the **produced file's** probed
+> dimensions, not the row written about it. Against a DB-geometry implementation
+> it comes out `1920x1080` — a visibly squashed frame that nothing downstream can
+> recover. Those are the two things that can disagree, so the test asserts the
+> one that costs the user.
+>
+> **A third verdict was missing, and its absence turned a healthy library into a
+> retired one.** The prefilter is deliberately wider than the ladder rule so it
+> can see the 58 videos with no recorded geometry. Most of them need no rung —
+> and with only "produced" and "failed" available, that answer had nowhere to go:
+> the row keeps both locators NULL, the candidate query reads it as still owed,
+> and the file is re-probed every sweep until the attempt cap retires it with a
+> warning claiming it will never get a picker. `037` adds `not_needed`, which is
+> terminal, costs no attempt, and stays invisible to every picker. Verified RED
+> by dropping the query arm: the photo comes back.
+>
+> **`035` queued the user's original video for garbage collection.** The source
+> rung points at the blob the *photo* already owns — a second reference, not a
+> copy — and the orphan trigger could not tell that from a rendition that owns
+> its bytes. The sweeper is required to re-check references, so this was not by
+> itself data loss; but it made the safety of an original 4K video depend on a
+> sweeper that does not exist yet knowing about a case nobody had written down.
+> `037` guards the trigger on `is_source = 0` instead, so the queue can only ever
+> name bytes a rendition owns. Verified RED against `035`.
+>
+> **Photos in the encryption backlog are deferred, not encoded.** Both clients
+> play from blobs, so a `file_path` rendition produced for one of the 2,494 rows
+> about to be encrypted is bytes nothing can play — and the encode would have to
+> be repeated after the migration moved them anyway.
+>
+> Also: `convert_video`'s CPU fallback is reached through `conversion::
+> transcode_to_rung`, which shares the batch thread budget rather than taking
+> every core — a background rendition must never be why a first-pass conversion
+> is slow.
+- [ ] **Cost control.** This doubles encode work for every 4K video. Sequencing is done (`60d555d` runs the sweep after `run_conversion_pass`, one file at a time, under a wall-clock budget) and the encode shares the batch thread budget. Still open: the sweep is **serial**, so a 114-file backlog of mostly-4K sources drains slowly. Decide whether to give it a lane of the existing two-lane parallelism (`SIMPLE_PHOTOS_CONVERSION_JOBS`) or leave it serial deliberately.
+- [ ] **Orphan sweeper.** `035`'s cascade queues unreferenced rendition blobs into `orphaned_rendition_blobs`, and **nothing drains it yet** — so deleted 4K videos leak their rendition bytes. The sweeper must re-check references before unlinking, and must remember that `blobs.content_hash` dedup means one blob can back several photos. **`037` removed the worst trap** — source rungs no longer reach this queue at all, so it can only name bytes a rendition owns.
+- [ ] **Serving.** Extend the video endpoint with a rendition selector; keep range-request support intact (`server/src/http_utils.rs`). Note the mode split `035` designed for: in encrypted mode a client fetches the rendition's **blob**, so "serving" is mostly authorising a blob id — `idx_video_renditions_blob` exists to confirm a requested blob really is a rendition of a photo the caller may read. Do not let a rendition blob be fetchable by anyone who guesses its id.
+- [ ] **API.** Expose available renditions per video so clients can populate the picker. `renditions::list_renditions` is written and tested and has **no production caller** — this item is its consumer, and the three remaining `dead_code` warnings in the crate all resolve when it lands.
 - [ ] **Web player.** Gear icon bottom-right of `web/src/components/viewer/VideoControls.tsx` → resolution menu. Default via the Network Information API where available (`navigator.connection.effectiveType` / `saveData`), falling back to highest.
 - [ ] **Android player.** Same picker in `VideoPlayer.kt`; default from `ConnectivityManager` (`NET_CAPABILITY_NOT_METERED` → highest, metered → ≤1080p).
 - [ ] **Android setting.** "Cellular data saver" toggle; when OFF, always serve highest regardless of network, per the issue.
