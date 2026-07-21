@@ -120,6 +120,13 @@ class AuthRepository @Inject constructor(
         db.albumDao().deleteAllXRefs()
         db.blobQueueDao().deleteAll()
         db.backupFolderDao().deleteAll()
+        // The #38 delta cursor MUST go with the mirror. Living in the same Room
+        // database is not enough on its own, because this method clears tables
+        // one DAO at a time rather than dropping the file — leave it behind and
+        // the next user's first sync starts from a cursor describing the
+        // previous user's library, skips straight to a delta, and shows an
+        // empty gallery that no amount of re-syncing repairs.
+        db.syncStateDao().deleteAll()
 
         // 4. Delete cached thumbnail files from disk
         val thumbnailDir = File(context.filesDir, "thumbnails")

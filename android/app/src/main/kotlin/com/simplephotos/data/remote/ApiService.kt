@@ -58,10 +58,20 @@ interface ApiService {
         @Query("media_type") mediaType: String? = null
     ): PhotoListResponse
 
+    /**
+     * The photo manifest. Omit [since] for a full walk; pass a change-log
+     * sequence for a delta (#38).
+     *
+     * A server predating #38 ignores [since] and answers with a full walk, so
+     * the caller must verify it got a delta via the `deleted` handshake rather
+     * than assuming the parameter was honoured — see
+     * [com.simplephotos.data.sync.isDeltaFeed].
+     */
     @GET("api/photos/encrypted-sync")
     suspend fun encryptedSync(
         @Query("after") after: String? = null,
-        @Query("limit") limit: Int? = null
+        @Query("limit") limit: Int? = null,
+        @Query("since") since: Long? = null
     ): EncryptedSyncResponse
 
     /** Cheap precomputed gallery counts — smart-album badges render instantly

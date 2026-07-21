@@ -146,7 +146,32 @@ fun List<RenditionDto>?.toDomain(): List<com.simplephotos.data.media.Rendition> 
 
 data class EncryptedSyncResponse(
     val photos: List<EncryptedSyncRecord>,
-    @SerializedName("next_cursor") val nextCursor: String?
+    @SerializedName("next_cursor") val nextCursor: String?,
+    /**
+     * Photo ids that have LEFT the eligible feed — deleted outright, or claimed
+     * by a secure gallery. The client treats both identically (#38).
+     *
+     * The nullability is the protocol handshake, not defensiveness. On a delta
+     * the server sends this **empty rather than absent**; a server predating #38
+     * ignores the unknown `since` parameter and replies with a full walk, whose
+     * `photos` are indistinguishable from a delta's. Null therefore means "this
+     * server does not speak `since`" and forces the full path — see
+     * [com.simplephotos.data.sync.isDeltaFeed]. Gson leaves an absent field at
+     * its default, so null here really is "the key was not in the JSON".
+     */
+    val deleted: List<String>? = null,
+    /**
+     * The change log's head at the moment this page was computed.
+     *
+     * Persist the **first** page's value, never the last: a change committed
+     * while a multi-page walk is in flight lands above the first page's head, so
+     * keeping the first re-delivers it next pass while keeping the last steps
+     * over it and loses it permanently.
+     *
+     * Null on a pre-#38 server, which keeps this client on full walks — correct,
+     * just not fast.
+     */
+    @SerializedName("head_seq") val headSeq: Long? = null,
 )
 
 // ── Precomputed gallery count summary (Issue 3, revised by #42) ──────────────
@@ -181,6 +206,15 @@ data class PhotoSummaryDto(
     @SerializedName("smart_audio") val smartAudio: Long = -1,
     @SerializedName("smart_favorites") val smartFavorites: Long = -1,
     @SerializedName("smart_recent") val smartRecent: Long = -1,
+    /**
+     * The photo change log's current head (#38).
+     *
+     * Deliberately NOT served from the summary's TTL cache on the server — a
+     * stale head here would make a client skip real changes, which is exactly
+     * the busywork the delta protocol removes. Null on a pre-#38 server, which
+     * costs the skip shortcut and nothing else.
+     */
+    @SerializedName("head_seq") val headSeq: Long? = null,
 ) {
     /** False when the server predates #42 and sent no tile counts, in which
      *  case the caller must fall back to local mirror counts rather than

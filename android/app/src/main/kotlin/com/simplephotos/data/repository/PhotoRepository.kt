@@ -27,6 +27,11 @@ import com.simplephotos.data.remote.dto.MetadataUpdateResponse
 import com.simplephotos.data.remote.dto.SetCropRequest
 import com.simplephotos.data.remote.dto.toDomain
 import com.simplephotos.data.remote.dto.WriteExifResponse
+import com.simplephotos.data.sync.SyncCursorStore
+import com.simplephotos.data.sync.SyncMode
+import com.simplephotos.data.sync.decideSyncMode
+import com.simplephotos.data.sync.isDeltaFeed
+import com.simplephotos.data.sync.tombstoneVictims
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_SERVER_URL
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -51,6 +56,31 @@ import javax.inject.Singleton
 
 /** One encrypted byte-range read of a blob plus the blob's total encrypted size. */
 data class BlobRange(val bytes: ByteArray, val encryptedTotal: Long)
+
+/**
+ * What one `encrypted-sync` pass actually did (#38).
+ *
+ * [mode] is the mode the pass **finished** in, which is not always the one it
+ * started in: a delta downgrades itself to [SyncMode.FULL] when the server turns
+ * out not to speak `since`. Callers must branch on this rather than on what they
+ * requested, because it decides whether [serverPhotoIds] is the whole library
+ * (safe to set-difference against) or merely the changed set (catastrophic to
+ * set-difference against).
+ */
+data class EncryptedSyncOutcome(
+    val mode: SyncMode,
+    /** Rows imported plus rows merged — what the caller reports as "changed". */
+    val changed: Int,
+    /** Every photo id seen. The whole library on [SyncMode.FULL]; only what
+     *  changed on [SyncMode.DELTA]. */
+    val serverPhotoIds: Set<String>,
+    /** Photo ids the server named as gone. Always empty on a full walk, which
+     *  expresses departures by omission instead. */
+    val tombstones: List<String>,
+    /** The FIRST page's head sequence, or null if the server did not report one.
+     *  Null keeps the client on full walks — correct, just not fast. */
+    val headAtStart: Long?,
+)
 
 /**
  * Narrow surface the streaming video DataSource ([com.simplephotos.ui.screens.viewer.MediaBlobDataSource])
@@ -84,6 +114,10 @@ class PhotoRepository @Inject constructor(
     private val dataStore: DataStore<Preferences>,
     @ApplicationContext private val context: Context
 ) : EncryptedBlobStream {
+    /** The #38 delta cursor. Backed by the same Room DB as the mirror, so it
+     *  cannot outlive the rows it makes claims about — see [SyncCursorStore]. */
+    private val syncCursor = SyncCursorStore(db)
+
     companion object {
         private const val TAG = "PhotoRepository"
         /** Bounded concurrency for thumbnail downloads during sync. Keeps the
@@ -818,21 +852,121 @@ class PhotoRepository @Inject constructor(
 
     // ── Sync from server ─────────────────────────────────────────────────
 
-    /** Pull photos from the server (always encrypted). */
+    /**
+     * Pull photos from the server (always encrypted), by the cheapest route that
+     * is provably correct (#38).
+     *
+     * ## The pruning step is why this cannot be a one-line change
+     *
+     * [reconcileServerDeletions] takes the ids a pass saw and deletes every
+     * synced local row **not** in that set. That is correct for a full walk,
+     * whose id set is the entire library — and catastrophic for a delta, whose
+     * id set is only what changed. Handing a delta's ids to it would delete the
+     * whole mirror on the first pass after this feature ships.
+     *
+     * So the set difference is reachable **only** from [SyncMode.FULL]. A delta
+     * prunes from explicit tombstones instead, and the two paths are kept in
+     * agreement by [tombstoneVictims] reusing the full walk's own guard.
+     *
+     * Web has no equivalent trap: its full and delta passes are separate
+     * functions with separate pruning, so there is nothing to accidentally
+     * share. Here they are one function feeding one reconciler.
+     */
     suspend fun syncFromServer(): Int {
+        val cursor = syncCursor.read()
+        val headSeq = fetchHeadSeq()
+        val mode = decideSyncMode(cursor, headSeq)
+
+        if (mode == SyncMode.SKIPPED) {
+            // The steady state, and the entire point of the issue: a library
+            // that has not changed costs one small JSON request. Note what is
+            // NOT run here — no manifest pagination, no dedup table scan, and
+            // no cropSync/favoriteSync, all of which were O(library) every pass.
+            //
+            // Skipping the last two is safe because `033`'s trigger is
+            // `AFTER UPDATE ON photos` with no column list: a crop or favourite
+            // toggled anywhere moves `head_seq`, so an unchanged head proves
+            // there is nothing for them to fetch.
+            android.util.Log.d(TAG, "syncFromServer: head unchanged at $cursor — skipping")
+            return 0
+        }
+
         deduplicateLocalEntities()
-        // syncFromServerEncrypted already paginates the ENTIRE manifest; have it
-        // return every server photo id it saw so reconcileServerDeletions can
-        // reuse that set instead of fetching the whole manifest a second time.
-        val (imported, serverPhotoIds) = syncFromServerEncrypted()
-        // Remove local entries for photos that were deleted on server
-        // (e.g. trashed from web or another device).
-        reconcileServerDeletions(serverPhotoIds)
-        // Also pull crop_metadata updates for already-synced photos so
-        // non-destructive edits from web/other devices are reflected.
-        val cropUpdated = syncCropMetadata()
-        val favUpdated = syncFavorites()
-        return imported + cropUpdated + favUpdated
+
+        val result = syncFromServerEncrypted(
+            since = if (mode == SyncMode.DELTA) cursor else null,
+        )
+
+        if (result.mode == SyncMode.FULL) {
+            // Only a full walk's id set is the whole library, so only a full
+            // walk may set-difference against it.
+            reconcileServerDeletions(result.serverPhotoIds)
+        } else {
+            applyTombstones(result.tombstones)
+        }
+
+        // Crop and favourite state rides the sync record itself and is applied
+        // inline for both modes. These two whole-library endpoints are kept for
+        // the full walk only, as part of what makes it the self-healing recovery
+        // path; running them on every delta would reintroduce two O(library)
+        // fetches per pass, which is most of what #38 is about.
+        var extra = 0
+        if (result.mode == SyncMode.FULL) {
+            extra += syncCropMetadata()
+            extra += syncFavorites()
+        }
+
+        // Persist the cursor ONLY now, once the mirror actually reflects it. A
+        // throw anywhere above propagates before this line and the next pass
+        // retries from the old cursor.
+        result.headAtStart?.let { syncCursor.write(it) }
+
+        return result.changed + extra
+    }
+
+    /**
+     * The server's current change-log head, or null if it cannot be established.
+     *
+     * Failure is non-fatal: it costs the skip shortcut, not correctness. A pass
+     * still runs, and the delta response carries its own head.
+     */
+    private suspend fun fetchHeadSeq(): Long? = try {
+        api.photosSummary().headSeq
+    } catch (e: Exception) {
+        android.util.Log.w(TAG, "could not read head_seq; syncing without the fast path: ${e.message}")
+        null
+    }
+
+    /**
+     * Remove rows the server has explicitly named as gone.
+     *
+     * Deletes the cached thumbnail file too. Those are decrypted image bytes on
+     * disk — leaving them behind keeps the visible content of a deleted photo
+     * and grows without bound, which is the same leak the web client had to fix
+     * in its own prune path.
+     */
+    private suspend fun applyTombstones(photoIds: List<String>) {
+        if (photoIds.isEmpty()) return
+        try {
+            val rows = db.photoDao().getByServerPhotoIds(photoIds)
+            val victims = tombstoneVictims(rows, photoIds.toSet())
+            for (victim in victims) {
+                victim.thumbnailPath?.let { File(it).delete() }
+                db.photoDao().deleteById(victim.localId)
+            }
+            android.util.Log.i(
+                TAG,
+                "applyTombstones: ${photoIds.size} tombstones removed ${victims.size} rows",
+            )
+        } catch (e: Exception) {
+            // Rethrow: the cursor is written only after this returns, so failing
+            // here leaves the cursor where it was and the next pass re-delivers
+            // these same tombstones. Swallowing it would advance past a prune
+            // that never happened, and no future response would mention these
+            // ids again.
+            android.util.Log.e(TAG, "applyTombstones: failed to prune — ${e.message}", e)
+            throw e
+        }
     }
 
     /**
@@ -939,18 +1073,63 @@ class PhotoRepository @Inject constructor(
      * blob — it reads photo metadata directly from the server's photos table
      * and then downloads only the small thumbnail blobs (~30 KB each).
      */
-    private suspend fun syncFromServerEncrypted(): Pair<Int, Set<String>> {
+    private suspend fun syncFromServerEncrypted(since: Long?): EncryptedSyncOutcome {
         var imported = 0
         var merged = 0
         var after: String? = null
-        // Every server photo id seen across all pages — returned so the caller's
-        // reconcileServerDeletions can reuse it instead of re-paginating. (#3)
+        // Every server photo id seen across all pages. Meaningful to the caller
+        // ONLY on a full walk, where it is the whole library; on a delta it is
+        // just the changed set and must never reach reconcileServerDeletions.
         val allServerIds = HashSet<String>()
-        android.util.Log.i("PhotoRepository", "syncFromServerEncrypted: starting sync")
+        val tombstones = ArrayList<String>()
+        var headAtStart: Long? = null
+        // Downgraded to FULL the moment the server proves it does not speak
+        // `since`. Tracked separately from the requested mode because that
+        // discovery happens mid-pass.
+        var mode = if (since != null) SyncMode.DELTA else SyncMode.FULL
+        var effectiveSince = since
+        android.util.Log.i(TAG, "syncFromServerEncrypted: starting sync (since=$since)")
 
-        do {
-            val result = api.encryptedSync(after = after, limit = 500)
+        // `while (true)` rather than `do/while (nextCursor != null)`: the
+        // handshake failure below has to restart pagination from scratch, and a
+        // `continue` in a do/while still evaluates the condition — a single-page
+        // full walk would exit having just discarded everything it holds.
+        while (true) {
+            val result = api.encryptedSync(after = after, limit = 500, since = effectiveSince)
             android.util.Log.d("PhotoRepository", "syncFromServerEncrypted: fetched page with ${result.photos.size} photos, nextCursor=${result.nextCursor}")
+
+            if (mode == SyncMode.DELTA && !isDeltaFeed(result.deleted)) {
+                // The handshake failed: this server ignored `since` and handed
+                // back a full walk. Its `photos` look exactly like a delta's, so
+                // reading them as one would prune nothing while believing we had
+                // pruned, and then persist a cursor making that permanent.
+                //
+                // Restart cleanly rather than reinterpreting what we hold: the
+                // rows received so far are real records and were safe to write,
+                // but the pagination cursor belongs to the server's own walk and
+                // the id set must be complete before anything set-differences
+                // against it.
+                android.util.Log.w(
+                    TAG,
+                    "syncFromServerEncrypted: server ignored since=$since (no `deleted` array) — " +
+                        "restarting as a full walk",
+                )
+                mode = SyncMode.FULL
+                effectiveSince = null
+                after = null
+                headAtStart = null
+                allServerIds.clear()
+                tombstones.clear()
+                continue
+            }
+
+            // Keep the FIRST page's head, never the last. A change committed
+            // while this multi-page walk is in flight lands at a sequence above
+            // the first page's head; keeping the first re-delivers it on the
+            // next pass, whereas keeping the last steps over it and loses it
+            // permanently.
+            if (headAtStart == null) headAtStart = result.headSeq
+            result.deleted?.let { tombstones.addAll(it) }
 
             // Genuinely-new records (not already local, no local entity to merge)
             // — their thumbnails are downloaded+decrypted IN PARALLEL below. The
@@ -993,6 +1172,23 @@ class PhotoRepository @Inject constructor(
                     val incoming = photo.renditions.toDomain()
                     if (!renditionsEqual(existing.renditions, incoming)) {
                         db.photoDao().updateRenditions(photo.id, incoming)
+                    }
+                    // Crop and favourite state arrive on the sync record, so
+                    // apply them here rather than leaving them to the two
+                    // whole-library endpoints. Those are the reason a delta pass
+                    // can stop calling `cropSync`/`favoriteSync` at all: without
+                    // this branch, an edit made on the web would reach a device
+                    // that has already synced the photo only on its next FULL
+                    // walk — which, post-#38, may never come.
+                    //
+                    // Server-wins is not a new rule here; `syncCropMetadata` and
+                    // `syncFavorites` have always clobbered local state this way,
+                    // on every pass. Only the feed driving it has changed.
+                    if (existing.cropMetadata != photo.cropMetadata) {
+                        db.photoDao().updateCropMetadata(existing.localId, photo.cropMetadata)
+                    }
+                    if (existing.isFavorite != photo.isFavorite) {
+                        db.photoDao().updateFavorite(existing.localId, photo.isFavorite)
                     }
                     continue
                 }
@@ -1062,10 +1258,21 @@ class PhotoRepository @Inject constructor(
             }
 
             after = result.nextCursor
-        } while (result.nextCursor != null)
+            if (after == null) break
+        }
 
-        android.util.Log.i("PhotoRepository", "syncFromServerEncrypted: finished — imported $imported, merged $merged photos")
-        return (imported + merged) to allServerIds
+        android.util.Log.i(
+            TAG,
+            "syncFromServerEncrypted: finished as $mode — imported $imported, merged $merged, " +
+                "${tombstones.size} tombstones, head=$headAtStart",
+        )
+        return EncryptedSyncOutcome(
+            mode = mode,
+            changed = imported + merged,
+            serverPhotoIds = allServerIds,
+            tombstones = tombstones,
+            headAtStart = headAtStart,
+        )
     }
 
     /**
