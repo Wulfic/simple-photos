@@ -278,13 +278,32 @@ async fn record_encryption_failure(
         return;
     }
 
-    let attempts: i64 =
-        sqlx::query_scalar("SELECT encryption_attempts FROM photos WHERE id = ? AND user_id = ?")
-            .bind(photo_id)
-            .bind(user_id)
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0);
+    // Filename comes back with the attempt count rather than in a second query:
+    // an audit row naming only a UUID answers "something failed" but not "which
+    // file", which is the entire complaint behind #45.
+    let (attempts, filename): (i64, String) = sqlx::query_as(
+        "SELECT encryption_attempts, filename FROM photos WHERE id = ? AND user_id = ?",
+    )
+    .bind(photo_id)
+    .bind(user_id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or((0, String::new()));
+
+    // Audited on EVERY attempt, not just the terminal one. A file that quietly
+    // fails twice and is then deferred looks identical to one that was never
+    // seen, and the deferral is precisely the moment a user needs the history.
+    crate::audit::log_background(
+        pool,
+        crate::audit::AuditEvent::EncryptionFailure,
+        Some(serde_json::json!({
+            "photo_id": photo_id,
+            "filename": filename,
+            "error": truncated,
+            "attempts": attempts,
+            "deferred": attempts >= MIGRATION_MAX_ATTEMPTS,
+        })),
+    );
 
     if attempts >= MIGRATION_MAX_ATTEMPTS {
         let _ =

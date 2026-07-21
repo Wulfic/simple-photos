@@ -276,6 +276,21 @@ pub async fn upload_photo(
             Err(e) => {
                 let _ = tokio::fs::remove_file(&tmp_output).await;
                 conversion::progress_finish_one();
+                // The uploader sees the 500, but nobody else does — and the
+                // person reading the Server Logs tab looking for "why did that
+                // upload vanish" is usually not the person who uploaded it.
+                // Background rather than request-scoped: the audit must survive
+                // the early return below.
+                crate::audit::log_background(
+                    &state.pool,
+                    crate::audit::AuditEvent::MediaConvertFailure,
+                    Some(serde_json::json!({
+                        "filename": filename,
+                        "category": conversion::media_type_str(target.category),
+                        "error": e.to_string(),
+                        "origin": "upload",
+                    })),
+                );
                 return Err(AppError::Internal(format!(
                     "Media conversion failed for '{filename}': {e}"
                 )));

@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { api, AuditLogEntry } from "../../api/client";
 import { BASE } from "../../api/core";
+import { matchesAuditFilters } from "../../api/auditLogQuery";
 import { useAuthStore } from "../../store/auth";
 import { getDateCutoff, tryPrettyJson } from "./shared";
 import { formatDate, relativeTime } from "../../utils/formatters";
@@ -27,6 +28,11 @@ const EVENT_COLORS: Record<string, string> = {
   blob_upload: "text-cyan-600 dark:text-cyan-400",
   blob_delete: "text-red-500 dark:text-red-400",
   media_convert: "text-lime-600 dark:text-lime-400",
+  // Pipeline failures (#45) — these are the rows that answer "which file broke?"
+  media_convert_failure: "text-red-600 dark:text-red-400",
+  import_failure: "text-red-600 dark:text-red-400",
+  encryption_failure: "text-red-600 dark:text-red-400",
+  thumbnail_failure: "text-red-600 dark:text-red-400",
   // Photos
   photo_register: "text-cyan-600 dark:text-cyan-400",
   photo_favorite: "text-pink-500 dark:text-pink-400",
@@ -81,6 +87,7 @@ function ServerLogsTab() {
   const [searchText, setSearchText] = useState("");
   const [dateRange, setDateRange] = useState<"all" | "1h" | "24h" | "7d" | "30d">("all");
   const [serverFilter, setServerFilter] = useState("");
+  const [failuresOnly, setFailuresOnly] = useState(false);
 
   // Unique event types for filter dropdown
   const [eventTypes, setEventTypes] = useState<string[]>([]);
@@ -95,6 +102,7 @@ function ServerLogsTab() {
           event_type: eventFilter || undefined,
           ip_address: ipFilter || undefined,
           source_server: serverFilter || undefined,
+          failures_only: failuresOnly || undefined,
           after,
           before: cursor,
           limit: 100,
@@ -114,7 +122,7 @@ function ServerLogsTab() {
         setLoadingMore(false);
       }
     },
-    [eventFilter, ipFilter, dateRange, serverFilter]
+    [eventFilter, ipFilter, dateRange, serverFilter, failuresOnly]
   );
 
   useEffect(() => {
@@ -131,6 +139,13 @@ function ServerLogsTab() {
     );
     setSourceServers(Array.from(servers).sort());
   }, [logs]);
+
+  // The SSE effect below runs once for the lifetime of the tab, so its handler
+  // would close over the filter state as it stood on mount. Mirror the live
+  // filters into a ref so the handler reads current values without forcing a
+  // reconnect every time a dropdown changes.
+  const filtersRef = useRef({ eventFilter, ipFilter, serverFilter, failuresOnly });
+  filtersRef.current = { eventFilter, ipFilter, serverFilter, failuresOnly };
 
   // Real-time SSE subscription — prepends new entries as they arrive
   const seenIds = useRef(new Set<string>());
@@ -152,6 +167,10 @@ function ServerLogsTab() {
       try {
         const entry = JSON.parse(event.data) as AuditLogEntry;
         if (seenIds.current.has(entry.id)) return; // dedup
+        // The stream carries every event, not just ones matching the active
+        // filters. Drop the rest, or a login_success lands at the top of a
+        // "Failures only" list.
+        if (!matchesAuditFilters(entry, filtersRef.current)) return;
         seenIds.current.add(entry.id);
         setLogs((prev) => [entry, ...prev]);
         setTotal((prev) => prev + 1);
@@ -276,6 +295,19 @@ function ServerLogsTab() {
               </Select>
             </div>
           )}
+          {/* Failures Only (#45) — applied server-side, so it searches the
+              whole log rather than the 100 rows already on screen. */}
+          <div>
+            <label className="flex items-center gap-2 h-9 px-3 rounded-md border border-edge cursor-pointer select-none hover:bg-surface-sunken dark:hover:bg-white/5">
+              <input
+                type="checkbox"
+                checked={failuresOnly}
+                onChange={(e) => setFailuresOnly(e.target.checked)}
+                className="accent-red-600"
+              />
+              <span className="text-sm font-medium">Failures only</span>
+            </label>
+          </div>
         </div>
         <div className="mt-2 flex items-center gap-3 text-xs text-fg-muted">
           <span>Showing {filtered.length} of {total.toLocaleString()} entries</span>

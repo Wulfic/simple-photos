@@ -218,6 +218,8 @@ export interface AuditLogParams {
   before?: string;
   limit?: number;
   source_server?: string;
+  /** Return only failure events (#45). Resolved server-side from FAILURE_EVENTS. */
+  failures_only?: boolean;
 }
 
 export interface ClientLogEntry {

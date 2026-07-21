@@ -6,6 +6,7 @@
  * `/api/admin/client-logs`, `/api/settings/storage-stats`.
  */
 import { request } from "./core";
+import { buildAuditLogQuery } from "./auditLogQuery";
 import type {
   DiagnosticsResponseUnion,
   DiagnosticsConfig,
@@ -53,14 +54,7 @@ export const diagnosticsApi = {
 
   /** List audit log entries with optional filters (admin only) */
   listAuditLogs: (params?: AuditLogParams) => {
-    const search = new URLSearchParams();
-    if (params?.event_type) search.set("event_type", params.event_type);
-    if (params?.user_id) search.set("user_id", params.user_id);
-    if (params?.ip_address) search.set("ip_address", params.ip_address);
-    if (params?.after) search.set("after", params.after);
-    if (params?.before) search.set("before", params.before);
-    if (params?.limit) search.set("limit", params.limit.toString());
-    const qs = search.toString();
+    const qs = buildAuditLogQuery(params);
     return request<AuditLogListResponse>(
       `/admin/audit-logs${qs ? `?${qs}` : ""}`
     );

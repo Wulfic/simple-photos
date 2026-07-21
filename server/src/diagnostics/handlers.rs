@@ -319,6 +319,16 @@ pub async fn list_audit_logs(
         conditions.push("a.event_type = ?".to_string());
         binds.push(event_type.clone());
     }
+    if params.failures_only.unwrap_or(false) {
+        // Placeholders are generated from the list's own length rather than
+        // written out, so adding a failure variant cannot desynchronise the
+        // bind count from the SQL. Values are still bound, not interpolated.
+        let placeholders = vec!["?"; crate::audit::FAILURE_EVENTS.len()].join(", ");
+        conditions.push(format!("a.event_type IN ({placeholders})"));
+        for ev in crate::audit::FAILURE_EVENTS {
+            binds.push(ev.as_str().to_string());
+        }
+    }
     if let Some(ref user_id) = params.user_id {
         conditions.push("a.user_id = ?".to_string());
         binds.push(user_id.clone());

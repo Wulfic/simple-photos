@@ -394,6 +394,23 @@ async fn process_candidate(
                         error = %e,
                         "[INGEST] Failed to register converted photo"
                     );
+                    // The bytes converted fine; the DB write did not. This path
+                    // leaves NO row behind, so the file is re-walked, re-
+                    // converted and re-failed on every autoscan pass forever —
+                    // the exact failure mode #40's attempt cap exists to retire,
+                    // and it is invisible until it is audited.
+                    crate::audit::log_background(
+                        pool,
+                        crate::audit::AuditEvent::ImportFailure,
+                        Some(serde_json::json!({
+                            "filename": candidate.name,
+                            "converted": conv_rel,
+                            "source_path": source_path,
+                            "category": conversion::media_type_str(candidate.target.category),
+                            "error": e.to_string(),
+                            "elapsed_ms": file_start.elapsed().as_millis() as u64,
+                        })),
+                    );
                     return false;
                 }
                 Ok(_) => {}
@@ -430,6 +447,19 @@ async fn process_candidate(
                 tracing::debug!(file = %conv_rel, "[INGEST] Generated thumbnail");
             } else {
                 tracing::warn!(file = %conv_rel, "[INGEST] Failed to generate thumbnail");
+                // Non-fatal — the photo is registered and downloadable — but it
+                // renders as a placeholder for good, which looks like a client
+                // bug from the outside. Audited so it is attributable to a file.
+                crate::audit::log_background(
+                    pool,
+                    crate::audit::AuditEvent::ThumbnailFailure,
+                    Some(serde_json::json!({
+                        "filename": candidate.name,
+                        "converted": conv_rel,
+                        "mime_type": work_mime,
+                        "category": conversion::media_type_str(candidate.target.category),
+                    })),
+                );
             }
 
             true
@@ -449,6 +479,29 @@ async fn process_candidate(
                 elapsed_ms = file_start.elapsed().as_millis(),
                 error = %e,
                 "[INGEST] Conversion failed — registering ORIGINAL to avoid data loss"
+            );
+            // The event this whole issue is about. `tracing::warn!` above goes
+            // to the process log; the Server Logs tab reads the `audit` table
+            // and would show this file as simply absent.
+            //
+            // Emitted on EVERY attempt, not just the last — #40's 3-strike cap
+            // needs the attempt history to be visible, and a file retired after
+            // three silent failures is indistinguishable from one that was never
+            // seen. `size_bytes` and `elapsed_ms` are included because they are
+            // what make a pattern legible across many failures (a whole category
+            // failing instantly is a different problem from one 8K file timing
+            // out).
+            crate::audit::log_background(
+                pool,
+                crate::audit::AuditEvent::MediaConvertFailure,
+                Some(serde_json::json!({
+                    "filename": candidate.name,
+                    "source_path": candidate.rel_path,
+                    "category": conversion::media_type_str(candidate.target.category),
+                    "size_bytes": candidate.size,
+                    "error": e.to_string(),
+                    "elapsed_ms": file_start.elapsed().as_millis() as u64,
+                })),
             );
             // Drop any partial converted output the failed attempt left behind.
             let _ = tokio::fs::remove_file(&conv_abs).await;

@@ -264,6 +264,14 @@ pub struct AuditLogParams {
     pub limit: Option<u32>,
     /// Filter by source server name.  `"local"` = only this server's events.
     pub source_server: Option<String>,
+    /// Return only failure events (#45).
+    ///
+    /// Applied server-side on purpose. The obvious alternative — let the client
+    /// filter the page it already has — reads "no failures" whenever the most
+    /// recent 100 events happen to be logins, which is a worse answer than no
+    /// filter at all because it looks authoritative. The set comes from
+    /// [`crate::audit::FAILURE_EVENTS`].
+    pub failures_only: Option<bool>,
 }
 
 // ── Server log listing models ─────────────────────────────────────────────
