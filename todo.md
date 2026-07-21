@@ -11,7 +11,7 @@ Investigated against the tree at `b3e48f0` (branch `dev`).
 - One commit per issue, conventional commit, referencing `(#NN)`.
 - Every fix ships with a test that FAILS before the fix. No exceptions, especially the count/pagination work â€” those bugs survived precisely because nothing asserted them.
 - Never commit red. `cargo test --bin simple-photos-server`, `npm test` in `web/`, and the `tests/` pytest E2E suite must be green.
-- Known-red baseline before you start (see memory `e2e-preexisting-failures-2026-07-15`): `test_06` secure 401s (8), `test_20` dates (4), `test_58` Windows harness bug. Do not blame your diff for those; do not let them grow.
+- Known-red baseline before you start (see memory `e2e-preexisting-failures-2026-07-15`): `test_06` secure 401s (8), `test_20` dates (4), `test_58` Windows harness bug, and `test_18` audio 403s (6 — `audio_backup_enabled` defaults false; found during B1). Do not blame your diff for those; do not let them grow.
 
 ---
 
@@ -261,12 +261,21 @@ equivalent question is whether the memory cache is bounded at all.
 
 **Root cause:** the success path audits, the failure path does not. [server/src/ingest.rs:249-259](server/src/ingest.rs#L249-L259) calls `audit::log_background(AuditEvent::MediaConvert, â€¦)` on success. The failure branch at [ingest.rs:437-452](server/src/ingest.rs#L437-L452) emits only `tracing::warn!` â€” which goes to the process log, **not** the `audit` table the Server Logs tab reads. `AuditEvent` ([server/src/audit.rs](server/src/audit.rs)) has no failure variants for convert/import/encrypt at all.
 
-**Fix:**
-- [ ] Add `AuditEvent::MediaConvertFailure`, `ImportFailure`, `EncryptionFailure` (+ `as_str()` arms + the existing `as_str` unit test).
-- [ ] Emit `MediaConvertFailure` from `ingest.rs:437` with `filename`, `source_path`, `category`, `error`, `elapsed_ms`. Same treatment for the register failure at [ingest.rs:391](server/src/ingest.rs#L391) and the thumbnail failure at [ingest.rs:432](server/src/ingest.rs#L432).
-- [ ] Audit the upload-path failure at [server/src/photos/upload.rs:280](server/src/photos/upload.rs#L280).
-- [ ] Web: surface a "Failures" filter in the Server Logs tab (`web/src/components/diagnostics/ServerLogsTab.tsx`).
-- [ ] Test: force a conversion failure (corrupt fixture), assert a row lands in `audit` **and** is reachable through the logs endpoint.
+**Fix:** — **DONE**, commit `298fd99`
+- [x] Added `AuditEvent::MediaConvertFailure`, `ImportFailure`, `EncryptionFailure` — **plus a fourth, `ThumbnailFailure`**, which the plan above missed even though it names the thumbnail site. Also added `audit::FAILURE_EVENTS`, the single list both the server filter and the web client read.
+- [x] Emitted `MediaConvertFailure` / `ImportFailure` / `ThumbnailFailure` from the three `ingest.rs` failure branches with `filename`, `source_path`, `category`, `error`, `elapsed_ms`.
+- [x] Audited the upload-path failure in `photos/upload.rs` (`origin: "upload"` in details distinguishes it from the ingest path).
+- [x] `EncryptionFailure` from `photos/server_migrate.rs::record_encryption_failure`, on **every** attempt. Had to widen the existing `query_scalar` to `query_as` to pull `filename` alongside `encryption_attempts` — an audit row that names only a UUID is not actionable, which is the entire complaint in #45.
+- [x] Web: "Failures only" checkbox in the Server Logs tab, + the 4 new event colours.
+- [x] Test: `tests/test_90_pipeline_failure_audit.py` (4 tests) — corrupt `.mkv` upload, poll for the row, assert it names the file and carries the error. Verified RED against a rebuilt pre-fix binary: all 4 fail with "Saw 0 rows of that type". 6 server unit tests + 9 new web unit tests. 262 web green (was 253).
+
+**Traps this exposed:**
+1. **The filter had to be server-side.** Filtering the already-fetched 100-row page in the browser reports "no failures" whenever the newest 100 events happen to be logins — a *worse* answer than no filter, because it looks authoritative. `test_failures_only_finds_a_failure_buried_under_newer_successes` pins this with `limit=5`.
+2. **`source_server` was never sent.** `ServerLogsTab` has always passed it to `listAuditLogs`, which never serialized it — the Source dropdown filtered nothing, silently, while the server implemented it fully (including `"local"` ⇒ `source_server IS NULL`). Fixed in the same pass; do not add a param next to a dropped one.
+3. **The SSE stream ignores every filter.** The tab opens one `EventSource` for its lifetime and prepended *all* incoming events, so a `login_success` would land at the top of a "Failures only" list. Fixed with `matchesAuditFilters` + a `filtersRef` (a `useEffect` dep would reconnect on every dropdown change). This bug predates #45 — it also affected the event-type and IP filters.
+4. `log_background` is a fire-and-forget `tokio::spawn`, so the audit row is **not** guaranteed to exist when the HTTP response lands. The E2E polls; a bare sleep either flakes or wastes time.
+
+**New known-red discovered (NOT in the recorded baseline):** `test_18_media_conversion.py` has **6 audio failures** (`test_upload_aiff/m4a_converts_to_mp3`, `test_aiff_listed_as_audio`, 3 × `test_format_acceptance[aiff/aif/m4a-mp3]`) — all 403 Forbidden. Cause: `audio_backup_enabled` defaults **false**, and `upload.rs` correctly rejects audio outright under that policy; the tests never enable the toggle. Unrelated to any diff. Either enable the toggle in those tests or mark them skipped — do not "fix" the server.
 
 ### B2 â€” #40 Conversion ETA is wrong + add a 3-failure cap (High) â€” CONFIRMED
 
