@@ -8,6 +8,7 @@
 pub mod ffmpeg_gpu;
 pub mod gpu_probe;
 pub mod handlers;
+pub mod ladder;
 pub mod probe;
 
 pub use gpu_probe::HwAccelCapability;
