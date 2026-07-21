@@ -23,7 +23,7 @@ export default function BannerHost() {
     <div
       ref={setEl}
       aria-live="polite"
-      className="fixed inset-x-0 bottom-4 sm:bottom-6 z-50 flex flex-col-reverse items-center gap-2 px-4 max-h-[calc(100dvh-5rem)] overflow-y-auto overflow-x-hidden pointer-events-none"
+      className="fixed inset-x-0 safe-bottom-4 sm:safe-bottom-6 z-50 flex flex-col-reverse items-center gap-2 px-4 max-h-[calc(100dvh-5rem)] overflow-y-auto overflow-x-hidden pointer-events-none"
     />
   );
 }

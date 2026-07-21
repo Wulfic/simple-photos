@@ -435,7 +435,7 @@ export default function Gallery() {
             inputs gate only on local `uploading`, never on server-side
             conversion, so manual upload stays available during background work. */}
         {!isBackupView && !isBackupServer && (
-        <div className="fixed bottom-6 right-6 z-[60]">
+        <div className="fixed safe-bottom-6 right-6 z-[60]">
           {/* Upload menu popover */}
           {showUploadMenu && (
             <>

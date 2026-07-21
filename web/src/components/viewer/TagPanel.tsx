@@ -56,7 +56,7 @@ export default function TagPanel({ show, onClose, photoId }: TagPanelProps) {
         show ? "translate-y-0" : "translate-y-full"
       }`}
     >
-      <div className="bg-gray-900/95 backdrop-blur-sm border-t border-white/10 rounded-t-2xl max-h-[60vh] overflow-y-auto">
+      <div className="bg-gray-900/95 backdrop-blur-sm border-t border-white/10 rounded-t-2xl max-h-[60vh] overflow-y-auto safe-pb">
         <div className="flex items-center justify-between px-5 py-3 border-b border-white/10">
           <h3 className="text-white text-sm font-semibold">Tags</h3>
           <button

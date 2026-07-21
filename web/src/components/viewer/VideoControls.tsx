@@ -161,7 +161,9 @@ export default function VideoControls({
       }`}
       onClick={(e) => e.stopPropagation()}
     >
-      <div className="bg-gradient-to-t from-black/80 via-black/50 to-transparent pt-10 pb-3 px-4">
+      {/* safe-pb-3 replaces pb-3 and safe-px clears the landscape notch (#50) —
+          landscape is the orientation video is actually watched in. */}
+      <div className="bg-gradient-to-t from-black/80 via-black/50 to-transparent pt-10 safe-pb-3 px-4 safe-px">
         {/* Seek bar */}
         <div
           ref={seekBarRef}

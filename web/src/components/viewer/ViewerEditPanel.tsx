@@ -166,7 +166,7 @@ export default function ViewerEditPanel({
   }, [isAudio, editTab, setEditTab]);
 
   return (
-    <div ref={rootRef} className="absolute bottom-0 left-0 right-0 z-30 bg-black/90 border-t border-white/10 px-4 py-3 space-y-3">
+    <div ref={rootRef} className="absolute bottom-0 left-0 right-0 z-30 bg-black/90 border-t border-white/10 px-4 safe-px safe-py-3 space-y-3">
       {/* Tab switcher */}
       <div className="flex items-center justify-center gap-2">
         {showCrop && (

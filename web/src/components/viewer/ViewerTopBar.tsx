@@ -95,7 +95,7 @@ export default function ViewerTopBar({
     <div className={`absolute top-0 left-0 right-0 z-30 transition-opacity duration-300 ${
       showOverlay || editMode ? "opacity-100" : "opacity-0 pointer-events-none"
     }`}>
-    <div className="flex items-center justify-between px-4 py-3 bg-black/80">
+    <div className="flex items-center justify-between px-4 safe-px safe-top-bar bg-black/80">
       <button
         onClick={onBack}
         className="text-white hover:text-gray-300 flex items-center justify-center w-8 h-8 rounded-full hover:bg-white/20 transition-colors"

@@ -594,6 +594,15 @@ internal fun VideoControlsOverlay(
                         colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f))
                     )
                 )
+                // Clear the navigation bar (#50). An 8dp bottom margin put
+                // play/pause/mute directly under a 48dp 3-button nav bar.
+                //
+                // Placed AFTER .background on purpose: the gradient is sized
+                // before this inset, so it keeps painting behind the nav bar
+                // instead of cutting off in a hard line above it. Only the
+                // controls move up. Same ordering as ViewerEditPanel /
+                // ViewerTagPanel / ViewerInfoPanel.
+                .navigationBarsPadding()
                 // Consume taps within the controls area so they don't toggle visibility
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },

@@ -61,7 +61,7 @@ export default function ServerOfflineBanner() {
       <div
         role="status"
         aria-live="polite"
-        className="fixed top-0 inset-x-0 z-[9999] flex items-center justify-center gap-2 px-4 py-1.5 text-sm font-medium bg-green-600 text-white shadow-md"
+        className="fixed top-0 inset-x-0 z-[9999] flex items-center justify-center gap-2 px-4 safe-top-banner text-sm font-medium bg-green-600 text-white shadow-md"
       >
         <span aria-hidden>✓</span>
         <span>Reconnected</span>
@@ -79,7 +79,7 @@ export default function ServerOfflineBanner() {
     <div
       role="alert"
       aria-live="assertive"
-      className="fixed top-0 inset-x-0 z-[9999] flex items-center gap-2 px-4 py-1.5 text-sm bg-red-700 text-white shadow-md"
+      className="fixed top-0 inset-x-0 z-[9999] flex items-center gap-2 px-4 safe-top-banner text-sm bg-red-700 text-white shadow-md"
     >
       {/* Spinner */}
       <span
