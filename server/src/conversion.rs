@@ -11,7 +11,7 @@
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use axum::extract::State;
@@ -189,6 +189,56 @@ static CONV_STALL_COUNT: AtomicI64 = AtomicI64::new(0);
 /// Epoch-millis of the most recent stall recovery, or `0` if none this boot.
 static CONV_LAST_STALL_MS: AtomicI64 = AtomicI64::new(0);
 
+/// Work-weighted ETA ledger for the current conversion batch (#40).
+///
+/// Deliberately **parallel to** `CONV_TOTAL`/`CONV_DONE` rather than a
+/// replacement for them: those are counts, they render the "3 / 4" banner text,
+/// and they carry #11's pinned-denominator fix. This tracks bytes per category
+/// so the ETA can stop treating a 4K transcode and a HEIC still as equal work.
+///
+/// A plain `Mutex` — every critical section is a handful of float ops with no
+/// `.await`, the same argument `status::registry()` makes.
+fn eta_ledger() -> &'static Mutex<crate::progress::ConversionEta> {
+    static LEDGER: OnceLock<Mutex<crate::progress::ConversionEta>> = OnceLock::new();
+    LEDGER.get_or_init(|| Mutex::new(crate::progress::ConversionEta::new()))
+}
+
+/// Monotonic-ish seconds for the ETA ledger. Derived from the same wall clock
+/// as the rest of this module's timestamps; the ledger tolerates a backwards
+/// step by discarding that sample rather than dividing by a negative delta.
+fn now_secs() -> f64 {
+    now_ms() as f64 / 1000.0
+}
+
+/// Register one candidate's work with the ETA ledger, before conversion starts.
+/// The pass calls this for every candidate once it has enumerated the batch.
+pub fn eta_enqueue(cat: MediaCategory, size_bytes: i64) {
+    eta_ledger().lock().unwrap().enqueue(cat, size_bytes);
+}
+
+/// Mark that a file of `cat` has begun converting — starts the wall-clock the
+/// first throughput sample for that category is measured against.
+pub fn eta_start(cat: MediaCategory) {
+    eta_ledger().lock().unwrap().start(cat, now_secs());
+}
+
+/// Charge one finished file's weight. Called on **success and failure alike**:
+/// a failed transcode still consumed the wall-clock the rate is measured
+/// against, and skipping it would make the throughput climb silently as
+/// failures accumulate — and leave the remaining weight never draining to zero.
+pub fn eta_complete(cat: MediaCategory, size_bytes: i64) {
+    eta_ledger()
+        .lock()
+        .unwrap()
+        .complete(cat, size_bytes, now_secs());
+}
+
+/// Drop the ledger so one batch's weights cannot leak into the next batch's
+/// estimate. Paired with the count reset in [`raw_start`] / [`clear_start_clock`].
+fn eta_reset() {
+    eta_ledger().lock().unwrap().reset();
+}
+
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -207,6 +257,11 @@ fn arm_start_clock_if_unset() {
 fn clear_start_clock() {
     CONV_STARTED_MS.store(0, Ordering::Relaxed);
     CONV_LAST_PROGRESS_MS.store(0, Ordering::Relaxed);
+    // Drop the weighted ledger with the clocks. NOT redundant with the reset in
+    // `raw_start`: the interactive upload path (`progress_add`) re-arms the
+    // banner without going through `raw_start`, so an abandoned pass's
+    // outstanding weight would otherwise be quoted to the next upload (#40).
+    eta_reset();
 }
 
 /// Stamp "progress just happened" for the stuck-job watchdog (#18). Called on
@@ -222,6 +277,9 @@ fn raw_start(total: i64) {
     CONV_DONE.store(0, Ordering::Relaxed);
     CONV_TOTAL.store(total, Ordering::Relaxed);
     CONV_ACTIVE.store(true, Ordering::Relaxed);
+    // A fresh batch resets the weighted ledger too, so the pass that follows
+    // enqueues into an empty one (#40).
+    eta_reset();
     // Fresh batch → reset the ETA clock and arm the watchdog progress clock.
     let now = now_ms();
     CONV_STARTED_MS.store(now, Ordering::Relaxed);
@@ -961,22 +1019,33 @@ async fn convert_audio(input: &str, output: &str) -> bool {
 
 // ── Conversion status endpoint ───────────────────────────────────────────────
 
-/// Estimated seconds remaining for the active conversion batch (item #4).
-/// Uses the same throughput estimator as the encryption banner
-/// ([`crate::status::progress_math`]); `None` until at least one item finishes
-/// (no throughput sample yet) or when idle.
+/// Estimated seconds remaining for the active conversion batch (item #4, #40).
+///
+/// Prefers the **work-weighted, per-category** estimator ([`crate::progress::ConversionEta`]),
+/// which is what makes a mixed image-then-video queue's ETA survive the category
+/// boundary. Falls back to the count-based [`crate::progress::progress_math`]
+/// when the ledger is empty — that is the client-declared upload batch
+/// (`POST /api/admin/conversion-batch/start`), whose wire shape carries a count
+/// and no sizes, so there is no weight to estimate from. `None` when idle, or
+/// when neither estimator has anything to go on.
 pub fn conversion_eta_seconds() -> Option<f64> {
     let (active, total, done) = progress_snapshot();
     if !active {
         return None;
     }
+
+    // The conversion pass populates this; a client-declared upload batch does not.
+    if let Some(eta) = eta_ledger().lock().unwrap().eta_seconds() {
+        return Some(eta);
+    }
+
     let started = CONV_STARTED_MS.load(Ordering::Relaxed);
     if started == 0 {
         return None;
     }
     let elapsed = (now_ms() - started) as f64 / 1000.0;
     let remaining = (total - done).max(0);
-    let (_done, eta) = crate::status::progress_math(total, remaining, elapsed);
+    let (_done, eta) = crate::progress::progress_math(total, remaining, elapsed);
     eta
 }
 
@@ -1130,6 +1199,107 @@ mod tests {
         L.get_or_init(|| std::sync::Mutex::new(()))
             .lock()
             .unwrap_or_else(|e| e.into_inner())
+    }
+
+    // ── ETA ledger wiring (#40) ─────────────────────────────────────────────
+    //
+    // The arithmetic is pinned by pure tests in `crate::progress`. These cover
+    // the part hand-wired here, which those cannot reach: that the weighted
+    // ledger is *preferred* over the count-based estimator, that it is reset by
+    // the batch lifecycle, and that an empty ledger falls back rather than
+    // suppressing the ETA entirely.
+
+    #[test]
+    fn a_weighted_ledger_outranks_the_count_based_estimator() {
+        let _lock = global_state_lock();
+        batch_end();
+
+        // 10 items by count; by weight, one 2 GB video dominates.
+        let _guard = ConversionBatchGuard::start(10);
+        eta_enqueue(MediaCategory::Image, 10 * 1024 * 1024);
+        eta_enqueue(MediaCategory::Video, 2 * 1024 * 1024 * 1024);
+        eta_start(MediaCategory::Image);
+        eta_complete(MediaCategory::Image, 10 * 1024 * 1024);
+
+        let eta = conversion_eta_seconds().expect("ledger has outstanding work");
+        // 2 GB of video at the seeded rate is ~1000s. The count-based estimator
+        // would report a fraction of a second here (1 of 10 done, instantly).
+        assert!(
+            eta > 300.0,
+            "the weighted ledger must win; got {eta:.1}s, which is the \
+             count-based answer"
+        );
+        batch_end();
+    }
+
+    #[test]
+    fn an_empty_ledger_falls_back_to_the_count_based_estimator() {
+        let _lock = global_state_lock();
+        batch_end();
+
+        // The client-declared upload path: a count, no sizes. Nothing is
+        // enqueued, so the ETA must still come from somewhere.
+        batch_start(4);
+        std::thread::sleep(std::time::Duration::from_millis(15));
+        progress_tick();
+
+        assert!(
+            conversion_eta_seconds().is_some(),
+            "an upload batch carries no weight, so the count-based estimator \
+             must still answer — otherwise #40 removes the ETA it was fixing"
+        );
+        batch_end();
+    }
+
+    #[test]
+    fn a_new_batch_does_not_inherit_the_previous_batch_s_weights() {
+        let _lock = global_state_lock();
+        batch_end();
+
+        {
+            let _guard = ConversionBatchGuard::start(1);
+            eta_enqueue(MediaCategory::Video, 4 * 1024 * 1024 * 1024);
+        }
+        // Guard dropped ⇒ batch finished ⇒ ledger cleared. A fresh pass that
+        // enqueues one small image must not be quoted the old 4 GB tail.
+        let _guard = ConversionBatchGuard::start(1);
+        eta_enqueue(MediaCategory::Image, 1024 * 1024);
+        let eta = conversion_eta_seconds().expect("one image outstanding");
+        assert!(
+            eta < 10.0,
+            "a finished batch's weights leaked into the next estimate: {eta:.1}s"
+        );
+        batch_end();
+    }
+
+    /// The reset in `clear_start_clock` is NOT redundant with the one in
+    /// `raw_start`, and this is the path that proves it.
+    ///
+    /// `progress_add` — the interactive upload path — arms the banner *without*
+    /// going through `raw_start`, so it performs no reset of its own. If a
+    /// conversion pass is abandoned mid-flight (the guard's `Drop`, #18) with
+    /// weight still outstanding, and only `raw_start` reset the ledger, the very
+    /// next upload would be quoted the dead pass's video tail.
+    #[test]
+    fn an_abandoned_pass_does_not_haunt_the_next_upload_s_eta() {
+        let _lock = global_state_lock();
+        batch_end();
+
+        {
+            let _guard = ConversionBatchGuard::start(2);
+            // A 4 GB tail that is never charged — the pass is cancelled below.
+            eta_enqueue(MediaCategory::Video, 4 * 1024 * 1024 * 1024);
+        } // Drop ⇒ progress_finish ⇒ clear_start_clock.
+
+        // An interactive upload re-arms the banner. No new batch, no `raw_start`.
+        progress_add(1);
+        let eta = conversion_eta_seconds();
+        assert!(
+            eta.is_none_or(|e| e < 100.0),
+            "the abandoned pass's 4 GB tail leaked into an unrelated upload's \
+             ETA: {eta:?}"
+        );
+        batch_end();
     }
 
     #[test]

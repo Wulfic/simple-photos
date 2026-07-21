@@ -54,6 +54,7 @@ mod ingest;
 mod media;
 mod photos;
 mod process;
+mod progress;
 mod ratelimit;
 mod routes;
 mod sanitize;

@@ -56,8 +56,11 @@ export default function ConversionBanner() {
         setStalled(true);
       }
 
-      // ETA is now server-authoritative (item #4) — same throughput estimator
-      // as the encryption banner, so no client-side clock to drift.
+      // ETA is server-authoritative (item #4), so there is no client-side clock
+      // to drift. Since #40 it is *not* the encryption banner's estimator: the
+      // conversion queue deliberately mixes categories whose per-item costs
+      // differ by orders of magnitude, so it uses the work-weighted,
+      // per-category one instead (server `progress::ConversionEta`).
       setEta(res.eta_seconds != null ? formatEta(res.eta_seconds) : null);
     } catch {
       // Non-critical — will retry on next interval

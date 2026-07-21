@@ -14,7 +14,9 @@ export interface ConversionStatus {
   active: boolean;
   total: number;
   done: number;
-  /** Server-authoritative seconds remaining, or null until throughput is known. */
+  /** Server-authoritative seconds remaining, or null when idle / not estimable.
+   *  Work-weighted and per-category since #40, so it is available from the
+   *  start of a batch rather than only after the first file completes. */
   eta_seconds: number | null;
   /** Epoch-ms of the last observed progress, or 0 when idle. Frozen while a
    *  pass is wedged — the client uses this to offer a manual reset (#18). */
@@ -282,7 +284,7 @@ export const adminApi = {
     }),
 
   /** Get conversion pipeline status. `eta_seconds` is the server-authoritative
-   *  estimate of time remaining (item #4), null until throughput is known. */
+   *  estimate of time remaining (item #4, reworked in #40), null when idle. */
   conversionStatus: () =>
     request<ConversionStatus>("/admin/conversion-status"),
 

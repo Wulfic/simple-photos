@@ -62,25 +62,11 @@ struct UserStatus {
     contributions: HashMap<String, Contribution>,
 }
 
-/// Pure throughput math for a progress ETA. Given the batch denominator, the
-/// current pending count, and how long the batch has been running, compute
-/// `(done, eta_seconds)`. `eta` is `None` until at least one item has finished
-/// (no throughput sample yet). Extracted so it can be unit-tested without a DB
-/// or wall-clock, and shared with the conversion banner ETA (item #4).
-pub(crate) fn progress_math(
-    batch_total: i64,
-    total_pending: i64,
-    elapsed_secs: f64,
-) -> (i64, Option<f64>) {
-    let done = (batch_total - total_pending).max(0);
-    let eta = if done > 0 && elapsed_secs > 0.0 {
-        let per_item = elapsed_secs / done as f64;
-        Some((total_pending as f64) * per_item)
-    } else {
-        None
-    };
-    (done, eta)
-}
+// The count-based ETA estimator now lives in `crate::progress`, alongside the
+// work-weighted one the conversion banner needs (#40). The encryption banner
+// deliberately stays on this one: its queue items are one photo each, so there
+// is no cost heterogeneity for a weighted estimator to correct.
+use crate::progress::progress_math;
 
 /// Global registry: `user_id` → tracking state. Guarded by a plain `Mutex`
 /// because every critical section is a handful of map ops with no `.await`.
@@ -231,39 +217,4 @@ pub async fn encryption_status(
     })))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn no_done_yet_has_no_eta() {
-        // Nothing finished → no throughput sample → ETA unknown.
-        let (done, eta) = progress_math(100, 100, 5.0);
-        assert_eq!(done, 0);
-        assert!(eta.is_none());
-    }
-
-    #[test]
-    fn eta_scales_with_remaining() {
-        // 10 of 100 done in 10s ⇒ 1s/item ⇒ 90 remaining ⇒ ~90s.
-        let (done, eta) = progress_math(100, 90, 10.0);
-        assert_eq!(done, 10);
-        assert!((eta.unwrap() - 90.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn done_is_clamped_non_negative() {
-        // Pending briefly exceeds the denominator (race) — done floors at 0.
-        let (done, eta) = progress_math(50, 60, 5.0);
-        assert_eq!(done, 0);
-        assert!(eta.is_none());
-    }
-
-    #[test]
-    fn zero_elapsed_yields_no_eta() {
-        // Guard against divide-by-zero on the very first tick.
-        let (done, eta) = progress_math(100, 50, 0.0);
-        assert_eq!(done, 50);
-        assert!(eta.is_none());
-    }
-}
+// `progress_math`'s unit tests moved to `crate::progress` with the function.

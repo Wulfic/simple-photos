@@ -232,6 +232,11 @@ async fn process_candidate(
             conversion::heartbeat();
         }
     });
+    // Starts the wall-clock this category's throughput is measured against
+    // (#40). Only the first file of a category does anything, so the measured
+    // rate covers the whole lane rather than one encode at a time — which is
+    // what makes it a throughput the *remaining* queue will actually see.
+    conversion::eta_start(candidate.target.category);
     let convert_result = conversion::convert_file(
         &candidate.abs_path,
         &conv_abs,
@@ -244,6 +249,7 @@ async fn process_candidate(
     match convert_result {
         Ok(()) => {
             conversion::progress_tick();
+            conversion::eta_complete(candidate.target.category, candidate.size);
             tracing::info!(
                 file = %candidate.name,
                 category = ?candidate.target.category,
@@ -521,6 +527,12 @@ async fn process_candidate(
         }
         Err(e) => {
             conversion::progress_tick();
+            // Charge the weight on the failure path too (#40). A failed
+            // transcode still burned the wall-clock the throughput is measured
+            // against, so skipping it would make the rate climb silently as
+            // failures accumulate — and leave this file's weight outstanding
+            // forever, so the ETA never drains to zero.
+            conversion::eta_complete(candidate.target.category, candidate.size);
             // Conversion failed (unsupported codec, GPU failure with CPU
             // fallback disabled, a transcode crash, …). Do NOT silently drop
             // the file — that loses data and makes the library smaller than
@@ -1109,6 +1121,18 @@ async fn run_conversion_pass_inner(
     // `.finish()` explicitly after the loop to preserve banner timing; the drop
     // is purely the panic/cancellation safety net.
     let batch_guard = conversion::ConversionBatchGuard::start(candidates.len() as i64);
+
+    // Register each candidate's *work* with the weighted ETA ledger (#40). The
+    // count-based estimator treats a 5 MB HEIC and a 4 GB 4K video as equal, and
+    // because the sort above puts every image ahead of every video, it spends
+    // the whole fast phase learning a per-item cost that is orders of magnitude
+    // too small — then the ETA explodes at the video tail.
+    //
+    // MUST come after `ConversionBatchGuard::start`: that resets the ledger
+    // along with the counters, so enqueuing first would be silently wiped.
+    for c in &candidates {
+        conversion::eta_enqueue(c.target.category, c.size);
+    }
 
     let conv_dir = storage_root.join(".converted");
 
