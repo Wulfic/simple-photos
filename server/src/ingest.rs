@@ -207,6 +207,25 @@ async fn process_candidate(
     // so a file that somehow never returns (e.g. an unkillable ffmpeg on a dead
     // network mount) stops heartbeating and the 2h stuck-job watchdog can still
     // force-recover the pipeline.
+    // #40: charge this attempt BEFORE the encode, not in the failure handler.
+    // The files that most need retiring are the ones that never reach a failure
+    // handler at all — an ffmpeg that OOMs, a hard kill, a pass cancelled by the
+    // stuck-job watchdog. Charging afterwards means those specific files are
+    // never counted and loop forever, which is the failure mode this cap exists
+    // to end. Same reasoning as the rendition attempt cap in migration 036.
+    //
+    // The row is written even though the file may be about to succeed; the
+    // success path clears it below.
+    let attempt = crate::photos::register::charge_conversion_attempt(
+        pool,
+        admin_id,
+        &candidate.rel_path,
+        candidate.size,
+        candidate.modified.as_deref(),
+        &utc_now_iso(),
+    )
+    .await;
+
     let heartbeat = tokio::spawn(async {
         for _ in 0..60 {
             tokio::time::sleep(std::time::Duration::from_secs(20)).await;
@@ -340,6 +359,35 @@ async fn process_candidate(
                     );
                     // Clean up the converted file we just created
                     let _ = tokio::fs::remove_file(&conv_abs).await;
+                    // #40: record the dead end so the next pass does not
+                    // transcode this file again just to throw the output away.
+                    //
+                    // This is the most expensive loop in the issue. On a Google
+                    // Takeout library the same bytes appear in the date folder
+                    // AND in every album folder; the date-folder copy registers
+                    // first, so every album copy lands here — after a full
+                    // GPU-then-CPU transcode — on every single pass, forever.
+                    // The native-file walk has skipped exactly this case since
+                    // migration 031 (`record_scan_skip(.., "hash_duplicate")`);
+                    // the conversion walk never learned to.
+                    //
+                    // Recorded as a TERMINAL `hash_duplicate`, not as a
+                    // conversion attempt: nothing failed, and the answer is
+                    // deterministic, so spending three transcodes to reach it
+                    // three times would be its own bug. Carrying `photo_hash`
+                    // also puts the row under 031's delete-triggers, so deleting
+                    // the photo this deduped against re-admits the copy.
+                    crate::photos::register::record_scan_skip_path(
+                        pool,
+                        admin_id,
+                        &candidate.rel_path,
+                        candidate.size,
+                        candidate.modified.as_deref(),
+                        crate::photos::scan_skip::REASON_HASH_DUPLICATE,
+                        Some(hash),
+                        &utc_now_iso(),
+                    )
+                    .await;
                     return false;
                 }
             }
@@ -415,6 +463,13 @@ async fn process_candidate(
                 }
                 Ok(_) => {}
             }
+
+            // #40: the file converted and registered, so the attempt row has
+            // done its job. Left behind it is normally invisible — the path is
+            // in `existing_set` from now on — but it would resurface as a
+            // spurious retirement if this photo were later deleted and the file
+            // re-scanned, retiring a file that demonstrably converts fine.
+            crate::photos::register::clear_scan_skip(pool, admin_id, &candidate.rel_path).await;
 
             // Motion photos keep their MP4 trailer in the ORIGINAL file
             // (conversion drops it) — extract and store it now so the
@@ -503,6 +558,37 @@ async fn process_candidate(
                     "elapsed_ms": file_start.elapsed().as_millis() as u64,
                 })),
             );
+            // #40: announce retirement when this attempt was the last one. A
+            // file dropped after three silent failures is otherwise
+            // indistinguishable from one that was never scanned — which is the
+            // complaint in #45 restated one level up. Emitted in ADDITION to the
+            // per-attempt failure above, because "this failed" and "we have
+            // stopped trying" are different facts and only the second one
+            // explains a file that never appears again.
+            if attempt.map(crate::photos::scan_skip::is_retired) == Some(true) {
+                tracing::warn!(
+                    file = %candidate.name,
+                    attempts = crate::photos::scan_skip::CONVERSION_MAX_ATTEMPTS,
+                    "[INGEST] Retiring file after repeated conversion failures — \
+                     it will not be retried until it changes on disk"
+                );
+                crate::audit::log_background(
+                    pool,
+                    crate::audit::AuditEvent::ConversionRetired,
+                    Some(serde_json::json!({
+                        "filename": candidate.name,
+                        "source_path": candidate.rel_path,
+                        "category": conversion::media_type_str(candidate.target.category),
+                        "attempts": crate::photos::scan_skip::CONVERSION_MAX_ATTEMPTS,
+                        "size_bytes": candidate.size,
+                        "error": e.to_string(),
+                        // Told to the user rather than left implicit: this is
+                        // the only way back, and it is not discoverable.
+                        "retry_hint": "modify or replace the file on disk to retry",
+                    })),
+                );
+            }
+
             // Drop any partial converted output the failed attempt left behind.
             let _ = tokio::fs::remove_file(&conv_abs).await;
 
@@ -529,6 +615,24 @@ async fn process_candidate(
                 .await
                 .unwrap_or(false);
                 if dup_exists {
+                    // Same deterministic dead end as the success path above, but
+                    // reached after the transcode FAILED: the original's bytes
+                    // are already registered under another path, so there is
+                    // nothing to register and nothing to retry. Terminal, and
+                    // it supersedes the attempt charged at the top of this
+                    // function — burning strikes on a file whose real verdict is
+                    // "duplicate" would retire it with a misleading reason.
+                    crate::photos::register::record_scan_skip_path(
+                        pool,
+                        admin_id,
+                        &candidate.rel_path,
+                        candidate.size,
+                        candidate.modified.as_deref(),
+                        crate::photos::scan_skip::REASON_HASH_DUPLICATE,
+                        Some(hash),
+                        &now,
+                    )
+                    .await;
                     return false;
                 }
             }
@@ -801,8 +905,39 @@ async fn run_conversion_pass_inner(
         }
     }
 
+    // Load the scan-skip cache (migration 031, extended by 038). The conversion
+    // walk never consulted it before #40, so a file that fails conversion and
+    // leaves no `photos` row was re-probed and re-transcoded on every pass
+    // forever. Keyed by rel_path; the verdict per row is
+    // `crate::photos::scan_skip::skip_verdict`, shared with the autoscan walk.
+    let mut skip_map: std::collections::HashMap<String, crate::photos::scan_skip::SkipRow> =
+        std::collections::HashMap::new();
+    {
+        let mut rows = sqlx::query_as::<_, (String, i64, Option<String>, String, i64)>(
+            "SELECT rel_path, size_bytes, mtime, reason, attempt_count \
+             FROM scan_skipped_paths WHERE user_id = ?",
+        )
+        .bind(&admin_id)
+        .fetch(&pool);
+        while let Some((rel_path, size_bytes, mtime, reason, attempt_count)) =
+            rows.try_next().await.unwrap_or(None)
+        {
+            skip_map.insert(
+                rel_path,
+                crate::photos::scan_skip::SkipRow {
+                    size_bytes,
+                    mtime,
+                    reason,
+                    attempt_count,
+                },
+            );
+        }
+    }
+
     // ── Step 2: Walk directory and collect convertible candidates ─────────
     let mut candidates: Vec<ConvertCandidate> = Vec::new();
+    let mut stale_skip_paths: Vec<String> = Vec::new();
+    let mut retired_skipped: u64 = 0;
     let mut queue = vec![storage_root.clone()];
 
     while let Some(dir) = queue.pop() {
@@ -844,6 +979,45 @@ async fn run_conversion_pass_inner(
                         continue;
                     }
 
+                    // Size + mtime are read BEFORE the probe below, not after
+                    // it as they used to be, because the skip check needs them
+                    // and the whole point of that check is to happen before an
+                    // ffprobe is spawned. This is one `stat` on an inode the
+                    // walk has already touched via `file_type()`; the probe it
+                    // guards is a process spawn plus, for opaque containers, a
+                    // bounded decode.
+                    let file_meta = entry.metadata().await.ok();
+                    let size = file_meta.as_ref().map(|m| m.len() as i64).unwrap_or(0);
+                    let modified = file_meta.and_then(|m| {
+                        m.modified().ok().map(|t| {
+                            let dt: chrono::DateTime<chrono::Utc> = t.into();
+                            normalize_iso_timestamp(&dt.to_rfc3339())
+                        })
+                    });
+
+                    // #40: a file that has burned its conversion attempts is
+                    // left alone until it changes on disk. Below the cap it
+                    // falls through and is retried; a file whose size or mtime
+                    // moved is un-retired by dropping the stale row (migration
+                    // 031's invalidation, which doubles as this cap's escape
+                    // hatch).
+                    if let Some(row) = skip_map.get(&rel_path) {
+                        match crate::photos::scan_skip::skip_verdict(
+                            row,
+                            size,
+                            modified.as_deref(),
+                        ) {
+                            crate::photos::scan_skip::SkipVerdict::Skip => {
+                                retired_skipped += 1;
+                                continue;
+                            }
+                            crate::photos::scan_skip::SkipVerdict::Stale => {
+                                stale_skip_paths.push(rel_path.clone());
+                            }
+                            crate::photos::scan_skip::SkipVerdict::Retry => {}
+                        }
+                    }
+
                     // Extension is sufficient for formats that are *never*
                     // browser-native. For opaque containers (.mp4/.mov/...)
                     // the extension is a guess, so ask ffprobe what is
@@ -861,15 +1035,6 @@ async fn run_conversion_pass_inner(
                         continue;
                     }
 
-                    let file_meta = entry.metadata().await.ok();
-                    let size = file_meta.as_ref().map(|m| m.len() as i64).unwrap_or(0);
-                    let modified = file_meta.and_then(|m| {
-                        m.modified().ok().map(|t| {
-                            let dt: chrono::DateTime<chrono::Utc> = t.into();
-                            normalize_iso_timestamp(&dt.to_rfc3339())
-                        })
-                    });
-
                     candidates.push(ConvertCandidate {
                         abs_path,
                         rel_path,
@@ -881,6 +1046,33 @@ async fn run_conversion_pass_inner(
                 }
             }
         }
+    }
+
+    // Drop skip rows whose file changed on disk, so the fresh evaluation above
+    // isn't shadowed next pass by a row describing bytes that are gone. Mirrors
+    // the autoscan walk's handling of the same cache.
+    for stale in &stale_skip_paths {
+        if let Err(e) =
+            sqlx::query("DELETE FROM scan_skipped_paths WHERE user_id = ? AND rel_path = ?")
+                .bind(&admin_id)
+                .bind(stale)
+                .execute(&pool)
+                .await
+        {
+            tracing::warn!(rel_path = %stale, error = %e, "[INGEST] Failed to clear stale scan-skip row");
+        }
+    }
+
+    if retired_skipped > 0 {
+        // Logged at info, not debug: this number is the difference between "the
+        // server is idle" and "the server is quietly refusing to convert your
+        // files", and #40 exists because that was invisible.
+        tracing::info!(
+            "[INGEST] Skipped {} file(s) that exhausted their conversion attempts \
+             (cap {}) — they are retried if the file changes on disk",
+            retired_skipped,
+            crate::photos::scan_skip::CONVERSION_MAX_ATTEMPTS
+        );
     }
 
     if candidates.is_empty() {

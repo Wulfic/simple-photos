@@ -26,6 +26,7 @@ pub mod models;
 pub mod motion;
 pub mod register;
 pub mod scan;
+pub mod scan_skip;
 pub mod serve;
 pub mod server_migrate;
 pub mod server_migrate_encrypt;

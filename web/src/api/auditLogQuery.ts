@@ -22,6 +22,7 @@ export const FAILURE_EVENTS: ReadonlySet<string> = new Set([
   "import_failure",
   "encryption_failure",
   "thumbnail_failure",
+  "conversion_retired",
   "login_failure",
   "totp_login_failure",
   "rate_limited",

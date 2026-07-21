@@ -33,6 +33,10 @@ const EVENT_COLORS: Record<string, string> = {
   import_failure: "text-red-600 dark:text-red-400",
   encryption_failure: "text-red-600 dark:text-red-400",
   thumbnail_failure: "text-red-600 dark:text-red-400",
+  // #40: terminal, not just another failure — amber rather than red so a file
+  // the server has GIVEN UP on is distinguishable at a glance from one that
+  // merely failed this pass and will be retried.
+  conversion_retired: "text-amber-600 dark:text-amber-400",
   // Photos
   photo_register: "text-cyan-600 dark:text-cyan-400",
   photo_favorite: "text-pink-500 dark:text-pink-400",

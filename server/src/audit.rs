@@ -101,6 +101,14 @@ pub enum AuditEvent {
     /// and downloadable — but it renders as a placeholder forever, which
     /// otherwise looks like a client bug.
     ThumbnailFailure,
+    /// A file exhausted its conversion attempts (#40) and will not be tried
+    /// again until it changes on disk. **Terminal**, and deliberately distinct
+    /// from `MediaConvertFailure`: the per-attempt failures say "this went
+    /// wrong", this one says "we have stopped trying", and a user looking for
+    /// why a file never appeared needs to see the second one. Without it a file
+    /// retired after three failures is indistinguishable from one that was
+    /// never scanned.
+    ConversionRetired,
 
     // ── Photos ───────────────────────────────────────────────────────
     /// Photo registered from disk
@@ -195,6 +203,7 @@ pub const FAILURE_EVENTS: &[AuditEvent] = &[
     AuditEvent::ImportFailure,
     AuditEvent::EncryptionFailure,
     AuditEvent::ThumbnailFailure,
+    AuditEvent::ConversionRetired,
     AuditEvent::LoginFailure,
     AuditEvent::TotpLoginFailure,
     AuditEvent::RateLimited,
@@ -227,6 +236,7 @@ impl AuditEvent {
             AuditEvent::ImportFailure => "import_failure",
             AuditEvent::EncryptionFailure => "encryption_failure",
             AuditEvent::ThumbnailFailure => "thumbnail_failure",
+            AuditEvent::ConversionRetired => "conversion_retired",
             // Photos
             AuditEvent::PhotoRegister => "photo_register",
             AuditEvent::PhotoFavorite => "photo_favorite",

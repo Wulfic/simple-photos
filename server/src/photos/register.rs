@@ -125,15 +125,49 @@ async fn record_scan_skip(
     photo_hash: Option<&str>,
     now: &str,
 ) {
+    record_scan_skip_path(
+        pool,
+        user_id,
+        &cand.rel_path,
+        cand.size,
+        cand.modified.as_deref(),
+        reason,
+        photo_hash,
+        now,
+    )
+    .await;
+}
+
+/// `record_scan_skip` for callers that hold the fields loose rather than a
+/// `NativeCandidate` — specifically `crate::ingest`, whose candidates are
+/// `ConvertCandidate`s. Same cache, same invalidation, so it must be the same
+/// write; a second copy of this INSERT is how the two walks would drift.
+///
+/// Records a **terminal** verdict and leaves `attempt_count` at its default:
+/// `INSERT OR REPLACE` deletes and re-inserts the row, so any attempt history is
+/// dropped. That is correct here and wrong for charging an attempt — see
+/// [`charge_conversion_attempt`], which is why the two are separate functions
+/// rather than one with a flag.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn record_scan_skip_path(
+    pool: &SqlitePool,
+    user_id: &str,
+    rel_path: &str,
+    size: i64,
+    modified: Option<&str>,
+    reason: &str,
+    photo_hash: Option<&str>,
+    now: &str,
+) {
     if let Err(e) = sqlx::query(
         "INSERT OR REPLACE INTO scan_skipped_paths \
          (user_id, rel_path, size_bytes, mtime, reason, photo_hash, created_at) \
          VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(user_id)
-    .bind(&cand.rel_path)
-    .bind(cand.size)
-    .bind(&cand.modified)
+    .bind(rel_path)
+    .bind(size)
+    .bind(modified)
     .bind(reason)
     .bind(photo_hash)
     .bind(now)
@@ -141,10 +175,93 @@ async fn record_scan_skip(
     .await
     {
         tracing::warn!(
-            file = %cand.rel_path,
+            file = %rel_path,
             reason = %reason,
             error = %e,
             "Failed to record scan-skip row (file will be re-hashed next pass)"
+        );
+    }
+}
+
+/// Charge one conversion attempt against `rel_path` and return the new total
+/// (#40). Called **before** the transcode runs, so a file that OOMs or
+/// hard-kills ffmpeg — never reaching any error handler — still burns its
+/// attempt and is eventually retired.
+///
+/// Deliberately **not** `INSERT OR REPLACE`: that deletes and re-inserts, which
+/// resets `attempt_count` to its DEFAULT 0 and turns a three-strike cap into an
+/// infinite retry loop that merely looks bounded. `ON CONFLICT DO UPDATE` reads
+/// the stored value and increments it. The same distinction bit migration 035's
+/// rendition triggers (an upsert taking the DO UPDATE branch fires UPDATE
+/// triggers, not INSERT ones), so it is a known-sharp edge in this codebase.
+///
+/// `size_bytes`/`mtime` are refreshed on every charge so the row keeps
+/// describing the file it is counting; if the user replaces the file, the walk's
+/// staleness check (migration 031) drops the row and the count starts over,
+/// which is the retry escape hatch.
+///
+/// Returns `None` if the write failed, in which case the caller proceeds
+/// uncapped for this pass — losing a cap for one pass is strictly better than
+/// refusing to convert a file because a cache write failed.
+pub(crate) async fn charge_conversion_attempt(
+    pool: &SqlitePool,
+    user_id: &str,
+    rel_path: &str,
+    size: i64,
+    modified: Option<&str>,
+    now: &str,
+) -> Option<i64> {
+    let result: Result<(i64,), _> = sqlx::query_as(
+        "INSERT INTO scan_skipped_paths \
+         (user_id, rel_path, size_bytes, mtime, reason, photo_hash, created_at, attempt_count) \
+         VALUES (?, ?, ?, ?, ?, NULL, ?, 1) \
+         ON CONFLICT(user_id, rel_path) DO UPDATE SET \
+           attempt_count = scan_skipped_paths.attempt_count + 1, \
+           size_bytes    = excluded.size_bytes, \
+           mtime         = excluded.mtime, \
+           reason        = excluded.reason, \
+           photo_hash    = NULL \
+         RETURNING attempt_count",
+    )
+    .bind(user_id)
+    .bind(rel_path)
+    .bind(size)
+    .bind(modified)
+    .bind(crate::photos::scan_skip::REASON_CONVERSION_FAILED)
+    .bind(now)
+    .fetch_one(pool)
+    .await;
+
+    match result {
+        Ok((count,)) => Some(count),
+        Err(e) => {
+            tracing::warn!(
+                file = %rel_path,
+                error = %e,
+                "[INGEST] Failed to charge a conversion attempt — this file is \
+                 uncapped for this pass and may be retried again next pass"
+            );
+            None
+        }
+    }
+}
+
+/// Drop a skip row once the path is genuinely registered, so a file that
+/// succeeded on its second or third attempt does not leave a `conversion_failed`
+/// row behind. Such a row is normally invisible (the path is in `existing_set`
+/// from then on), but it would resurface as a spurious retirement if the photo
+/// were ever deleted and the file re-scanned.
+pub(crate) async fn clear_scan_skip(pool: &SqlitePool, user_id: &str, rel_path: &str) {
+    if let Err(e) = sqlx::query("DELETE FROM scan_skipped_paths WHERE user_id = ? AND rel_path = ?")
+        .bind(user_id)
+        .bind(rel_path)
+        .execute(pool)
+        .await
+    {
+        tracing::warn!(
+            file = %rel_path,
+            error = %e,
+            "Failed to clear scan-skip row after a successful conversion"
         );
     }
 }
@@ -264,7 +381,15 @@ pub(crate) async fn register_native_file(
             );
             // Remember it so the walk doesn't re-hash this file every pass. The
             // egi-delete trigger clears the row if the item is ever un-hidden.
-            record_scan_skip(pool, &ctx.user_id, cand, "gallery_hidden", Some(h), &now).await;
+            record_scan_skip(
+                pool,
+                &ctx.user_id,
+                cand,
+                crate::photos::scan_skip::REASON_GALLERY_HIDDEN,
+                Some(h),
+                &now,
+            )
+            .await;
             return false;
         }
     }
@@ -344,7 +469,7 @@ pub(crate) async fn register_native_file(
                 pool,
                 &ctx.user_id,
                 cand,
-                "hash_duplicate",
+                crate::photos::scan_skip::REASON_HASH_DUPLICATE,
                 photo_hash.as_deref(),
                 &now,
             )
@@ -869,5 +994,230 @@ mod tests {
         assert_eq!(hash.as_deref(), Some(hidden_hash.as_str()));
 
         let _ = tokio::fs::remove_dir_all(&root).await;
+    }
+
+    // ── #40: the conversion attempt cap, at the SQL level ────────────────
+    //
+    // `scan_skip::skip_verdict` is unit-tested exhaustively without a database.
+    // These tests cover the half that pure tests provably cannot: whether the
+    // number the verdict reads is the number SQLite actually stored. The cap is
+    // only as good as the increment, and the obvious increment is wrong.
+
+    async fn skip_test_pool() -> sqlx::SqlitePool {
+        let opts = sqlx::sqlite::SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .foreign_keys(false);
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        pool
+    }
+
+    async fn stored_row(pool: &sqlx::SqlitePool, rel_path: &str) -> crate::photos::scan_skip::SkipRow {
+        let (size_bytes, mtime, reason, attempt_count): (i64, Option<String>, String, i64) =
+            sqlx::query_as(
+                "SELECT size_bytes, mtime, reason, attempt_count FROM scan_skipped_paths \
+                 WHERE user_id = 'user-1' AND rel_path = ?",
+            )
+            .bind(rel_path)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        crate::photos::scan_skip::SkipRow {
+            size_bytes,
+            mtime,
+            reason,
+            attempt_count,
+        }
+    }
+
+    /// The load-bearing test for #40. `INSERT OR REPLACE` — the statement the
+    /// rest of this file uses for the same table — deletes and re-inserts the
+    /// row, so `attempt_count` returns to its DEFAULT 0 on every charge. The cap
+    /// would then never be reached and the file would be transcoded forever,
+    /// while the code read as though it were bounded. Only SQLite can answer
+    /// which of those two happened.
+    #[tokio::test]
+    async fn charging_an_attempt_increments_rather_than_resetting() {
+        let pool = skip_test_pool().await;
+        let mtime = Some("2026-07-21T00:00:00.000Z");
+
+        for expected in 1..=5 {
+            let got = charge_conversion_attempt(
+                &pool,
+                "user-1",
+                "Videos/broken.mp4",
+                4_096,
+                mtime,
+                "2026-07-21T00:00:00.000Z",
+            )
+            .await;
+            assert_eq!(
+                got,
+                Some(expected),
+                "charge #{expected} must accumulate, not reset"
+            );
+        }
+
+        let (rows,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM scan_skipped_paths WHERE user_id = 'user-1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(rows, 1, "charges must update one row, not accumulate rows");
+    }
+
+    /// The stored row and the pure verdict must agree, which is the seam between
+    /// the two halves of this feature. Three charges — and only three — retire
+    /// the file.
+    #[tokio::test]
+    async fn three_charges_retire_the_file_and_a_fourth_pass_skips_it() {
+        let pool = skip_test_pool().await;
+        let mtime = Some("2026-07-21T00:00:00.000Z");
+        let path = "Videos/broken.mp4";
+
+        for attempt in 1..=crate::photos::scan_skip::CONVERSION_MAX_ATTEMPTS {
+            // Before each charge the walk must still be willing to try.
+            if attempt > 1 {
+                assert_eq!(
+                    crate::photos::scan_skip::skip_verdict(
+                        &stored_row(&pool, path).await,
+                        4_096,
+                        mtime
+                    ),
+                    crate::photos::scan_skip::SkipVerdict::Retry,
+                    "the walk must still retry before attempt {attempt}"
+                );
+            }
+            charge_conversion_attempt(&pool, "user-1", path, 4_096, mtime, "2026-07-21T00:00:00.000Z")
+                .await;
+        }
+
+        assert_eq!(
+            crate::photos::scan_skip::skip_verdict(&stored_row(&pool, path).await, 4_096, mtime),
+            crate::photos::scan_skip::SkipVerdict::Skip,
+            "after the cap the walk must stop handing this file to the transcoder"
+        );
+    }
+
+    /// The escape hatch, end to end: replacing the file on disk un-retires it.
+    /// Without this a user who repairs a corrupt video has no way back short of
+    /// editing the database.
+    #[tokio::test]
+    async fn replacing_a_retired_file_makes_its_row_stale() {
+        let pool = skip_test_pool().await;
+        let path = "Videos/broken.mp4";
+        for _ in 0..crate::photos::scan_skip::CONVERSION_MAX_ATTEMPTS {
+            charge_conversion_attempt(
+                &pool,
+                "user-1",
+                path,
+                4_096,
+                Some("2026-07-21T00:00:00.000Z"),
+                "2026-07-21T00:00:00.000Z",
+            )
+            .await;
+        }
+        let row = stored_row(&pool, path).await;
+
+        // Same bytes, later mtime — the file was re-encoded or restored.
+        assert_eq!(
+            crate::photos::scan_skip::skip_verdict(&row, 4_096, Some("2026-07-22T09:00:00.000Z")),
+            crate::photos::scan_skip::SkipVerdict::Stale
+        );
+        // Different size — outright replaced.
+        assert_eq!(
+            crate::photos::scan_skip::skip_verdict(&row, 8_192, Some("2026-07-21T00:00:00.000Z")),
+            crate::photos::scan_skip::SkipVerdict::Stale
+        );
+    }
+
+    /// A file that succeeds on its second attempt must not keep a row that would
+    /// retire it later. The row is invisible while the photo exists (the path is
+    /// in `existing_set`), so this only bites after a delete + re-scan — which is
+    /// exactly when a silent retirement is hardest to explain.
+    #[tokio::test]
+    async fn a_successful_conversion_clears_its_attempt_row() {
+        let pool = skip_test_pool().await;
+        let path = "Videos/flaky.mp4";
+        charge_conversion_attempt(
+            &pool,
+            "user-1",
+            path,
+            4_096,
+            Some("2026-07-21T00:00:00.000Z"),
+            "2026-07-21T00:00:00.000Z",
+        )
+        .await;
+
+        clear_scan_skip(&pool, "user-1", path).await;
+
+        let (rows,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM scan_skipped_paths WHERE user_id = 'user-1' AND rel_path = ?",
+        )
+        .bind(path)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(rows, 0, "a converted file must leave no attempt history");
+    }
+
+    /// A duplicate verdict supersedes any attempts already charged, and lands
+    /// under migration 031's delete-triggers by carrying the content hash. This
+    /// is the path a Google Takeout album copy takes after its transcode is
+    /// discarded — three strikes would retire it with a reason that is not true.
+    #[tokio::test]
+    async fn a_duplicate_verdict_supersedes_charged_attempts() {
+        let pool = skip_test_pool().await;
+        let path = "Dogs/dog.heic";
+        charge_conversion_attempt(
+            &pool,
+            "user-1",
+            path,
+            4_096,
+            Some("2026-07-21T00:00:00.000Z"),
+            "2026-07-21T00:00:00.000Z",
+        )
+        .await;
+
+        record_scan_skip_path(
+            &pool,
+            "user-1",
+            path,
+            4_096,
+            Some("2026-07-21T00:00:00.000Z"),
+            crate::photos::scan_skip::REASON_HASH_DUPLICATE,
+            Some("HASH-1"),
+            "2026-07-21T00:00:00.000Z",
+        )
+        .await;
+
+        let row = stored_row(&pool, path).await;
+        assert_eq!(row.reason, crate::photos::scan_skip::REASON_HASH_DUPLICATE);
+        assert_eq!(
+            row.attempt_count, 0,
+            "a terminal verdict must not inherit an attempt history"
+        );
+        assert_eq!(
+            crate::photos::scan_skip::skip_verdict(&row, 4_096, Some("2026-07-21T00:00:00.000Z")),
+            crate::photos::scan_skip::SkipVerdict::Skip,
+            "a duplicate is skipped immediately, not after three transcodes"
+        );
+
+        let (hash,): (Option<String>,) = sqlx::query_as(
+            "SELECT photo_hash FROM scan_skipped_paths WHERE user_id = 'user-1' AND rel_path = ?",
+        )
+        .bind(path)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            hash.as_deref(),
+            Some("HASH-1"),
+            "without the hash, 031's delete-triggers cannot re-admit the copy"
+        );
     }
 }

@@ -290,12 +290,69 @@ equivalent question is whether the memory cache is bounded at all.
 **Root cause (repeat failures):** nothing anywhere persists a per-file failure count. On failure, `process_candidate` registers the ORIGINAL to avoid data loss ([ingest.rs:437-455](server/src/ingest.rs#L437-L455)), but several paths `return false` **without registering anything** â€” e.g. the register error at [ingest.rs:391-398](server/src/ingest.rs#L391-L398). A file that leaves no row is re-walked, re-converted and re-failed on every single autoscan pass, forever.
 
 **Fix (3-strike cap):** extend the existing skip cache rather than inventing a new mechanism. `scan_skipped_paths` ([server/migrations/031_scan_skipped_paths.sql](server/migrations/031_scan_skipped_paths.sql)) already keys on `(user_id, rel_path)`, already stores `size_bytes` + `mtime`, and **already invalidates when either changes** â€” which is exactly the semantics you want ("if the file is replaced, try again").
-- [ ] Migration `034_conversion_failure_count.sql`: add `attempt_count INTEGER NOT NULL DEFAULT 0` and allow `reason = 'conversion_failed'`.
-- [ ] On conversion failure, upsert the row with `attempt_count = attempt_count + 1`.
-- [ ] The autoscan walk skips a candidate whose `attempt_count >= 3`. Make the threshold a named constant, not a literal.
-- [ ] Emit `MediaConvertFailure` (B1) on **every** attempt, and a distinct terminal audit event when a file is retired at 3 so it is visible rather than silently dropped.
-- [ ] Admin escape hatch: an endpoint to clear `conversion_failed` rows and force a retry.
-- [ ] Test: a fixture that always fails is attempted exactly 3 times across 5 scan passes, then never again â€” until its mtime changes, after which it is retried.
+> **3-strike cap DONE — commit pending. The ETA half of #40 is still open.**
+> 400 server tests green (was 382), 275 web green. **Four corrections to the plan
+> below, the third of which changes what the fix actually is.**
+>
+> **1. The migration number was wrong.** `034` was never created — a numbering
+> slip between `033` and `035`. Filling the gap would insert a version *below*
+> three migrations already applied on every dev database. sqlx only validates
+> applied-but-missing, not out-of-order, so it would probably work; "probably" is
+> not a reason to reuse a number when the next one is free. Shipped as `038`.
+>
+> **2. There was no CHECK constraint to widen.** The plan said the migration must
+> "allow `reason = 'conversion_failed'`". `031` declares plain `reason TEXT NOT
+> NULL` and names the permitted values only in a comment, so the sole schema
+> change is the counter.
+>
+> **3. The forever-loop is NOT the general conversion failure — and the worst
+> case is a file that CONVERTS SUCCESSFULLY.** `process_candidate` registers the
+> ORIGINAL on failure, so the file lands in `photos.file_path` and the next pass
+> skips it via `existing_set`. The loop is the narrower set of paths that run a
+> transcode and leave **no row at all**, and the dominant one is the *success*
+> path's hash-dedup early return ([ingest.rs](server/src/ingest.rs)): on a Google
+> Takeout library the same bytes sit in the date folder AND every album folder,
+> the date copy registers first, so every album copy is fully transcoded and the
+> output then discarded — **every pass, forever**. Migration 031 has skipped
+> exactly this case for *native* files since the disk-thrash fix; the conversion
+> walk never learned to.
+>
+> That verdict is **deterministic**, so it is recorded as a terminal
+> `hash_duplicate` (carrying the content hash, so 031's delete-triggers re-admit
+> the copy if the photo it deduped against is deleted) — **not** as three
+> strikes. Spending three full transcodes to re-derive a known answer three times
+> would have been its own bug, and it would then retire the file citing a reason
+> that is not true. **A test that asserts "a failing conversion is retried 3×"
+> without using a no-row path passes vacuously**, green because of `existing_set`
+> rather than the cap.
+>
+> **4. One uniform "row exists ⇒ skip" rule is a silent ONE-strike cap.** The two
+> 031 verdicts are terminal on sight; `conversion_failed` must fall through below
+> the cap. That is the whole reason the verdict is a pure function
+> (`photos/scan_skip.rs`) rather than an inline comparison in each of the two
+> walks — the conversion walk had no skip check at all, and adding a third
+> caller with *different* per-reason semantics is precisely how they drift.
+>
+> **Charged BEFORE the encode, not in the failure handler.** The files that most
+> need retiring are the ones that never reach a failure handler — an ffmpeg that
+> OOMs, a hard kill, a pass cancelled by the stuck-job watchdog. Same argument as
+> `036`'s rendition cap.
+>
+> **`INSERT OR REPLACE` would have made the cap decorative.** It is what the rest
+> of `register.rs` uses on this table, and it deletes + re-inserts, resetting
+> `attempt_count` to DEFAULT 0 on every charge — an unbounded retry loop that
+> reads as bounded. Only SQLite can answer which happened, so that is a DB test,
+> not a reasoned-about one; `ON CONFLICT DO UPDATE` is load-bearing.
+
+- [x] Migration `038_conversion_attempt_count.sql` (**not `034`** — see above): `attempt_count INTEGER NOT NULL DEFAULT 0` on `scan_skipped_paths`. No CHECK to relax.
+- [x] Attempt charged before each encode via `register::charge_conversion_attempt` (`ON CONFLICT DO UPDATE`, returns the new count). Cleared on success so a file that converts on attempt 2 leaves no retirement waiting for a later delete + re-scan.
+- [x] **Both** walks skip a retired candidate, through the shared `scan_skip::skip_verdict`. The conversion walk consults the cache for the first time; its check sits **before** the ffprobe (the stat it needs was hoisted above the probe), or a retired file still costs a process spawn every pass. `CONVERSION_MAX_ATTEMPTS` is a named constant, and `>=` not `==` so an overshot count stays retired (the #41 asymmetry again).
+- [x] Deterministic dead ends (hash duplicate, on both the success and failure paths) record a **terminal** `hash_duplicate` instead of burning strikes.
+- [x] `AuditEvent::ConversionRetired` on retirement, in `FAILURE_EVENTS`, amber in the Server Logs tab so "given up on" is distinguishable from "failed this pass". Carries a `retry_hint` — the escape hatch is not discoverable otherwise.
+- [x] Admin escape hatch: `POST /api/admin/conversion/retry-failed`, scoped to `conversion_failed` rows only. The automatic hatch (change the file on disk) covers "the file was broken"; it does **not** cover "the *server* got better" — a new ffmpeg, a GPU driver fix — and telling an admin to touch 600 files is not an escape hatch.
+- [x] Tests: 13 pure (`scan_skip`) + 5 DB-level (`register`). Verified RED twice — the naive uniform skip rule fails exactly the 2 tests asserting new behaviour, and `INSERT OR REPLACE` fails 3 of the 5 DB tests. The others pass in both states because they pin *preserved* behaviour; that is the honest result, not tests tuned to go red.
+- [ ] **E2E**: a fixture that always fails is attempted exactly 3 times across 5 real scan passes. The unit + DB tests pin the arithmetic and the SQL; nothing yet drives five actual autoscan passes end to end.
+- [ ] **Deploy required.** The cap only starts counting on the live box after a redeploy — and the Takeout duplicate-transcode loop is the one worth measuring before/after, since it is pure wasted CPU today.
 
 ### B3 â€” #46 Video.play failure on a specific .mp4 (Medium) â€” **root cause below was WRONG; corrected**
 
@@ -876,8 +933,12 @@ Dependencies are real here â€” A1 gates the honest measurement of C1(b), an
 4. ~~**B1** (#45) â€” failure logging.~~ **DONE** `298fd99`.
 5. ~~**D1** (#44), **D2** (#50), **C2** (#39), **F1** (#41) â€” quick wins.~~ **ALL DONE** 2026-07-21 — `0fb7bdb`, `90aa0cd`, `736a927`, `d663da7`. One commit each as planned. Two of the four had a wrong plan in this file (D2's web half was a no-op; F1's both suggested mechanisms leak) — **read the corrections in those sections before trusting any other plan here.**
 6. ~~**C1** (#48) — face centering.~~ **(a), (c), (d-People) DONE** 2026-07-21 — `5c4d776`. **(b) still open** and still gated on A1's deploy. Read the (a) corrections before trusting any other plan in this file: the formula was right, the *mechanism* was not, and the existing test suite asserted the bug.
-7. **B3** (#46) — codec probing. **NEXT.**
-8. **B2** (#40) â€” ETA rework + 3-strike cap.
+7. ~~**B3** (#46) — codec probing.~~ **Code landed `65389a7`; backfill + corrupt-file honesty still open.**
+8. **B2** (#40) — **3-strike cap DONE** (see corrections in B2 — the plan was wrong 4×, and the worst loop was a file that *converts fine*). **ETA rework is what remains, and is NEXT.**
+   > **B2 was resequenced ahead of B3's remainder deliberately.** B3's own
+   > `VIDEO0063.mp4` item says it needs "the terminal unplayable state from
+   > B2/#40", and B3's backfill queues 38 files that, without a cap, re-attempt
+   > forever. Shipping the backfill first would have shipped a loop.
 9. **E1** (#43), **E2** (#52) â€” album features.
 10. **B4** (#49) â€” the resolution ladder. Largest scope; do not let it block anything above.
 

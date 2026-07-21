@@ -412,16 +412,27 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
     // storage mount every pass — the fix for the "server never goes idle after
     // import" disk thrash (migration 031). Keyed by rel_path → (size, mtime); a
     // hit with unchanged size+mtime means "known dead end, don't touch".
-    let mut skip_map: std::collections::HashMap<String, (i64, Option<String>)> =
+    let mut skip_map: std::collections::HashMap<String, crate::photos::scan_skip::SkipRow> =
         std::collections::HashMap::new();
     {
-        let mut rows = sqlx::query_as::<_, (String, i64, Option<String>)>(
-            "SELECT rel_path, size_bytes, mtime FROM scan_skipped_paths WHERE user_id = ?",
+        let mut rows = sqlx::query_as::<_, (String, i64, Option<String>, String, i64)>(
+            "SELECT rel_path, size_bytes, mtime, reason, attempt_count \
+             FROM scan_skipped_paths WHERE user_id = ?",
         )
         .bind(&admin_id)
         .fetch(pool);
-        while let Some(row) = rows.try_next().await.unwrap_or(None) {
-            skip_map.insert(row.0, (row.1, row.2));
+        while let Some((rel_path, size_bytes, mtime, reason, attempt_count)) =
+            rows.try_next().await.unwrap_or(None)
+        {
+            skip_map.insert(
+                rel_path,
+                crate::photos::scan_skip::SkipRow {
+                    size_bytes,
+                    mtime,
+                    reason,
+                    attempt_count,
+                },
+            );
         }
     }
     tracing::info!(
@@ -538,12 +549,24 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
             // the change that stops the 4,254-file re-hash loop at idle. If either
             // size or mtime differs the file was replaced/edited, so we clear the
             // stale row and fall through to re-evaluate it.
-            if let Some((skip_size, skip_mtime)) = skip_map.get(&rel_path) {
-                if *skip_size == size && *skip_mtime == modified {
-                    known_skipped += 1;
-                    continue;
+            // The comparison moved into `photos::scan_skip::skip_verdict` when
+            // #40 added a reason whose verdict depends on an attempt count. This
+            // walk only ever writes terminal verdicts, so `Retry` is unreachable
+            // here today — but it is handled rather than lumped in with `Skip`,
+            // because the conversion walk does produce it and silently treating
+            // a retryable row as terminal is precisely the one-strike bug the
+            // shared function exists to prevent.
+            if let Some(row) = skip_map.get(&rel_path) {
+                match crate::photos::scan_skip::skip_verdict(row, size, modified.as_deref()) {
+                    crate::photos::scan_skip::SkipVerdict::Skip => {
+                        known_skipped += 1;
+                        continue;
+                    }
+                    crate::photos::scan_skip::SkipVerdict::Stale => {
+                        stale_skip_paths.push(rel_path.clone());
+                    }
+                    crate::photos::scan_skip::SkipVerdict::Retry => {}
                 }
-                stale_skip_paths.push(rel_path.clone());
             }
 
             // Native format — determine MIME and media type directly.

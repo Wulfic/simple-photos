@@ -381,6 +381,11 @@ fn photo_routes() -> Router<AppState> {
             "/admin/conversion/reset",
             post(crate::conversion::conversion_reset),
         )
+        // Re-admit files retired by the three-strike conversion cap (#40)
+        .route(
+            "/admin/conversion/retry-failed",
+            post(crate::conversion::conversion_retry_failed),
+        )
         // Transcode GPU status
         .route(
             "/transcode/status",

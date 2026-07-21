@@ -14,11 +14,13 @@ use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use axum::extract::State;
 use axum::Json;
 use serde::Serialize;
 
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
+use crate::state::AppState;
 use crate::transcode::HwAccelCapability;
 
 // ── GPU acceleration config (set once at startup) ────────────────────────────
@@ -1062,6 +1064,58 @@ pub async fn conversion_batch_end(
 pub async fn conversion_reset(_auth: AuthUser) -> Result<Json<ConversionStatusResponse>, AppError> {
     force_reset("manual admin reset via /admin/conversion/reset");
     Ok(Json(conversion_status_response()))
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct RetryFailedConversionsResponse {
+    /// How many retired files were re-admitted to the conversion queue.
+    pub cleared: u64,
+}
+
+/// POST /api/admin/conversion/retry-failed
+///
+/// Clears every `conversion_failed` skip row for the caller, so files retired by
+/// #40's three-strike cap are attempted again on the next pass.
+///
+/// The cap's automatic escape hatch is a change to the file on disk (migration
+/// 031's size/mtime invalidation), which covers "the file was broken and I
+/// replaced it". It does **not** cover the case this endpoint exists for: the
+/// file is unchanged and the *server* got better — a new ffmpeg, a GPU driver
+/// fix, hardware acceleration enabled. Telling an admin to touch several hundred
+/// files to pick that up is not an escape hatch.
+///
+/// Scoped to `conversion_failed` on purpose. `hash_duplicate` and
+/// `gallery_hidden` are deterministic verdicts that re-clearing would only make
+/// the scan re-derive at real cost — and in the duplicate case, re-hash the
+/// whole Takeout library, which is the disk thrash migration 031 removed.
+///
+/// Idempotent: clearing when nothing is retired reports `cleared: 0`.
+pub async fn conversion_retry_failed(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<RetryFailedConversionsResponse>, AppError> {
+    crate::setup::admin::require_admin(&state, &auth).await?;
+
+    let cleared = sqlx::query("DELETE FROM scan_skipped_paths WHERE user_id = ? AND reason = ?")
+        .bind(&auth.user_id)
+        .bind(crate::photos::scan_skip::REASON_CONVERSION_FAILED)
+        .execute(&state.pool)
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                error = %e,
+                "[INGEST] Failed to clear retired conversions for retry"
+            );
+            AppError::Internal("failed to clear retired conversions".to_string())
+        })?
+        .rows_affected();
+
+    tracing::info!(
+        cleared,
+        "[INGEST] Admin re-admitted retired files to the conversion queue"
+    );
+
+    Ok(Json(RetryFailedConversionsResponse { cleared }))
 }
 
 #[cfg(test)]

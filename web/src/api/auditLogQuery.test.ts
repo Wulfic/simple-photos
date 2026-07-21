@@ -134,16 +134,21 @@ describe("matchesAuditFilters", () => {
       "import_failure",
       "encryption_failure",
       "thumbnail_failure",
+      "conversion_retired",
     ]) {
       expect(matchesAuditFilters(entry({ event_type: ev }), f)).toBe(true);
     }
   });
 
-  it("covers the four #45 pipeline events in FAILURE_EVENTS", () => {
+  it("covers the pipeline events in FAILURE_EVENTS", () => {
     expect(FAILURE_EVENTS.has("media_convert_failure")).toBe(true);
     expect(FAILURE_EVENTS.has("import_failure")).toBe(true);
     expect(FAILURE_EVENTS.has("encryption_failure")).toBe(true);
     expect(FAILURE_EVENTS.has("thumbnail_failure")).toBe(true);
+    // #40. A retirement is the one row that explains a file which stopped
+    // appearing entirely, so it must survive "Failures only" — that filter is
+    // exactly where a user goes to ask why.
+    expect(FAILURE_EVENTS.has("conversion_retired")).toBe(true);
     expect(FAILURE_EVENTS.has("media_convert")).toBe(false);
   });
 
