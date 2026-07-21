@@ -287,21 +287,52 @@ equivalent question is whether the memory cache is bounded at all.
 - [ ] Admin escape hatch: an endpoint to clear `conversion_failed` rows and force a retry.
 - [ ] Test: a fixture that always fails is attempted exactly 3 times across 5 scan passes, then never again — until its mtime changes, after which it is retried.
 
-### B3 — #46 Video.play failure on a specific .mp4 (Medium) — CONFIRMED
+### B3 — #46 Video.play failure on a specific .mp4 (Medium) — **root cause below was WRONG; corrected**
 
 **Reported:** `20210520212438-5a45c3d4.mp4` → "unable to play this video format."
 
-**Root cause: format detection is purely by file extension.** [server/src/conversion.rs:487-560](server/src/conversion.rs#L487-L560) `conversion_target` matches on `ext` and `.mp4` is not in the video list, so an mp4 is assumed browser-native and **never transcoded**. But an MP4 *container* routinely carries codecs browsers cannot decode: H.265/HEVC, H.264 High 10 (10-bit), MPEG-4 Part 2 (DivX/Xvid), ProRes. [server/src/photos/web_preview.rs:13-30](server/src/photos/web_preview.rs#L13-L30) `needs_web_preview` has the identical extension-only blind spot.
+> **✅ MEASURED 2026-07-20 on live CT132 (all 742 mp4/mov/m4v ffprobed). The
+> stated root cause was wrong, and the planned fix would have closed this issue
+> without fixing the reported file.**
+>
+> The reported file probes as **`h264 / Main / yuv420p / 320×240 + aac LC`** —
+> dead centre of the browser-native allowlist proposed below. An allowlist
+> passes it. Its actual defect is a **corrupt bitstream behind an intact
+> container**: 3,331 `Invalid NAL unit size (-536345661 > 542)` errors on
+> decode. It is a 2007 Apple MPEG-4 (ODSM/`mp4s` data tracks) that Google
+> exported already broken, from Takeout's own **"Failed Videos"** folder.
+>
+> That folder is **not a reliable signal** — of its 5 files, 3 are corrupt
+> (3,331 / 26,315 / 49,695 decode errors), 1 is entirely unreadable
+> (`VIDEO0063.mp4` — no duration, no codec), and 1 is **perfectly healthy**
+> (h264 High 1920×1080, 0 errors).
+>
+> **Re-encoding is still the right fix, for a different reason:** ffmpeg is
+> lenient where browser decoders are strict, so it salvages what it can read.
+> Measured: 51.15s of corrupt input → **28.03s of clean, 0-error, playable
+> output**. The 23s tail is unrecoverable and the user must be told, not handed
+> a silently shorter video.
+>
+> **The codec allowlist is still worth building — for the other 38 files.**
+> Library codec totals: **704 h264, 28 hevc, 10 mpeg4**. The 38 non-native are
+> 28 hevc (incl. one `High 10 / yuv420p10le`) + 10 mpeg4 Simple Profile, all in
+> `.mp4`/`.mov`, none ever queued. So: **two independent defect classes, one
+> symptom.** Probe for **decodability**, not codec identity.
 
-This is the same class of bug as the GIF misdetection already fixed by magic-byte sniffing (see memory `c1-gif-detection-14`). Apply the same lesson: **probe, don't guess.**
+**Root cause (as corrected):** format detection is purely by file extension. [server/src/conversion.rs:487-560](server/src/conversion.rs#L487-L560) `conversion_target` matches on `ext` and `.mp4` is not in the video list, so an mp4 is assumed browser-native and **never transcoded** — regardless of whether its codec is decodable *or whether its bitstream is real*. [server/src/photos/web_preview.rs:13-30](server/src/photos/web_preview.rs#L13-L30) `needs_web_preview` has the identical blind spot.
+
+Same class as the GIF misdetection fixed by magic-byte sniffing (memory `c1-gif-detection-14`): **probe, don't guess.**
 
 **Fix:**
-- [ ] Add an `ffprobe`-backed codec probe (`server/src/transcode/`) returning video codec, profile, pixel format, and resolution.
-- [ ] Define the browser-native allowlist explicitly: H.264 (Baseline/Main/High, 8-bit, yuv420p) + AAC/MP3 in MP4. Anything else needs transcoding **regardless of extension**.
-- [ ] Route `.mp4`/`.mov`/`.m4v` through the probe at ingest; enqueue for conversion when the codec is not on the allowlist.
-- [ ] Backfill: an admin task to probe already-registered mp4s and queue the offenders. Existing libraries are full of these — a fix that only helps new imports does not fix the user's library.
-- [ ] Get the actual failing file from the live box and `ffprobe` it before writing the fix. Confirm the codec; do not assume HEVC.
-- [ ] Test: a fixture with HEVC-in-MP4 is detected as needing conversion; an H.264-in-MP4 fixture is left alone (no pointless re-encode).
+- [x] `ffprobe`-backed probe at [server/src/transcode/probe.rs](server/src/transcode/probe.rs) returning codec, profile, pixel format, resolution — **plus `probe_decode_health`**, which the original plan had no equivalent of and without which the reported file is not fixed. — `65389a7`
+- [x] Browser-native allowlist: H.264 Baseline/Constrained Baseline/Main/High, 8-bit `yuv420p`/`yuvj420p`. Matched on the **full** profile string — `High 10` shares a prefix with the native `High`, and prefix-matching would pass the library's one 10-bit file. — `65389a7`
+- [x] Route `.mp4`/`.mov`/`.m4v`/`.webm` through the probe at ingest. `conversion_target` keeps its signature (load-bearing in sync contexts — MIME selection, upload gating); the probe is layered on top. — `65389a7`
+- [x] Got the actual failing file off the live box and probed it before writing the fix. **This is the step that caught the wrong root cause** — do not skip it on B2/B4. — `65389a7`
+- [x] Test: HEVC-in-MP4 and MPEG-4-in-MP4 fixtures are queued; an H.264-in-MP4 fixture is left alone. Real FFmpeg fixtures through the real probe, since the defect is that the old path never looked inside the file. Verified RED against a simulated extension-only path: the two new-behaviour tests fail, the two preserved-behaviour tests pass. 310 green (was 295). — `65389a7`
+- [ ] **Backfill — this fix helps NEW imports only.** The `existing_set` check was deliberately moved *ahead* of the probe so idle autoscan passes spawn zero ffprobes (protecting the migration-031 disk-thrash fix), which means the 38 already-registered offenders are never re-examined. Needs an admin task to probe registered mp4s and queue them. **Without this the user's library is unchanged.**
+- [ ] **Corrupt-file honesty.** A salvage re-encode silently shortens the video (51s → 28s). Surface the loss — this is the natural first consumer of B1/#45's failure audit events.
+- [ ] **`VIDEO0063.mp4` has no decodable video stream at all.** Currently logged and left unregistered, because queueing it would guarantee a failure every pass forever. Needs the terminal "unplayable" state from B2/#40's 3-strike cap.
+- [ ] `needs_web_preview` still has the same extension-only blind spot; the probe is not wired into it yet.
 
 ### B4 — #49 Resolution ladder + player quality picker (High, largest item in this file)
 
@@ -311,9 +342,30 @@ This is the same class of bug as the GIF misdetection already fixed by magic-byt
 
 **This is a feature, not a bug fix — scope it separately and do it LAST.** Do not let it block #38/#42/#51.
 
+> **⚠️ MEASURED 2026-07-20 — the rung rule below must key on the SHORT EDGE,
+> not on height. Keying on height is wrong twice, and the live library contains
+> both traps.**
+>
+> - **71 of 742 videos are portrait**, 14 of them exactly `1080x1920`. A
+>   `height > 1080` test flags every one — but `1080x1920` **is already the
+>   1080p tier**. A naive `scale=-2:1080` would *downscale* them to 608×1080,
+>   degrading files that needed no rung at all.
+> - **4 videos are `2288x1088`.** 1088 is macroblock-padded 1080. A strict
+>   `> 1080` test spends a full 4K-class re-encode to save 8 pixels. **The rule
+>   needs a tolerance band, not `>`.**
+>
+> Correct sizing by short edge > 1080: **140 need a rung**, 602 do not.
+> Of the 140: 126×`3840x2160`, 6×`1920x1440`, 4×`7680x4320` (8K), and the
+> 4×`2288x1088` that must be excluded ⇒ **true demand 136**, dominated by 4K.
+>
+> Note the 8K files: a `7680x4320` source is a 2-rung decision (source + 1080),
+> and re-encoding four of those is not a background afterthought.
+
 Phased plan:
 - [ ] **Schema.** Migration `035_video_renditions.sql`: `video_renditions(photo_id, height, blob_id/path, codec, bitrate, size_bytes, created_at)`, unique on `(photo_id, height)`. A photo has 1..n renditions; the source is one of them.
-- [ ] **Transcode.** `build_video_transcode_args` takes a target height; add `scale=-2:1080` (preserving the even-dimension and `format=yuv420p` guarantees already there) for the 1080p rung. Rules from the issue: source ≤1080p → single rendition; source >1080p → source rendition **and** a 1080p rendition.
+- [ ] **Rung selection as a pure function**, keyed on `min(width, height)` with a tolerance band (do not re-encode to save <~10% of the short edge). Unit-test it against the real shapes above — `1080x1920`, `2288x1088`, `3840x2160`, `7680x4320`, `1920x1440` — before any ffmpeg work. This is arithmetic; it must not need a device or a transcode to verify.
+- [ ] **Transcode.** `build_video_transcode_args` takes a target rung; the scale filter must preserve orientation (scale the short edge to 1080, not the height), alongside the even-dimension and `format=yuv420p` guarantees already there. Rules from the issue: source ≤1080p tier → single rendition; source above it → source rendition **and** a 1080p rendition.
+- [ ] **The source rendition must actually be playable.** #46 established that a `.mp4` source may be HEVC or a corrupt bitstream. A ladder whose top rung is the untouched source hands the user a picker whose "highest" option does not play. Gate the source rung on `transcode::probe::is_browser_native` + decode health.
 - [ ] **Cost control.** This doubles encode work for every 4K video. Reuse the existing two-lane parallelism (`SIMPLE_PHOTOS_CONVERSION_JOBS`) and enqueue the 1080p rung at lower priority than first-pass conversions — a user must never wait on a secondary rendition to see their video at all.
 - [ ] **Serving.** Extend the video endpoint with a rendition selector; keep range-request support intact (`server/src/http_utils.rs`).
 - [ ] **API.** Expose available renditions per video so clients can populate the picker.
