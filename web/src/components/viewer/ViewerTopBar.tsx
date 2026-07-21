@@ -117,17 +117,6 @@ export default function ViewerTopBar({
           )}
         </button>
         )}
-        <button
-          onClick={() => setShowInfoPanel(!showInfoPanel)}
-          className={`flex items-center justify-center w-8 h-8 rounded-full transition-colors ${
-            showInfoPanel ? "bg-accent-600 text-white" : "text-white hover:bg-white/20"
-          }`}
-          title="Info"
-        >
-          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-        </button>
         {canEdit && (
           <button
             onClick={onToggleEdit}
@@ -160,7 +149,9 @@ export default function ViewerTopBar({
               style={{ zIndex: 9999 }}
               role="menu"
             >
-              {/* Info lives here too (#30) — the standalone button stays up top. */}
+              {/* Info lives ONLY here (#44). #30 added this entry and left the
+                  standalone top-bar button in place; the button is gone now, so
+                  this is the one way in (the swipe-up gesture aside). */}
               <button
                 onClick={() => { setShowInfoPanel(!showInfoPanel); setMenuOpen(false); }}
                 className={menuItemClass}

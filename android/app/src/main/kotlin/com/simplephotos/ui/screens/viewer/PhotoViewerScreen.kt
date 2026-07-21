@@ -1092,15 +1092,6 @@ fun PhotoViewerScreen(
                                 )
                             }
                         }
-                        // Info button
-                        IconButton(onClick = { showInfoPanel = !showInfoPanel }, modifier = Modifier.size(40.dp)) {
-                            Icon(
-                                imageVector = Icons.Default.Info,
-                                contentDescription = "Info",
-                                tint = if (showInfoPanel) Violet.v400 else Color.White,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
                         // Edit button — available for photos, GIFs, videos, and audio
                         if (currentPhoto.mediaType == "photo" || currentPhoto.mediaType == "gif" || currentPhoto.mediaType == "video" || currentPhoto.mediaType == "audio") {
                             TextButton(
@@ -1146,7 +1137,10 @@ fun PhotoViewerScreen(
                                     expanded = showOverflow,
                                     onDismissRequest = { showOverflow = false }
                                 ) {
-                                    // Info lives here too (#30) — standalone button stays up top.
+                                    // Info lives ONLY here (#44). #30 added this entry
+                                    // and left the standalone top-bar button in place;
+                                    // the button is gone now, so this is the one way in
+                                    // (the swipe-up gesture aside).
                                     DropdownMenuItem(
                                         text = { Text("Info") },
                                         onClick = {
