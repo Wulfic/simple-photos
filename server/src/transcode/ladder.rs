@@ -128,9 +128,156 @@ pub fn plan_renditions(width: i64, height: i64) -> Vec<Rendition> {
     out
 }
 
+/// Whether the file that would back the source rung is actually playable.
+///
+/// #46 established that a `.mp4` may be HEVC, 10-bit, or a corrupt bitstream
+/// behind an intact container. A ladder whose top rung is one of those hands
+/// the user a picker whose "highest" option does not play — strictly worse than
+/// having no picker, because it looks like a feature rather than a broken file.
+///
+/// This is deliberately evaluated against the file the server would *serve*
+/// (`photos.file_path`), which after #46's ingest probe is already the
+/// converted H.264 for anything non-native. So a `false` here means the
+/// conversion failed or the row predates #46 — not that a re-encode is owed.
+/// Producing one is #46's job, not the ladder's; the ladder simply declines to
+/// offer a rung it cannot stand behind.
+///
+/// `health` is optional because decode-health probing costs a bounded decode
+/// and is not run on every path. `None` means "not checked", which falls back
+/// to the codec verdict alone — the pre-#46 level of confidence, and honest
+/// about it. It is never treated as evidence of health.
+pub fn source_rung_is_offerable(
+    info: &super::probe::VideoStreamInfo,
+    health: Option<&super::probe::DecodeHealth>,
+) -> bool {
+    if !super::probe::is_browser_native(info) {
+        return false;
+    }
+    match health {
+        Some(h) => h.is_clean(),
+        None => true,
+    }
+}
+
+/// Plan the ladder, dropping the source rung when the source cannot be played.
+///
+/// An empty result means "no picker" — the client falls back to the single
+/// blob it already has, which is exactly today's behaviour. That is the correct
+/// degenerate case for the 602 sub-1080p videos in the live library.
+pub fn plan_ladder(width: i64, height: i64, source_offerable: bool) -> Vec<Rendition> {
+    let mut plan = plan_renditions(width, height);
+    if !source_offerable {
+        plan.retain(|r| !r.is_source);
+    }
+    // A lone source rung is not a ladder — there is nothing to pick between,
+    // and offering a one-entry picker is noise.
+    if plan.len() == 1 && plan[0].is_source {
+        return Vec::new();
+    }
+    plan
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transcode::probe::{DecodeHealth, VideoStreamInfo};
+
+    fn native_1080() -> VideoStreamInfo {
+        VideoStreamInfo {
+            codec: "h264".into(),
+            profile: Some("High".into()),
+            pix_fmt: Some("yuv420p".into()),
+            width: 3840,
+            height: 2160,
+        }
+    }
+
+    fn corrupt() -> DecodeHealth {
+        DecodeHealth {
+            error_count: 3331,
+            first_error: Some("Invalid NAL unit size (-536345661 > 542).".into()),
+        }
+    }
+
+    fn clean() -> DecodeHealth {
+        DecodeHealth {
+            error_count: 0,
+            first_error: None,
+        }
+    }
+
+    /// The #46 interaction. A 4K HEVC source still needs its 1080p rung — the
+    /// user gains a playable option they did not have — but the source itself
+    /// must not be offered, because it does not play.
+    #[test]
+    fn an_unplayable_source_is_not_offered_but_still_earns_a_rung() {
+        let plan = plan_ladder(3840, 2160, false);
+        assert_eq!(plan.len(), 1, "the 1080p rung must survive");
+        assert!(
+            !plan[0].is_source,
+            "a picker must never offer a 'highest' that does not play"
+        );
+        assert_eq!((plan[0].width, plan[0].height), (1920, 1080));
+    }
+
+    /// A playable 4K source gives the two-entry picker the issue actually asks
+    /// for.
+    #[test]
+    fn a_playable_oversized_source_yields_a_two_rung_picker() {
+        let plan = plan_ladder(3840, 2160, true);
+        assert_eq!(plan.len(), 2);
+        assert!(plan[0].is_source);
+        assert!(!plan[1].is_source);
+    }
+
+    /// 602 of 742 live videos land here. A single source rung is not a choice,
+    /// so it must not render a picker at all.
+    #[test]
+    fn an_ordinary_source_produces_no_picker() {
+        assert!(plan_ladder(1920, 1080, true).is_empty());
+        assert!(plan_ladder(1280, 720, true).is_empty());
+        // ...and the portrait/padded traps must not sneak a picker in either.
+        assert!(plan_ladder(1080, 1920, true).is_empty());
+        assert!(plan_ladder(2288, 1088, true).is_empty());
+    }
+
+    /// An unplayable sub-1080p source has nothing to offer — #46's conversion
+    /// is what fixes it, not the ladder.
+    #[test]
+    fn an_unplayable_small_source_yields_nothing_for_the_ladder_to_do() {
+        assert!(plan_ladder(1280, 720, false).is_empty());
+    }
+
+    /// The reported #46 file: impeccably native by codec, thousands of decode
+    /// errors in fact. Codec identity alone must not clear it.
+    #[test]
+    fn a_corrupt_bitstream_is_not_offerable_despite_a_native_codec() {
+        let info = native_1080();
+        assert!(
+            super::super::probe::is_browser_native(&info),
+            "precondition: it IS codec-native, which is why codec alone is not enough"
+        );
+        assert!(!source_rung_is_offerable(&info, Some(&corrupt())));
+        assert!(source_rung_is_offerable(&info, Some(&clean())));
+    }
+
+    /// Unchecked health is not evidence of health — but it must not veto an
+    /// otherwise-native source either, or every un-probed file loses its rung.
+    #[test]
+    fn unchecked_health_falls_back_to_the_codec_verdict() {
+        assert!(source_rung_is_offerable(&native_1080(), None));
+
+        let hevc = VideoStreamInfo {
+            codec: "hevc".into(),
+            ..native_1080()
+        };
+        assert!(
+            !source_rung_is_offerable(&hevc, None),
+            "a non-native codec is disqualifying regardless of health"
+        );
+        // Clean decode does not rescue a codec browsers cannot decode.
+        assert!(!source_rung_is_offerable(&hevc, Some(&clean())));
+    }
 
     /// The exact shapes measured on the live library, with their counts.
     /// Keeping the census here is what lets the tests below assert a *number*
