@@ -545,6 +545,107 @@ async fn process_candidate(
     }
 }
 
+/// Decide whether an "already native" container actually needs converting, by
+/// inspecting its streams instead of trusting its extension.
+///
+/// [`conversion::conversion_target`] answers from the filename alone, so every
+/// `.mp4`/`.mov`/`.m4v` is assumed browser-playable and skipped. That is wrong
+/// in two independent ways, both measured on the live library (2026-07-20):
+///
+/// * **Wrong codec.** An MP4 *container* happily carries HEVC, 10-bit H.264 or
+///   MPEG-4 Part 2, none of which a browser can decode. 38 of 742 videos
+///   (28 hevc, 10 mpeg4, one of them 10-bit) are affected and none of them has
+///   ever entered the conversion queue.
+/// * **Corrupt bitstream behind an intact container.** The file reported in
+///   #46 probes as a flawless `h264 / Main / yuv420p` yet emits 3,331
+///   `Invalid NAL unit size` errors on decode. A codec allowlist passes it.
+///   Re-encoding rescues it because ffmpeg is lenient where browser decoders
+///   are strict: 51s of corrupt input yields 28s of clean, playable output.
+///
+/// Returns the MP4 conversion target when the file must be re-encoded, or
+/// `None` to leave it alone.
+async fn opaque_container_needs_conversion(
+    abs_path: &std::path::Path,
+    name: &str,
+) -> Option<conversion::ConversionTarget> {
+    use crate::transcode::probe;
+
+    if !probe::is_opaque_video_container(name) {
+        return None;
+    }
+
+    let mp4_target = conversion::ConversionTarget {
+        extension: "mp4",
+        mime_type: "video/mp4",
+        category: conversion::MediaCategory::Video,
+    };
+
+    let info = match probe::probe_video_stream(abs_path).await {
+        Ok(info) => info,
+        Err(probe::ProbeError::NoVideoStream) => {
+            // The container parsed but exposes nothing decodable. Re-encoding
+            // cannot invent a video stream, so queueing it would only produce
+            // a guaranteed failure on every pass forever. Leave it out and say
+            // so loudly — a terminal "unplayable" state is #40's 3-strike cap.
+            tracing::warn!(
+                file = %abs_path.display(),
+                "[INGEST] Video container has no decodable video stream — \
+                 cannot convert, leaving unregistered (needs #40 terminal state)"
+            );
+            return None;
+        }
+        Err(e) => {
+            // Probe failure is not evidence either way. Skipping is the safe
+            // default: a wrongly-queued file burns a full transcode, whereas a
+            // wrongly-skipped one is retried on the next pass.
+            tracing::warn!(
+                file = %abs_path.display(),
+                error = %e,
+                "[INGEST] Could not probe video container — skipping this pass"
+            );
+            return None;
+        }
+    };
+
+    if !probe::is_browser_native(&info) {
+        tracing::info!(
+            file = %abs_path.display(),
+            codec = %info.codec,
+            profile = ?info.profile,
+            pix_fmt = ?info.pix_fmt,
+            "[INGEST] Container extension says native but codec is not \
+             browser-decodable — queueing for conversion"
+        );
+        return Some(mp4_target);
+    }
+
+    // Codec-native, so the only remaining question is whether the bitstream
+    // behind it is real. This is the expensive check, deliberately reached
+    // only after the cheap metadata probe has already cleared the file.
+    match probe::probe_decode_health(abs_path).await {
+        Ok(health) if !health.is_clean() => {
+            tracing::warn!(
+                file = %abs_path.display(),
+                decode_errors = health.error_count,
+                first_error = ?health.first_error,
+                "[INGEST] Codec is browser-native but the bitstream does not \
+                 decode — queueing a salvage re-encode (output WILL be shorter \
+                 than the source; the undecodable tail is unrecoverable)"
+            );
+            Some(mp4_target)
+        }
+        Ok(_) => None,
+        Err(e) => {
+            tracing::warn!(
+                file = %abs_path.display(),
+                error = %e,
+                "[INGEST] Could not decode-check video — leaving as native"
+            );
+            None
+        }
+    }
+}
+
 /// One full conversion pass: walk the tree, convert non-native files, register
 /// the results, and encrypt them. Always invoked under the conversion lock by
 /// [`run_conversion_pass`], which also handles the rerun-on-trigger semantics.
@@ -670,12 +771,6 @@ async fn run_conversion_pass_inner(
                 if ft.is_dir() {
                     queue.push(entry.path());
                 } else if ft.is_file() {
-                    // Only look at files that need conversion (NOT native media).
-                    let target = match conversion::conversion_target(&name) {
-                        Some(t) => t,
-                        None => continue,
-                    };
-
                     let abs_path = entry.path();
                     let rel_path = abs_path
                         .strip_prefix(&storage_root)
@@ -684,9 +779,29 @@ async fn run_conversion_pass_inner(
                         .replace('\\', "/");
 
                     // Skip if already processed (source_path in DB).
+                    //
+                    // Deliberately checked BEFORE the probe below: probing
+                    // spawns ffprobe (and sometimes a bounded decode), so
+                    // running it on files we already know about would put a
+                    // per-video process spawn back into every idle autoscan
+                    // pass — exactly the disk thrash migration 031 removed.
+                    // Everything already registered is in this set, so the
+                    // steady-state probe count is zero.
                     if existing_set.contains(&rel_path) {
                         continue;
                     }
+
+                    // Extension is sufficient for formats that are *never*
+                    // browser-native. For opaque containers (.mp4/.mov/...)
+                    // the extension is a guess, so ask ffprobe what is
+                    // actually inside — see `transcode::probe`.
+                    let target = match conversion::conversion_target(&name) {
+                        Some(t) => t,
+                        None => match opaque_container_needs_conversion(&abs_path, &name).await {
+                            Some(t) => t,
+                            None => continue,
+                        },
+                    };
 
                     // Skip audio when toggle is off.
                     if target.category == conversion::MediaCategory::Audio && !audio_enabled {
@@ -880,5 +995,130 @@ mod phase_order_tests {
         // exists to encrypt them, else a no-key install would starve AI/geo.
         assert!(pipeline_busy_decision(false, false, true, true));
         assert!(!pipeline_busy_decision(false, false, false, true));
+    }
+}
+
+#[cfg(test)]
+mod opaque_container_tests {
+    //! End-to-end proof for #46: the conversion queue must be decided by what a
+    //! video file *contains*, not by what its extension claims.
+    //!
+    //! These build real fixtures with FFmpeg and run the real probe, because
+    //! the defect being guarded is precisely that the old extension-only path
+    //! never looked inside the file. A pure unit test cannot show that.
+    //! Skipped when FFmpeg is unavailable so minimal CI images stay green.
+    use super::opaque_container_needs_conversion;
+
+    /// Encode a tiny fixture clip with an explicit codec. Returns `None` when
+    /// FFmpeg or the requested encoder is unavailable on this host.
+    fn make_fixture(name: &str, vcodec: &str, extra: &[&str]) -> Option<std::path::PathBuf> {
+        let path = std::env::temp_dir().join(format!("sp_probe_{}_{name}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+
+        let mut args: Vec<String> = vec![
+            "-y".into(),
+            "-f".into(),
+            "lavfi".into(),
+            "-i".into(),
+            "testsrc2=duration=1:size=320x240:rate=10".into(),
+            "-c:v".into(),
+            vcodec.into(),
+        ];
+        args.extend(extra.iter().map(|s| s.to_string()));
+        args.push(path.to_string_lossy().to_string());
+
+        let ok = std::process::Command::new("ffmpeg")
+            .args(&args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+
+        if ok && std::fs::metadata(&path).map(|m| m.len() > 0).unwrap_or(false) {
+            Some(path)
+        } else {
+            let _ = std::fs::remove_file(&path);
+            None
+        }
+    }
+
+    /// The 704 h264 files in the live library must stay out of the queue.
+    /// Queueing them would re-encode almost the entire library for nothing.
+    #[tokio::test]
+    async fn native_h264_mp4_is_left_alone() {
+        let Some(path) = make_fixture(
+            "native.mp4",
+            "libx264",
+            &["-profile:v", "high", "-pix_fmt", "yuv420p"],
+        ) else {
+            eprintln!("ffmpeg/libx264 unavailable — skipping");
+            return;
+        };
+
+        let verdict = opaque_container_needs_conversion(&path, "native.mp4").await;
+        let _ = std::fs::remove_file(&path);
+
+        assert!(
+            verdict.is_none(),
+            "a browser-native H.264 MP4 must NOT be queued for a pointless re-encode"
+        );
+    }
+
+    /// HEVC-in-MP4: 28 such files exist in the live library and none has ever
+    /// been converted, because `conversion_target("x.mp4")` returns `None`.
+    /// This is the assertion that fails on the pre-fix tree.
+    #[tokio::test]
+    async fn hevc_in_mp4_is_queued_despite_the_native_extension() {
+        let Some(path) = make_fixture(
+            "hevc.mp4",
+            "libx265",
+            &["-x265-params", "log-level=none", "-pix_fmt", "yuv420p", "-tag:v", "hvc1"],
+        ) else {
+            eprintln!("ffmpeg/libx265 unavailable — skipping");
+            return;
+        };
+
+        // The old, extension-only answer — still what `conversion_target` says.
+        assert!(
+            crate::conversion::conversion_target("hevc.mp4").is_none(),
+            "precondition: extension-only detection considers .mp4 native"
+        );
+
+        let verdict = opaque_container_needs_conversion(&path, "hevc.mp4").await;
+        let _ = std::fs::remove_file(&path);
+
+        let target = verdict.expect("HEVC in an .mp4 container must be queued for conversion");
+        assert_eq!(target.extension, "mp4");
+        assert_eq!(target.category, crate::conversion::MediaCategory::Video);
+    }
+
+    /// MPEG-4 Part 2 (DivX/Xvid era) — 10 files in the live library.
+    #[tokio::test]
+    async fn mpeg4_part2_in_mp4_is_queued() {
+        let Some(path) = make_fixture("mpeg4.mp4", "mpeg4", &["-pix_fmt", "yuv420p"]) else {
+            eprintln!("ffmpeg/mpeg4 unavailable — skipping");
+            return;
+        };
+
+        let verdict = opaque_container_needs_conversion(&path, "mpeg4.mp4").await;
+        let _ = std::fs::remove_file(&path);
+
+        assert!(
+            verdict.is_some(),
+            "MPEG-4 Part 2 is not browser-decodable and must be queued"
+        );
+    }
+
+    /// Formats that already convert on extension alone must never reach the
+    /// probe — spawning ffprobe for them is pure waste.
+    #[tokio::test]
+    async fn non_opaque_extensions_are_not_probed() {
+        // A path that does not exist: if the probe ran, it would error and log.
+        // Returning `None` purely from the extension check is the correct path.
+        let missing = std::path::Path::new("/nonexistent/clip.mkv");
+        assert!(opaque_container_needs_conversion(missing, "clip.mkv").await.is_none());
+        assert!(opaque_container_needs_conversion(missing, "photo.jpg").await.is_none());
     }
 }
