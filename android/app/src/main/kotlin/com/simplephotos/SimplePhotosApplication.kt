@@ -18,6 +18,7 @@ import coil.decode.GifDecoder
 import coil.decode.SvgDecoder
 import com.simplephotos.data.remote.ApiService
 import com.simplephotos.sync.CrashHandler
+import com.simplephotos.ui.navigation.AppWindows
 import com.simplephotos.ui.theme.ThemeState
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
@@ -61,6 +62,12 @@ class SimplePhotosApplication : Application(), Configuration.Provider, ImageLoad
         CrashHandler.install(this)
         super.onCreate()
         ThemeState.init(dataStore)
+
+        // Count live MainActivity instances so "New Window" can be capped (#41).
+        // Registered here, before any activity can be created, so the very first
+        // window is counted — an activity that starts before this runs would be
+        // invisible to the cap and permanently offset the count.
+        AppWindows.install(this)
 
         // Drain any crash logs captured on previous runs (best-effort, IO thread).
         appScope.launch {

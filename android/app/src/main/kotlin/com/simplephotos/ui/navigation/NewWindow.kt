@@ -20,6 +20,8 @@ import android.content.Intent
 import android.util.Log
 import android.widget.Toast
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.LocalContext
 import com.simplephotos.MainActivity
 
@@ -110,6 +112,13 @@ fun openInNewWindow(context: Context, route: String? = null): Boolean {
         Log.e(TAG, "Refusing to open new window — not an allowed route: '$route'")
         return false
     }
+    // The cap is enforced here, not only in the UI (#41). Callers grey the menu
+    // item out, but this is the function that actually launches, and it is
+    // reachable from more than one place.
+    if (!AppWindows.counter.canOpenAnother()) {
+        Log.w(TAG, "Refusing to open new window — already at the $MAX_APP_WINDOWS-window cap")
+        return false
+    }
     val intent = Intent(context, MainActivity::class.java).apply {
         addFlags(NEW_WINDOW_FLAGS)
         if (route != null) putExtra(EXTRA_START_ROUTE, route)
@@ -143,9 +152,21 @@ fun openInNewWindow(context: Context, route: String? = null): Boolean {
 @Composable
 fun rememberNewWindowLauncher(): (String?) -> Unit {
     val context = LocalContext.current
+    // Read reactively so the message is right at the moment of the tap, not at
+    // the moment this lambda was composed.
+    val live by AppWindows.live.collectAsState()
     return { route ->
         val activity = context.findActivity()
-        if (!openInNewWindow(context, route)) {
+        if (!hasRoomForAnotherWindow(live)) {
+            // Distinct from the generic failure below — "couldn't" implies
+            // something went wrong, when in fact the app did exactly what it
+            // was asked to. Tell the user what the actual limit is.
+            Toast.makeText(
+                context,
+                "Already using $MAX_APP_WINDOWS windows",
+                Toast.LENGTH_SHORT
+            ).show()
+        } else if (!openInNewWindow(context, route)) {
             Toast.makeText(context, "Couldn't open a second window", Toast.LENGTH_SHORT).show()
         } else if (activity?.isInMultiWindowMode == false) {
             Toast.makeText(
@@ -155,6 +176,19 @@ fun rememberNewWindowLauncher(): (String?) -> Unit {
             ).show()
         }
     }
+}
+
+/**
+ * Whether the "New Window" action should be offered at all (#41).
+ *
+ * Menus call this to disable the entry at the cap. Greying it out beats letting
+ * the tap fail and apologising afterwards — but it is an affordance, not the
+ * enforcement: [openInNewWindow] checks the cap itself.
+ */
+@Composable
+fun rememberCanOpenNewWindow(): Boolean {
+    val live by AppWindows.live.collectAsState()
+    return hasRoomForAnotherWindow(live)
 }
 
 /**
