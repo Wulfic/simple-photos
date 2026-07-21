@@ -29,7 +29,9 @@ export interface ClusterCard {
   /** Muted text line(s) rendered under the title. */
   meta: ReactNode;
   /** Optional CSS applied to the thumbnail <img> — used by People to zoom the
-   *  tile onto the detected face (see computeFaceCropStyle). */
+   *  tile onto the detected face (see computeFaceCropStyle). That style
+   *  positions the image absolutely, which is why both tile bodies below are
+   *  `relative`; without it the crop would anchor to the page. */
   imgStyle?: CSSProperties;
 }
 
@@ -156,9 +158,12 @@ function ClusterTile({
   if (variant === "avatar") {
     return (
       <div onClick={onClick} className="card card-interactive p-3 cursor-pointer">
-        <div className="aspect-square bg-surface-raised rounded-full mb-2 mx-auto w-24 h-24 flex items-center justify-center overflow-hidden">
+        <div className="relative aspect-square bg-surface-raised rounded-full mb-2 mx-auto w-24 h-24 flex items-center justify-center overflow-hidden">
           {thumbUrl ? (
-            <img src={thumbUrl} alt={card.alt} style={card.imgStyle} className="w-full h-full object-cover rounded-full" />
+            // No `rounded-full` on the image: the parent already clips, and
+            // rounding a face-cropped image rounds it at its blown-up size,
+            // which can cut a corner-anchored crop back off the tile.
+            <img src={thumbUrl} alt={card.alt} style={card.imgStyle} className="w-full h-full object-cover" />
           ) : (
             placeholder
           )}
@@ -170,7 +175,7 @@ function ClusterTile({
   }
   return (
     <div onClick={onClick} className="card card-interactive cursor-pointer overflow-hidden">
-      <div className="aspect-video bg-surface-raised flex items-center justify-center overflow-hidden">
+      <div className="relative aspect-video bg-surface-raised flex items-center justify-center overflow-hidden">
         {thumbUrl ? (
           <img src={thumbUrl} alt={card.alt} style={card.imgStyle} className="w-full h-full object-cover" />
         ) : (

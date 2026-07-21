@@ -1,6 +1,7 @@
 /** Slide-in panel showing photo metadata with inline edit mode. */
 import { useState, useEffect, useCallback } from "react";
 import { formatBytes } from "../../utils/formatters";
+import { faceCropRect } from "../../utils/thumbnailCss";
 import { db } from "../../db";
 import { metadataApi, type FullMetadataResponse, type MetadataUpdateRequest } from "../../api/metadata";
 import { aiApi, type PhotoFace } from "../../api/ai";
@@ -76,18 +77,26 @@ function EditRow({ label, value, onChange, placeholder, type }: {
 
 /** Square crop of one detected face, cut from the photo's (aspect-preserving)
  *  server thumbnail via the normalized bounding box. No natural dimensions
- *  needed — CSS background-size/position does the framing. */
+ *  needed — CSS background-size/position does the framing.
+ *
+ *  The framing maths is `faceCropRect`, shared with the People tiles. This chip
+ *  wants the face to *fill* it, so it asks for the box itself (`targetFraction`
+ *  1) with no zoom floor — the tile's 60%-with-context framing would leave a
+ *  44px chip mostly background. Keeping the two call sites on one helper is the
+ *  point: hand-rolling this formula twice is how #48 shipped. */
 function FaceCrop({ thumbUrl, face }: { thumbUrl: string | null; face: PhotoFace }) {
-  // Guard against degenerate boxes so we never divide by zero.
-  const w = Math.max(face.bbox_w, 0.0001);
-  const h = Math.max(face.bbox_h, 0.0001);
-  const style: React.CSSProperties = thumbUrl
-    ? {
-        backgroundImage: `url("${thumbUrl}")`,
-        backgroundSize: `${100 / w}% ${100 / h}%`,
-        backgroundPosition: `${(face.bbox_x / Math.max(1 - w, 0.0001)) * 100}% ${(face.bbox_y / Math.max(1 - h, 0.0001)) * 100}%`,
-      }
-    : {};
+  const rect = faceCropRect(
+    { x: face.bbox_x, y: face.bbox_y, w: face.bbox_w, h: face.bbox_h },
+    { targetFraction: 1, minVisibleFraction: 0 },
+  );
+  const style: React.CSSProperties =
+    thumbUrl && rect
+      ? {
+          backgroundImage: `url("${thumbUrl}")`,
+          backgroundSize: `${100 / rect.zx}% ${100 / rect.zy}%`,
+          backgroundPosition: `${rect.px * 100}% ${rect.py * 100}%`,
+        }
+      : {};
   return (
     <div
       className="w-11 h-11 rounded-full bg-gray-800 border border-white/10 shrink-0 bg-no-repeat"

@@ -272,34 +272,160 @@ export const FACE_TARGET_FRACTION = 0.6;
 export const FACE_MAX_ZOOM = 3;
 
 /**
- * CSS for an `object-fit: cover` <img> in a square tile so it zooms/pans to the
- * detected face instead of showing the whole photo (People-grid tiles, face
- * chips). Pure heuristic — it deliberately does not need the image aspect ratio,
- * which we don't know for a cached thumbnail:
- *   - `objectPosition` slides the cover crop so the face centre is centred.
- *   - `transform: scale()` (origin at the same point) zooms so the larger face
- *     dimension reaches ~{@link FACE_TARGET_FRACTION} of the tile, clamped to
- *     [1, {@link FACE_MAX_ZOOM}].
+ * The sub-rectangle of the source image to show, as normalised fractions.
+ *  - `zx`/`zy` — visible fraction of the image along each axis (1 = all of it).
+ *  - `px`/`py` — CSS *position* percentage (0–1) that lands that window where
+ *    we want it. This is the `background-position` / `object-position` scale,
+ *    NOT the window's origin: `P` aligns the image's P-point with the
+ *    container's P-point, which is why it needs the `/(1 - z)` term below.
+ */
+export interface FaceCropRect {
+  zx: number;
+  zy: number;
+  px: number;
+  py: number;
+}
+
+export interface FaceCropOptions {
+  /** Fraction of the container the face should occupy. 1 = fill it exactly. */
+  targetFraction?: number;
+  /** Floor on the visible fraction — the "don't magnify a 40px face into mush"
+   *  guard. 0 disables it (correct for a tiny chip that wants the face only). */
+  minVisibleFraction?: number;
+}
+
+/** Position percentage that centres image-point `c` when `z` of the axis shows.
+ *
+ *  Derivation (identical for `background-position` and `object-position`): with
+ *  container C and image I, offset = P·(C − I), so image-point `c` lands at
+ *  P·(C − I) + c·I. Setting that to the centre C/2 and substituting z = C/I
+ *  gives P = (c − z/2)/(1 − z).
+ *
+ *  At z = 1 the axis is fully visible, so there is no pan freedom and no
+ *  solution — every P renders identically (the offset term is zero). Return the
+ *  midpoint rather than dividing by zero. */
+function facePosition(c: number, z: number): number {
+  if (z >= 1) return 0.5;
+  return Math.min(1, Math.max(0, (c - z / 2) / (1 - z)));
+}
+
+/**
+ * Map a normalised face box to the image window that frames it — the one piece
+ * of arithmetic behind every face tile on both platforms.
+ *
+ * The box is normalised against the **whole photo**, and server thumbnails are
+ * aspect-preserving downscales, so the fractions carry over to the thumbnail
+ * unchanged. That is what lets this work without knowing the image's aspect
+ * ratio: we never ask where the face sits *after* a cover-crop, we place the
+ * window ourselves. (Any formula built on `object-fit: cover` does need the
+ * aspect ratio — along the uncropped axis the whole image is visible, so
+ * `object-position` has no freedom left to centre anything with.)
+ *
+ * The window is the box scaled about its own centre by a single factor `k`, so
+ * a face that is square in *pixels* maps to a square window. Rendering that
+ * window into a square container is therefore distortion-free, even though
+ * `zx`/`zy` differ — they differ by exactly the photo's aspect ratio, which is
+ * what cancels it out.
+ *
+ * Returns `null` for a missing or degenerate box so callers fall back to cover.
+ */
+export function faceCropRect(
+  box?: FaceBox | null,
+  options: FaceCropOptions = {},
+): FaceCropRect | null {
+  if (!box) return null;
+  const { x, y, w, h } = box;
+  if (![x, y, w, h].every((n) => Number.isFinite(n)) || w <= 0 || h <= 0) return null;
+
+  const targetFraction = options.targetFraction ?? FACE_TARGET_FRACTION;
+  const minVisibleFraction = options.minVisibleFraction ?? 1 / FACE_MAX_ZOOM;
+
+  // A bbox wider/taller than the photo is server garbage; clamp before it
+  // poisons the ratios below.
+  const bw = Math.min(1, w);
+  const bh = Math.min(1, h);
+  const m = Math.max(bw, bh);
+
+  // `k` expands the box about its centre. The face then occupies 1/k of the
+  // container on both axes, so the target fraction is simply k = 1/f — bounded
+  // by 1/m (any larger and the window runs off the photo) and floored by
+  // minVisible/m (any smaller and we upscale the thumbnail into mush).
+  // k >= 1 always falls out of this: both bounds and the target are >= 1.
+  const k = Math.min(
+    1 / m,
+    Math.max(minVisibleFraction / m, 1 / Math.max(targetFraction, 0.0001)),
+  );
+
+  const zx = Math.min(1, bw * k);
+  const zy = Math.min(1, bh * k);
+  const cx = Math.min(1, Math.max(0, x + bw / 2));
+  const cy = Math.min(1, Math.max(0, y + bh / 2));
+
+  return { zx, zy, px: facePosition(cx, zx), py: facePosition(cy, zy) };
+}
+
+/**
+ * CSS for an <img> that frames the detected face inside a square tile.
+ *
+ * Positions the image absolutely rather than leaning on `object-fit: cover`, so
+ * the caller's container must be `relative` (and clip). `object-fit: fill` plus
+ * an explicit width/height reproduces `background-size`'s per-axis scaling —
+ * the same trick `getThumbnailStyle` already uses for rotated crops — and keeps
+ * the element an <img>, so `alt` and lazy loading survive.
+ *
  * Returns `{}` for a missing/degenerate box so callers fall back to plain cover.
  */
-export function computeFaceCropStyle(box?: FaceBox | null): CSSProperties {
-  if (!box) return {};
-  const { x, y, w, h } = box;
-  if (![x, y, w, h].every((n) => Number.isFinite(n)) || w <= 0 || h <= 0) return {};
-
-  const cx = Math.min(1, Math.max(0, x + w / 2));
-  const cy = Math.min(1, Math.max(0, y + h / 2));
-  const zoom = Math.min(
-    FACE_MAX_ZOOM,
-    Math.max(1, FACE_TARGET_FRACTION / Math.max(w, h)),
-  );
-  const originX = `${(cx * 100).toFixed(2)}%`;
-  const originY = `${(cy * 100).toFixed(2)}%`;
+export function computeFaceCropStyle(
+  box?: FaceBox | null,
+  options?: FaceCropOptions,
+): CSSProperties {
+  const rect = faceCropRect(box, options);
+  if (!rect) return {};
+  const { zx, zy, px, py } = rect;
+  const pct = (n: number) => `${(n * 100).toFixed(3)}%`;
   return {
-    objectPosition: `${originX} ${originY}`,
-    transformOrigin: `${originX} ${originY}`,
-    transform: `scale(${zoom.toFixed(3)})`,
+    position: "absolute",
+    // `left` is the image's offset, i.e. P·(C − I) from the derivation above.
+    left: pct(px * (1 - 1 / zx)),
+    top: pct(py * (1 - 1 / zy)),
+    width: pct(1 / zx),
+    height: pct(1 / zy),
+    // Both are load-bearing against the tiles' `w-full h-full object-cover`:
+    // inline styles win the cascade, but a `max-width: 100%` reset would still
+    // shrink the blown-up image back to the container.
+    maxWidth: "none",
+    objectFit: "fill",
   };
+}
+
+/** A face/pet cluster as the server sends it: the bbox arrives as four
+ *  independently-nullable columns because it comes from a LEFT JOIN on the
+ *  representative detection, which legitimately fails to resolve. */
+export interface ClusterFaceBox {
+  rep_bbox_x?: number | null;
+  rep_bbox_y?: number | null;
+  rep_bbox_w?: number | null;
+  rep_bbox_h?: number | null;
+}
+
+/**
+ * Face-framing style for a cluster tile, or `undefined` when the server could
+ * not resolve a bbox (caller falls back to a plain cover crop).
+ *
+ * Exists so the null-handling lives in one place: every People tile — the
+ * People page and the Albums-page row — goes through here. Inlining this guard
+ * per call site is how the Albums row ended up with no face framing at all
+ * (#48d) while the People page had it.
+ */
+export function clusterFaceCropStyle(cluster: ClusterFaceBox): CSSProperties | undefined {
+  const { rep_bbox_w, rep_bbox_h } = cluster;
+  if (rep_bbox_w == null || rep_bbox_h == null) return undefined;
+  return computeFaceCropStyle({
+    x: cluster.rep_bbox_x ?? 0,
+    y: cluster.rep_bbox_y ?? 0,
+    w: rep_bbox_w,
+    h: rep_bbox_h,
+  });
 }
 
 export function getThumbnailStyle(

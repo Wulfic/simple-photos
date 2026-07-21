@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -51,18 +52,8 @@ import kotlinx.coroutines.withContext
 
 private const val TAG = "LibraryFeatures"
 
-// ── Face-zoom crop for People tiles ──────────────────────────────────────────
-
-/** Normalised (0–1) face bbox used to zoom a cluster tile onto the face. */
-data class TileFaceBox(val x: Float, val y: Float, val w: Float, val h: Float)
-
-/** Mirrors web computeFaceCropStyle: zoom so the larger face dimension reaches
- *  ~60% of the tile, clamped to [1, 3]. */
-private const val FACE_TARGET_FRACTION = 0.6f
-private const val FACE_MAX_ZOOM = 3f
-
-private fun faceZoom(w: Float, h: Float): Float =
-    (FACE_TARGET_FRACTION / maxOf(w, h)).coerceIn(1f, FACE_MAX_ZOOM)
+// Face-tile framing lives in FaceCrop.kt (`TileFaceBox`, `faceCropRect`) so the
+// arithmetic is JVM-testable without a device — see FaceCropTest.
 
 // ── Generic grid scaffold ────────────────────────────────────────────────────
 
@@ -82,6 +73,9 @@ private fun <T> GridScaffold(
     emptyHint: String,
     banner: String? = null,
     faceBox: (T) -> TileFaceBox? = { null },
+    /** Circular portrait tiles for person/pet clusters, matching web's
+     *  `variant="avatar"` (#48c). Trips and Memories stay rectangular. */
+    circular: Boolean = false,
 ) {
     Scaffold(
         topBar = {
@@ -141,6 +135,7 @@ private fun <T> GridScaffold(
                             subtitle = subtitle(item),
                             thumbUrl = thumbUrl(item),
                             faceBox = faceBox(item),
+                            circular = circular,
                             onClick = { onItemClick(item) },
                         )
                     }
@@ -158,6 +153,7 @@ private fun ClusterTile(
     thumbUrl: String?,
     onClick: () -> Unit,
     faceBox: TileFaceBox? = null,
+    circular: Boolean = false,
 ) {
     Card(
         modifier = Modifier
@@ -170,28 +166,44 @@ private fun ClusterTile(
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(1f)
-                    .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp))
+                    // Clips the blown-up thumbnail below — the graphicsLayer
+                    // deliberately draws outside its own bounds.
+                    .clip(
+                        if (circular) CircleShape
+                        else RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp)
+                    )
                     .background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center,
             ) {
                 if (!thumbUrl.isNullOrEmpty()) {
-                    // Zoom the thumbnail onto the detected face when the server
-                    // sent a bbox — otherwise show the whole (cover-cropped) photo.
-                    val zoomModifier = if (faceBox != null && faceBox.w > 0f && faceBox.h > 0f) {
-                        val cx = (faceBox.x + faceBox.w / 2f).coerceIn(0f, 1f)
-                        val cy = (faceBox.y + faceBox.h / 2f).coerceIn(0f, 1f)
-                        val zoom = faceZoom(faceBox.w, faceBox.h)
+                    // Frame the detected face when the server sent a bbox —
+                    // otherwise show the whole (cover-cropped) photo.
+                    val rect = faceCropRect(faceBox)
+                    val cropModifier = if (rect != null) {
+                        // Reproduces the web CSS exactly: FillBounds makes the
+                        // image the tile's size, then this scales it up about
+                        // the top-left and slides the chosen window into view.
+                        // TransformOrigin(0,0) is what makes the translation a
+                        // plain offset — with a centred origin the scale would
+                        // move the window too, which is the class of mistake
+                        // that produced #48 in the first place.
                         Modifier.graphicsLayer {
-                            scaleX = zoom
-                            scaleY = zoom
-                            transformOrigin = TransformOrigin(cx, cy)
+                            transformOrigin = TransformOrigin(0f, 0f)
+                            scaleX = 1f / rect.zx
+                            scaleY = 1f / rect.zy
+                            translationX = rect.px * (1f - 1f / rect.zx) * size.width
+                            translationY = rect.py * (1f - 1f / rect.zy) * size.height
                         }
                     } else Modifier
                     AsyncImage(
                         model = rememberThumbnailRequest(data = thumbUrl),
                         contentDescription = label,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize().then(zoomModifier),
+                        // FillBounds, not Crop: the bbox is normalised against
+                        // the whole photo, so a centre-crop would apply it in a
+                        // coordinate space it does not belong to. Aspect is
+                        // preserved by zx/zy differing, not by the scaler.
+                        contentScale = if (rect != null) ContentScale.FillBounds else ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize().then(cropModifier),
                     )
                 } else {
                     Icon(
@@ -375,6 +387,7 @@ fun PeopleScreen(
         },
         emptyHint = "No face clusters yet. Enable AI in Settings to begin scanning.",
         banner = if (assigning) "Choose the correct person for this face." else null,
+        circular = true,
     )
 }
 
@@ -535,6 +548,9 @@ fun PetsScreen(
         },
         onItemClick = { cluster -> onPetClick(cluster.id) },
         emptyHint = "No pet clusters yet.",
+        // Circular to match web, but no `faceBox`: the server's PetCluster
+        // carries no rep_bbox_* columns, so there is nothing to frame yet.
+        circular = true,
     )
 }
 
