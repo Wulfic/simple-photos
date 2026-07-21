@@ -10,5 +10,6 @@ pub mod gpu_probe;
 pub mod handlers;
 pub mod ladder;
 pub mod probe;
+pub mod renditions;
 
 pub use gpu_probe::HwAccelCapability;
