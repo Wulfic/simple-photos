@@ -329,7 +329,7 @@ Same class as the GIF misdetection fixed by magic-byte sniffing (memory `c1-gif-
 - [x] Route `.mp4`/`.mov`/`.m4v`/`.webm` through the probe at ingest. `conversion_target` keeps its signature (load-bearing in sync contexts — MIME selection, upload gating); the probe is layered on top. — `65389a7`
 - [x] Got the actual failing file off the live box and probed it before writing the fix. **This is the step that caught the wrong root cause** — do not skip it on B2/B4. — `65389a7`
 - [x] Test: HEVC-in-MP4 and MPEG-4-in-MP4 fixtures are queued; an H.264-in-MP4 fixture is left alone. Real FFmpeg fixtures through the real probe, since the defect is that the old path never looked inside the file. Verified RED against a simulated extension-only path: the two new-behaviour tests fail, the two preserved-behaviour tests pass. 310 green (was 295). — `65389a7`
-- [ ] **Backfill — this fix helps NEW imports only.** The `existing_set` check was deliberately moved *ahead* of the probe so idle autoscan passes spawn zero ffprobes (protecting the migration-031 disk-thrash fix), which means the 38 already-registered offenders are never re-examined. Needs an admin task to probe registered mp4s and queue them. **Without this the user's library is unchanged.**
+- [ ] **Backfill — this fix helps NEW imports only.** The `existing_set` check was deliberately moved *ahead* of the probe so idle autoscan passes spawn zero ffprobes (protecting the migration-031 disk-thrash fix), which means the 38 already-registered offenders are never re-examined. **Without this the user's library is unchanged.** Runs automatically — the project is in beta and breaking changes are expected. **It must be a one-shot pass, not a new autoscan responsibility:** persist a completion marker so it probes each registered `.mp4`/`.mov`/`.m4v`/`.webm` exactly once and never re-walks them on subsequent idle passes, or it re-introduces the disk thrash the `existing_set` ordering exists to prevent. 38 known offenders — bounded, so queue at the ladder's low priority and let it drain.
 - [ ] **Corrupt-file honesty.** A salvage re-encode silently shortens the video (51s → 28s). Surface the loss — this is the natural first consumer of B1/#45's failure audit events.
 - [ ] **`VIDEO0063.mp4` has no decodable video stream at all.** Currently logged and left unregistered, because queueing it would guarantee a failure every pass forever. Needs the terminal "unplayable" state from B2/#40's 3-strike cap.
 - [ ] `needs_web_preview` still has the same extension-only blind spot; the probe is not wired into it yet.
@@ -362,17 +362,57 @@ Same class as the GIF misdetection fixed by magic-byte sniffing (memory `c1-gif-
 > and re-encoding four of those is not a background afterthought.
 
 Phased plan:
-- [ ] **Schema.** Migration `035_video_renditions.sql`: `video_renditions(photo_id, height, blob_id/path, codec, bitrate, size_bytes, created_at)`, unique on `(photo_id, height)`. A photo has 1..n renditions; the source is one of them.
-- [ ] **Rung selection as a pure function**, keyed on `min(width, height)` with a tolerance band (do not re-encode to save <~10% of the short edge). Unit-test it against the real shapes above — `1080x1920`, `2288x1088`, `3840x2160`, `7680x4320`, `1920x1440` — before any ffmpeg work. This is arithmetic; it must not need a device or a transcode to verify.
-- [ ] **Transcode.** `build_video_transcode_args` takes a target rung; the scale filter must preserve orientation (scale the short edge to 1080, not the height), alongside the even-dimension and `format=yuv420p` guarantees already there. Rules from the issue: source ≤1080p tier → single rendition; source above it → source rendition **and** a 1080p rendition.
-- [ ] **The source rendition must actually be playable.** #46 established that a `.mp4` source may be HEVC or a corrupt bitstream. A ladder whose top rung is the untouched source hands the user a picker whose "highest" option does not play. Gate the source rung on `transcode::probe::is_browser_native` + decode health.
-- [ ] **Cost control.** This doubles encode work for every 4K video. Reuse the existing two-lane parallelism (`SIMPLE_PHOTOS_CONVERSION_JOBS`) and enqueue the 1080p rung at lower priority than first-pass conversions — a user must never wait on a secondary rendition to see their video at all.
+
+> **Server planning + storage + queue landed — `aee50f8`, `25385bb`, `f3cd439`,
+> `7a12582`, `d1a3079`. Nothing generates a rung yet; that is the next commit.**
+>
+> **The DB's geometry is not the encode's input — measured 2026-07-21.**
+> `photos.width`/`height` disagree with this file's ffprobe census twice, and
+> both were found by measuring the live box before writing the candidate query:
+> - **58 of 698 videos have no recorded geometry at all** (`width`/`height` ≤ 0).
+>   A prefilter requiring `min(w,h) > threshold` cannot see them, so selecting
+>   purely on stored geometry skips them **forever**. They are selected anyway
+>   and resolved by a probe.
+> - **Orientation is transposed.** The census says 126 × `3840x2160`; the DB
+>   holds 78 × `2160x3840` **plus** 26 × `3840x2160`, and the same swap shows on
+>   `1440x1920` (census `1920x1440`) and `4320x7680` (census `7680x4320`).
+>   Cause unconfirmed — most likely rotation side-data applied on one side only.
+>
+> The transposition is survivable **only at selection time**, because the rung
+> rule keys on `min(width, height)`. That is the short-edge rule earning its keep
+> a second time. It is **not** survivable in the transcode: `rung_dimensions`
+> returns the orientation it was given, so a transposed pair fed to `scale=W:H`
+> squashes a landscape frame into a portrait box. **The generation pass must take
+> its geometry from probing the file it is about to encode.** The columns narrow
+> 698 videos to ~114 and are good for nothing else.
+>
+> **Two trigger bugs in `035`, both verified against SQLite rather than reasoned
+> about** (fixed in `036`):
+> - An upsert taking the `DO UPDATE` branch fires **UPDATE** triggers, not INSERT
+>   triggers. `upsert_rendition` is `INSERT ... ON CONFLICT DO UPDATE`, so the
+>   moment a rung becomes playable is an UPDATE — and `035` has no UPDATE
+>   trigger. The photo is never nominated and **the picker stays empty until a
+>   full walk that, post-#38, may never come.** This already affected any
+>   re-encode of an existing rung.
+> - Claim rows carry no locator, so nominating on INSERT wakes every client once
+>   per attempt to deliver a picker that has not changed.
+>
+> Both now nominate exactly when the set of *playable* renditions changes.
+
+- [x] **Schema.** Migration `035_video_renditions.sql`. Keyed on `short_edge`, **not** height — 14 live videos are `1080x1920` and 4 are `2288x1088`, and keyed on height the first group collides with a genuine 1080p rung while the second invents one 8 pixels tall. `blob_id` is the load-bearing column, not `file_path`: neither client plays from `GET /photos/:id/file`. — `25385bb`
+- [x] **Rung selection as a pure function**, keyed on `min(width, height)` with a 10% tolerance band, unit-tested against `1080x1920`, `2288x1088`, `3840x2160`, `7680x4320`, `1920x1440`. The census test reproduces the measured demand of 136 from the shape counts, pinning the arithmetic to the measurement rather than to an assertion about it. — `aee50f8`
+- [x] **Transcode.** `build_video_transcode_args` takes a target rung; dimensions arrive precomputed from `ladder::rung_dimensions` rather than as an ffmpeg scale expression, so the orientation-preserving arithmetic is a unit test instead of a device test. Found in passing: `convert_video`'s **CPU fallback held its own hardcoded copy of the scale filter** — harmless at source resolution, a silent correctness bug under the ladder (GPU asks for a rung, hardware encode fails, fallback runs at full resolution, result is recorded as the 1080p rendition). — `f3cd439`
+- [x] **The source rendition must actually be playable.** Gated on `is_browser_native` + decode health. A lone unplayable source yields *no* picker rather than a one-entry picker whose only option fails. — `7a12582`
+- [x] **Candidate queue + 3-strike cap** (`036`). The candidate set is self-limiting on success — a produced rung leaves it forever — but **not on failure**, so without a cap every sweep re-attempts a 4K-class re-encode forever on 114 candidates. Attempts are charged **before** the encode: a file that OOMs or hard-kills ffmpeg never reaches an error handler, and that is precisely the file needing retirement. Cheapest-first ordering keeps the 4 8K sources off the head of the queue. `rung_threshold` is shared with the SQL prefilter rather than re-derived, and a test requires the two to agree on every live shape. — `d1a3079`
+- [ ] **Generation pass.** Decrypt → probe → plan → transcode → encrypt → record. **Take geometry from the probe, never from `photos.width/height`** (see above). Encrypted mode must use the **chunked** (`SPCHNKB2`) writer — `crypto::encrypt` on a 4K video is the v1 OOM at ~5× RAM. `photos/server_migrate_encrypt.rs::encrypt_one_photo_chunked` is the working template. Leave `blobs.content_hash` NULL on rendition blobs, as thumbnail blobs already do, so a rendition can never be dedup-linked to a photo.
+- [ ] **Cost control.** This doubles encode work for every 4K video. Reuse the existing two-lane parallelism (`SIMPLE_PHOTOS_CONVERSION_JOBS`) and enqueue the 1080p rung at lower priority than first-pass conversions — a user must never wait on a secondary rendition to see their video at all. Queue *ordering* is done (`d1a3079`); the parallelism wiring is not.
+- [ ] **Orphan sweeper.** `035`'s cascade queues unreferenced rendition blobs into `orphaned_rendition_blobs`, and **nothing drains it yet** — so deleted 4K videos leak their rendition bytes. The sweeper must re-check references before unlinking, and must remember that `blobs.content_hash` dedup means one blob can back several photos.
 - [ ] **Serving.** Extend the video endpoint with a rendition selector; keep range-request support intact (`server/src/http_utils.rs`).
 - [ ] **API.** Expose available renditions per video so clients can populate the picker.
 - [ ] **Web player.** Gear icon bottom-right of `web/src/components/viewer/VideoControls.tsx` → resolution menu. Default via the Network Information API where available (`navigator.connection.effectiveType` / `saveData`), falling back to highest.
 - [ ] **Android player.** Same picker in `VideoPlayer.kt`; default from `ConnectivityManager` (`NET_CAPABILITY_NOT_METERED` → highest, metered → ≤1080p).
 - [ ] **Android setting.** "Cellular data saver" toggle; when OFF, always serve highest regardless of network, per the issue.
-- [ ] **Backfill.** Task to generate 1080p rungs for existing >1080p videos. **Automatic, not opt-in (Tyler, 2026-07-20): the project is in beta and breaking changes are expected**, so the earlier "do not silently re-encode someone's library" caveat does not apply. Measured cost is bounded and known — 136 files, 126 of them 3840x2160 and 4 of them 8K — so run it at the ladder's low priority and let it drain. The 8K files are a 2-rung decision each and are not a background afterthought.
+- [ ] **Backfill.** Task to generate 1080p rungs for existing >1080p videos. It runs automatically — the project is in beta and breaking changes are expected. Measured cost is bounded and known — 136 files, 126 of them 3840x2160 and 4 of them 8K — so run it at the ladder's low priority and let it drain. The 8K files are a 2-rung decision each and are not a background afterthought.
 - [ ] Tests: ladder selection logic (which rungs for which source height) as a pure unit test; rendition serving + range requests in E2E; picker default selection per network state.
 
 ---
