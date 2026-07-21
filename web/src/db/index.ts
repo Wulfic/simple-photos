@@ -6,6 +6,7 @@
  * Data is per-device and can be safely cleared without data loss.
  */
 import Dexie, { type Table } from "dexie";
+import type { Rendition } from "../gallery/renditionChoice";
 
 /** Discriminated union for the four media categories */
 export type MediaType = "photo" | "gif" | "video" | "audio";
@@ -73,6 +74,21 @@ export interface CachedPhoto {
   burstId?: string;
   /** Blob ID of the extracted motion video (motion photos only) */
   motionVideoBlobId?: string;
+  /**
+   * Playable qualities for this video, highest first (#49) — the resolution
+   * ladder behind the viewer's gear icon.
+   *
+   * Mirrored from the sync record rather than fetched per video: the server's
+   * change-log triggers nominate a photo whenever its *playable* rendition set
+   * changes, so the ladder rides the sync feed and is already local by the time
+   * the viewer opens. A per-video request would put a round trip in front of
+   * every video *and* make those triggers dead weight.
+   *
+   * Undefined (pre-#49 server, or a still) and empty (one quality) both mean
+   * "draw no picker" — see `gallery/renditionChoice.ts`. Not indexed: nothing
+   * queries by it, so it needs no Dexie version bump.
+   */
+  renditions?: Rendition[];
 }
 
 export interface CachedAlbum {

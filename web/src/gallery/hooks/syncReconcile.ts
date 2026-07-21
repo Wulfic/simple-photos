@@ -39,6 +39,7 @@ import {
   mediaTypeFromMime,
 } from "../../db";
 import { base64ToArrayBuffer } from "../../utils/media";
+import { renditionsEqual } from "../renditionChoice";
 import { decodeThumbnailDimensions } from "../utils/thumbnailGenerate";
 import {
   isTransposed as checkTransposed,
@@ -258,6 +259,20 @@ export async function reconcileSyncedPhotos(
         const serverCrop = record.crop_metadata ?? undefined;
         if (existing.cropData !== serverCrop) updates.cropData = serverCrop;
 
+        // The resolution ladder (#49). Renditions land minutes-to-hours after
+        // the photo, so this is almost always an *update* to an existing row
+        // rather than something an insert carries — which is exactly why the
+        // server nominates the photo through the change log when its playable
+        // rung set changes. If this write is missing, the picker never appears
+        // however correct the server is.
+        //
+        // `renditionsEqual` collapses undefined and [] so the pass after a
+        // server upgrade does not rewrite every video in the library.
+        if (!renditionsEqual(existing.renditions, record.renditions)) {
+          updates.renditions =
+            record.renditions && record.renditions.length > 0 ? record.renditions : undefined;
+        }
+
         // Dimension sync with transpose guard: a rotated thumbnail legitimately
         // reports swapped w/h, and adopting that would fight the EXIF fix.
         if (
@@ -346,6 +361,12 @@ export async function reconcileSyncedPhotos(
         photoSubtype: record.photo_subtype ?? undefined,
         burstId: record.burst_id ?? undefined,
         motionVideoBlobId: record.motion_video_blob_id ?? undefined,
+        // Rare on an insert — a rung is generated long after the photo is
+        // registered — but a cold start after the ladder has drained delivers
+        // every video with its full ladder in one go.
+        ...(record.renditions && record.renditions.length > 0
+          ? { renditions: record.renditions }
+          : {}),
         ...(thumb ? { thumbnailMimeType: thumb.mime } : {}),
       });
       if (thumb) thumbRows.push({ blobId: idbKey, data: thumb.data, mime: thumb.mime });

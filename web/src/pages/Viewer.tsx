@@ -17,6 +17,7 @@ import ViewerEditPanel from "../components/viewer/ViewerEditPanel";
 import LeavePrompt from "../components/viewer/LeavePrompt";
 import CropOverlay from "../components/viewer/CropOverlay";
 import VideoControls from "../components/viewer/VideoControls";
+import useVideoRendition from "../hooks/useVideoRendition";
 import ViewerTopBar from "../components/viewer/ViewerTopBar";
 import DownloadChoiceModal from "../components/viewer/DownloadChoiceModal";
 import BurstStrip from "../components/viewer/BurstStrip";
@@ -238,6 +239,21 @@ export default function Viewer() {
     videoError, setVideoError,
     loadEncryptedMedia,
   } = useViewerMedia(preloadCache);
+
+  // ── Video resolution ladder (#49) ─────────────────────────────────────
+  // Live-queried rather than read once: a rung finishing its encode while the
+  // video is open should make the gear icon appear, and the sync feed writes
+  // the ladder into this row when the server's change log nominates the photo.
+  const cachedPhotoRow = useLiveQuery(() => (id ? db.photos.get(id) : undefined), [id]);
+  // `enabled: !editMode` is a correctness gate, not a UI one — a crop or trim
+  // saved while a 1080p rung is on screen would re-encode the downscale over
+  // the user's original. It reverts the selection, not just the control.
+  const rendition = useVideoRendition({
+    renditions: cachedPhotoRow?.renditions,
+    photoId: id,
+    videoRef,
+    enabled: !editMode,
+  });
 
   // Track cast connectivity so the effect below re-sends the current photo the
   // moment a session connects — previously it only ran on photo change, so
@@ -783,7 +799,10 @@ export default function Viewer() {
             >
               <video
                 ref={videoRef}
-                src={mediaUrl}
+                // A selected rung replaces the source; null means the photo's
+                // own blob, which is also what the "Original" entry selects —
+                // the source rung IS this blob, so it is never re-downloaded.
+                src={rendition.renditionUrl ?? mediaUrl}
                 playsInline autoPlay loop
                 className="w-full h-full"
                 style={{
@@ -798,6 +817,9 @@ export default function Viewer() {
                   if (cropData?.trimStart && cropData.trimStart > 0) v.currentTime = cropData.trimStart;
                   // Recompute crop zoom now that video dimensions are known
                   computeCropZoom();
+                  // Restore the playhead after a quality switch, so changing
+                  // resolution does not restart the video. No-op otherwise.
+                  rendition.handleLoadedMetadata();
                 }}
                 onTimeUpdate={(e) => {
                   // Loop back to the trim start (not natural end) when a trim is
@@ -811,7 +833,14 @@ export default function Viewer() {
               />
             </div>
             {/* Custom controls — NOT rotated */}
-            <VideoControls videoRef={videoRef} visible={showOverlay} />
+            <VideoControls
+              videoRef={videoRef}
+              visible={showOverlay}
+              renditions={rendition.available}
+              selectedRendition={rendition.selected}
+              switchingRendition={rendition.switching}
+              onSelectRendition={rendition.select}
+            />
           </div>
           );
         })()}

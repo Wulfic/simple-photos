@@ -277,6 +277,136 @@ describe("reconcileSyncedPhotos — mirror contents are unchanged by batching", 
     expect(row?.albumIds).toEqual(["album-1", "album-2"]);
   });
 
+  // ── The resolution ladder (#49) ────────────────────────────────────────
+  //
+  // The sync feed is the ONLY delivery path for renditions: the server's
+  // change-log triggers nominate a photo when its playable rung set changes,
+  // and this reconcile is what turns that nomination into something the viewer
+  // can read. If these writes are missing the gear icon never appears, however
+  // correct the server is — and nothing else in the client would notice.
+  describe("the resolution ladder rides the mirror", () => {
+    const ladder = [
+      {
+        short_edge: 2160,
+        width: 3840,
+        height: 2160,
+        is_source: true,
+        blob_id: "vid-blob",
+        codec: "h264",
+        size_bytes: 900,
+      },
+      {
+        short_edge: 1080,
+        width: 1920,
+        height: 1080,
+        is_source: false,
+        blob_id: "rung-1080",
+        codec: "h264",
+        size_bytes: 300,
+      },
+    ];
+
+    it("persists a ladder that arrives on an existing video", async () => {
+      // The normal case by a mile: a rung is encoded minutes-to-hours after the
+      // photo was registered, so the ladder always arrives as an UPDATE.
+      await db.photos.put(cachedFor("vid", { mediaType: "video" }));
+      await db.thumbs.put({
+        blobId: "vid",
+        data: new Uint8Array([1]).buffer as ArrayBuffer,
+        mime: "image/jpeg",
+      });
+      const cached = await db.photos.toArray();
+
+      await reconcileSyncedPhotos(
+        [record("vid", { media_type: "video", renditions: ladder })],
+        cached,
+      );
+
+      expect((await db.photos.get("vid"))?.renditions).toEqual(ladder);
+    });
+
+    it("persists a ladder that arrives with a brand-new video", async () => {
+      download.mockResolvedValue(encodedThumb());
+
+      await reconcileSyncedPhotos(
+        [record("vid", { media_type: "video", renditions: ladder })],
+        [],
+      );
+
+      expect((await db.photos.get("vid"))?.renditions).toEqual(ladder);
+    });
+
+    it("does not rewrite the library when a #49 server reports no rungs", async () => {
+      // `undefined` (cached before this field existed) and `[]` (a #49 server
+      // saying "this video needs no rung" — ~600 of the live library) are the
+      // same state. Treating them as different makes the first pass after a
+      // server upgrade rewrite every video, and every pass after it do so
+      // again — reintroducing exactly the O(library) write amplification #38
+      // removed.
+      await db.photos.put(cachedFor("vid", { mediaType: "video" }));
+      await db.thumbs.put({
+        blobId: "vid",
+        data: new Uint8Array([1]).buffer as ArrayBuffer,
+        mime: "image/jpeg",
+      });
+      const cached = await db.photos.toArray();
+
+      const stats = await reconcileSyncedPhotos(
+        [record("vid", { media_type: "video", renditions: [] })],
+        cached,
+      );
+
+      expect(stats.updated).toBe(0);
+      expect(stats.unchanged).toBe(1);
+    });
+
+    it("replaces a rung whose blob was re-encoded under the same short edge", async () => {
+      // `upsert_rendition` refreshes a rung in place, so a re-encode changes
+      // the blob id without changing the rung's identity. A comparison on
+      // length or short_edge alone leaves the viewer fetching bytes the server
+      // has already replaced.
+      await db.photos.put(
+        cachedFor("vid", { mediaType: "video", renditions: ladder }),
+      );
+      await db.thumbs.put({
+        blobId: "vid",
+        data: new Uint8Array([1]).buffer as ArrayBuffer,
+        mime: "image/jpeg",
+      });
+      const cached = await db.photos.toArray();
+      const reEncoded = [ladder[0], { ...ladder[1], blob_id: "rung-1080-v2" }];
+
+      await reconcileSyncedPhotos(
+        [record("vid", { media_type: "video", renditions: reEncoded })],
+        cached,
+      );
+
+      expect((await db.photos.get("vid"))?.renditions?.[1].blob_id).toBe("rung-1080-v2");
+    });
+
+    it("clears the ladder when the server withdraws it", async () => {
+      // A withdrawn rung changes the picker as much as an added one. Leaving a
+      // stale entry offers a quality whose blob is gone — a menu item that 404s.
+      await db.photos.put(
+        cachedFor("vid", { mediaType: "video", renditions: ladder }),
+      );
+      await db.thumbs.put({
+        blobId: "vid",
+        data: new Uint8Array([1]).buffer as ArrayBuffer,
+        mime: "image/jpeg",
+      });
+      const cached = await db.photos.toArray();
+
+      await reconcileSyncedPhotos(
+        [record("vid", { media_type: "video", renditions: [] })],
+        cached,
+      );
+
+      const row = await db.photos.get("vid");
+      expect(row?.renditions ?? []).toEqual([]);
+    });
+  });
+
   it("re-downloads a thumbnail when the server's thumb blob id changed", async () => {
     await db.photos.put(cachedFor("rot"));
     await db.thumbs.put({

@@ -8,6 +8,7 @@
  * Maps to server routes: `/api/photos/*`.
  */
 import { request, postRaw, BASE } from "./core";
+import type { Rendition } from "../gallery/renditionChoice";
 
 // ── Photos API ───────────────────────────────────────────────────────────────
 
@@ -142,6 +143,15 @@ export const photosApi = {
         photo_subtype: string | null;
         burst_id: string | null;
         motion_video_blob_id: string | null;
+        /**
+         * Playable qualities for this video, highest first (#49).
+         *
+         * Optional because a pre-#49 server omits the field entirely — and
+         * because an **empty array is the normal case**: only videos above the
+         * 1080p tier ever get a second rung, so most records carry nothing here
+         * and the viewer must draw no picker rather than an empty one.
+         */
+        renditions?: Rendition[];
       }>;
       next_cursor: string | null;
       /**
