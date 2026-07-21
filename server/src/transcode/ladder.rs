@@ -56,6 +56,18 @@ pub fn short_edge(width: i64, height: i64) -> i64 {
     width.min(height)
 }
 
+/// Largest short edge that still counts as *being* the tier.
+///
+/// Exposed rather than inlined into [`needs_rung`] because the candidate query
+/// in [`super::rung_queue`] has to apply the same cut in SQL, where none of this
+/// module's arithmetic is available. Two hand-written copies of
+/// `tier * 1.1` is precisely the drift `gallery::eligibility` documents the cost
+/// of — there, a predicate copy-pasted into three queries. Here the two copies
+/// would disagree about which files are worth a 4K re-encode.
+pub fn rung_threshold(tier_short_edge: i64) -> i64 {
+    (tier_short_edge as f64 * (1.0 + TIER_TOLERANCE)).floor() as i64
+}
+
 /// Whether a source needs a separate rendition at the given tier.
 ///
 /// `false` when the source is at or below the tier, and also when it is only
@@ -63,11 +75,15 @@ pub fn short_edge(width: i64, height: i64) -> i64 {
 pub fn needs_rung(width: i64, height: i64, tier_short_edge: i64) -> bool {
     // A probe that could not read dimensions reports 0. Planning a ladder from
     // unknown geometry would downscale to garbage, so plan nothing.
+    //
+    // NOTE this is *not* the same verdict the candidate query reaches. 58 live
+    // videos have no recorded geometry, and `rung_queue` deliberately selects
+    // them so they get probed. "Unknown" means "ask ffprobe", not "no rung" —
+    // it is only here, where the geometry is final, that it means the latter.
     if width <= 0 || height <= 0 {
         return false;
     }
-    let threshold = (tier_short_edge as f64 * (1.0 + TIER_TOLERANCE)).floor() as i64;
-    short_edge(width, height) > threshold
+    short_edge(width, height) > rung_threshold(tier_short_edge)
 }
 
 /// Scale a frame so its short edge hits `target_short_edge`, preserving
@@ -331,7 +347,10 @@ mod tests {
             (608, 1080),
             "scaling the height of a portrait source is the documented bug"
         );
-        assert_eq!(rung_dimensions(1080, 1920, TIER_1080_SHORT_EDGE), (1080, 1920));
+        assert_eq!(
+            rung_dimensions(1080, 1920, TIER_1080_SHORT_EDGE),
+            (1080, 1920)
+        );
     }
 
     /// Trap 2: macroblock padding. 1088 is 1080 rounded up to a multiple of 16.
@@ -377,7 +396,10 @@ mod tests {
     #[test]
     fn portrait_sources_scale_their_width() {
         assert!(needs_rung(2160, 3840, TIER_1080_SHORT_EDGE));
-        assert_eq!(rung_dimensions(2160, 3840, TIER_1080_SHORT_EDGE), (1080, 1920));
+        assert_eq!(
+            rung_dimensions(2160, 3840, TIER_1080_SHORT_EDGE),
+            (1080, 1920)
+        );
         // ...and the aspect ratio is unchanged, which is the actual invariant.
         let (w, h) = rung_dimensions(2160, 3840, TIER_1080_SHORT_EDGE);
         assert!(
