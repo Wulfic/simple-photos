@@ -685,9 +685,27 @@ The correct formula already exists in this repo â€” [PhotoInfoPanel.tsx:80-
 
 Clean, small, fully scoped. The whole backend path already exists: [ApiService.renamePetCluster:465](android/app/src/main/kotlin/com/simplephotos/data/remote/ApiService.kt#L465) and [AiRepository.renamePetCluster:69](android/app/src/main/kotlin/com/simplephotos/data/repository/AiRepository.kt#L69). Only the UI wiring is missing: `PersonDetailScreen` has the rename dialog ([LibraryFeatureScreens.kt:425-445](android/app/src/main/kotlin/com/simplephotos/ui/screens/library/LibraryFeatureScreens.kt#L425-L445)) but `PetDetailViewModel`/`PetDetailScreen` ([line 528-569](android/app/src/main/kotlin/com/simplephotos/ui/screens/library/LibraryFeatureScreens.kt#L528-L569)) has no `rename` function and no dialog. The shared dialog at [line 450](android/app/src/main/kotlin/com/simplephotos/ui/screens/library/LibraryFeatureScreens.kt#L450) is already documented as "for a person/pet cluster."
 
-- [ ] Add `rename()` to `PetDetailViewModel` calling `repo.renamePetCluster`, mirroring `PersonDetailViewModel.rename`.
-- [ ] Wire the toolbar rename action + shared dialog into `PetDetailScreen`.
-- [ ] Refresh the label optimistically on success; log and surface failures (no silent catch).
+**Fix:** — **DONE**, commit `736a927`
+
+- [x] `rename()` on `PetDetailViewModel`, calling `repo.renamePetCluster`. — `736a927`
+- [x] Toolbar rename action + shared dialog wired into `PetDetailScreen`. **`RenameClusterDialog` hardcoded the title "Rename person"** despite already being documented as "for a person/pet cluster" — reusing it as-is would have shown a pet owner the word "person". Title is now a parameter. — `736a927`
+- [x] Optimistic label on success; **log + surface on failure**. — `736a927`
+- [x] The decision is extracted to `ClusterRename.kt` and shared by BOTH detail ViewModels. Neither ViewModel is unit-testable directly (both take `PhotoRepository`, a concrete class whose graph would have to be stood up in a JVM test), so the part that can be wrong takes a suspend lambda instead of a repository. Same move `RenditionChoice.kt` made for #49. — `736a927`
+- [x] Test: `ClusterRenameTest` (6). Verified RED against a naive implementation (no blank guard, raw `e.message`): 3 of 6 fail. The other 3 pass in both states because they assert preserved behaviour — the honest result, not tests tuned to go red. 179 Android tests green. — `736a927`
+
+**Two defects in the PERSON path, fixed by sharing the helper:**
+1. `catch (e: Exception) { error = e.message }` assigned a possibly-null message
+   straight to the error banner, so any exception without one surfaced as an
+   error state containing **nothing**.
+2. The failure path had **no log at all**, which AGENTS.md forbids outright.
+   Logging lives in the ViewModel adapter so `ClusterRename.kt` stays
+   Android-free and JVM-testable.
+
+**Do NOT "optimise" this with a `trimmed == current` skip.** It reads like a
+free saving and it is wrong for pets: `PetDetailViewModel.label` falls back to
+the **species** when the cluster has no stored label, so a pet displayed as
+"Dog" with a NULL label typed as "Dog" is a genuine rename that would be
+silently dropped. The displayed label is not the stored one. A test pins this.
 
 ---
 
@@ -699,20 +717,71 @@ Not a bug so much as an unfinished decision from #30. Both platforms deliberatel
 - Web: [ViewerTopBar.tsx:121-125](web/src/components/viewer/ViewerTopBar.tsx#L121-L125) (button) and [:163](web/src/components/viewer/ViewerTopBar.tsx#L163) â€” *"Info lives here too (#30) â€” the standalone button stays up top."*
 - Android: [PhotoViewerScreen.kt:1071-1075](android/app/src/main/kotlin/com/simplephotos/ui/screens/viewer/PhotoViewerScreen.kt#L1071-L1075) and [:1125](android/app/src/main/kotlin/com/simplephotos/ui/screens/viewer/PhotoViewerScreen.kt#L1125) â€” same comment.
 
-- [ ] Remove the standalone Info button from both top bars; keep the overflow-menu entry.
-- [ ] Update both comments â€” they currently assert the opposite of the new intent.
-- [ ] Check the secure viewer (`SecurePhotoViewer.kt`) for the same duplication.
-- [ ] Update any E2E selector that clicks the top-bar Info button.
+**Fix:** — **DONE**, commit `0fb7bdb`
+
+- [x] Removed the standalone Info button from both top bars; overflow entry kept. — `0fb7bdb`
+- [x] Both comments now state the new intent instead of the opposite. — `0fb7bdb`
+- [x] **Checked `SecurePhotoViewer.kt` — the duplication never existed there.** Info is in the overflow menu only ([SecurePhotoViewer.kt:283-289](android/app/src/main/kotlin/com/simplephotos/ui/screens/securegallery/SecurePhotoViewer.kt#L283-L289)). No edit needed.
+- [x] **No E2E or unit selector drives the top-bar Info button** — grepped the title, the aria-label and the contentDescription across the tree. Nothing to re-point.
+
+No test ships with this one: it deletes a button whose behaviour is duplicated
+by a menu entry that was already there, and this repo has no jsdom or rendered-
+composable harness that could assert "the button is absent" without a device.
+Saying so beats inventing a test that asserts a string is missing from a file.
 
 ### D2 â€” #50 Video controls collide with the phone navigation bar (Medium) â€” CONFIRMED
 
 - Android: [VideoPlayer.kt:484-485](android/app/src/main/kotlin/com/simplephotos/ui/screens/viewer/VideoPlayer.kt#L484-L485) uses a hardcoded `.padding(top = 32.dp, bottom = 8.dp)` with **no window-inset handling**. An 8dp bottom margin puts play/pause/mute directly under a 48dp 3-button nav bar. The correct pattern is already used elsewhere in this codebase â€” [SecurePhotoViewer.kt:362](android/app/src/main/kotlin/com/simplephotos/ui/screens/securegallery/SecurePhotoViewer.kt#L362), [:649](android/app/src/main/kotlin/com/simplephotos/ui/screens/securegallery/SecurePhotoViewer.kt#L649) and [ViewerEditPanel.kt:87](android/app/src/main/kotlin/com/simplephotos/ui/screens/viewer/ViewerEditPanel.kt#L87) all apply `navigationBarsPadding()`. The main video player was simply missed.
 - Web: [VideoControls.tsx:126](web/src/components/viewer/VideoControls.tsx#L126) uses `pb-3` with no safe-area inset. `grep` finds **zero** uses of `env(safe-area-inset-*)` anywhere in `web/src` â€” so the installed PWA overlaps the home indicator too.
 
-- [ ] Android: add `.navigationBarsPadding()` to the video control bar, matching the secure viewer.
-- [ ] Web: `padding-bottom: calc(0.75rem + env(safe-area-inset-bottom))`.
-- [ ] Audit other bottom-anchored web surfaces (selection bar, banners) for the same missing inset while you are in there.
-- [ ] Verify on a device with 3-button nav **and** gesture nav â€” they have different inset heights (see `.device-test/dev.ps1`, S21+ harness).
+> **DONE — `90aa0cd`. The web plan above was WRONG and is corrected below.**
+>
+> **The prescribed web fix would have shipped a no-op.** `padding-bottom:
+> calc(0.75rem + env(safe-area-inset-bottom))` was justified by "grep finds zero
+> uses of `env(safe-area-inset-*)`" — but `index.html`'s viewport meta had no
+> `viewport-fit=cover`, so `viewport-fit` defaulted to `auto`, the viewport was
+> constrained to the safe area, and **`env()` resolved to 0 in every browser**.
+> The padding would have computed to exactly the value it replaced. Same shape
+> as B1/#45's trap 2: a value passed in that silently does nothing. **The
+> absence of `env()` in the tree was not evidence the fix was missing — the
+> precondition was.**
+>
+> **The justification was wrong for the same reason.** Under `viewport-fit=auto`
+> the browser insets the viewport for you, so the installed PWA did **not**
+> overlap the home indicator.
+>
+> **What IS a live bug is the TOP edge.**
+> `apple-mobile-web-app-status-bar-style=black-translucent` ([index.html:10](web/index.html#L10))
+> already pushed content under the iOS status bar and no top bar ever
+> compensated. So the app was inconsistent: top edge opted into edge-to-edge and
+> unpadded, bottom edge not opted in at all.
+>
+> Resolution: opt in deliberately with `viewport-fit=cover`, then inset every
+> edge-anchored surface — **bottom AND top, because opting in without the top
+> padding trades one overlap for another on every non-iOS platform.**
+>
+> Low-risk by construction: every rule is `base + env(..., 0px)`, which computes
+> to exactly the base value on any device with no inset. Provably a no-op except
+> where the bug is. The `0px` fallback is load-bearing — without it a browser
+> that does not know the keyword invalidates the whole `calc()` and drops the
+> padding entirely, which is worse than the overlap.
+
+- [x] Android: `.navigationBarsPadding()` on the video control bar. Placed **after** `.background` deliberately — the gradient is sized before the inset, so it keeps painting behind the nav bar instead of cutting off in a hard line above it. Only the controls move. — `90aa0cd`
+- [x] Web: `viewport-fit=cover` **first** (without it the rest is inert), then `safe-*` utilities defined once in `index.css`. — `90aa0cd`
+- [x] Audited every edge-anchored web surface, not just the reported one: VideoControls, Slideshow, ViewerEditPanel, PhotoInfoPanel, TagPanel, BannerHost, the Gallery FAB, ViewerTopBar, ServerOfflineBanner. Horizontal insets on the viewer surfaces too — landscape is the orientation video is actually watched in. — `90aa0cd`
+- [x] Utilities live once in `index.css`, **not** as repeated `pb-[calc(...)]` at nine call sites. Two copies of one formula is exactly how `computeFaceCropStyle` and `FaceCrop` drifted apart — see C1(a), still open below. — `90aa0cd`
+- [x] Test: `web/src/safeArea.test.ts` (4). There is no honest unit test for "the controls clear the nav bar" — that is CSS, there is no jsdom, and `env()` is not resolvable off-device. So these pin what would silently void the fix: `viewport-fit=cover` present; every `safe-*` class used in the tree actually defined (a CSS typo is not a type, build or runtime error); every `env()` carrying a fallback. All 4 verified RED by stashing the change. 266 web green (was 262). — `90aa0cd`
+- [ ] **Verify on a device with 3-button nav AND gesture nav** — different inset heights (`.device-test/dev.ps1`, S21+ harness). Still the only way to confirm the actual clearance.
+- [ ] **Verify the iOS/PWA half on a notched device.** Every `env()` value is 0 on the dev machine, so the desktop-identical rendering proves the no-op property and nothing else.
+
+**Two traps for whoever touches web safe-area next:**
+1. **`import.meta.glob(..., { query: "?raw" })` returns an EMPTY STRING for
+   `.css`** — Vite's CSS plugin outranks `?raw`. Every CSS assertion in the test
+   passed *vacuously* until this was caught, which is precisely the failure the
+   file exists to detect. Hence `node:fs` and the `@types/node` devDependency
+   (dev-only, never bundled).
+2. **`import.meta.glob`'s options must be an inline object literal.** Vite
+   analyses it statically; hoisting them to a shared `const` fails the build.
 
 ---
 
@@ -753,11 +822,40 @@ No user-facing sort exists anywhere. Ordering is hardcoded `takenAt` desc, with 
 
 [NewWindow.kt:108-125](android/app/src/main/kotlin/com/simplephotos/ui/navigation/NewWindow.kt#L108-L125) `openInNewWindow` has **no instance cap**. `FLAG_ACTIVITY_MULTIPLE_TASK` ([line 43-45](android/app/src/main/kotlin/com/simplephotos/ui/navigation/NewWindow.kt#L43-L45)) spawns a fresh task on every invocation, and "New Window" is offered from every `AppHeader` ([AppHeader.kt:382](android/app/src/main/kotlin/com/simplephotos/ui/components/AppHeader.kt#L382)) â€” so a user can open unbounded windows, all sharing one process, Room DB and Coil cache. Given A3, that is also a memory-pressure contributor.
 
-- [ ] Track live `MainActivity` instances (static `AtomicInteger`, increment in `onCreate`, decrement in `onDestroy`) â€” or enumerate via `ActivityManager.appTasks`.
-- [ ] `openInNewWindow` refuses at 2 and returns false; `rememberNewWindowLauncher` already surfaces a toast for false, so give it an accurate message ("Already using two windows").
-- [ ] Grey out / hide the "New Window" menu item when at the cap rather than letting it fail â€” better UX than a toast after the fact.
-- [ ] Verify the counter survives process death and configuration changes; a leaked counter permanently disables the feature, which is worse than the bug.
-- [ ] Device-verify on the S21+ harness.
+**Fix:** — **DONE**, commit `d663da7`
+
+> **Both options this file proposed were rejected, and the reason is the item's
+> own warning.** The design question is not "how do I count windows" but "how do
+> I count them such that the count cannot get stuck high", because a stuck count
+> disables the feature permanently.
+>
+> - **`ActivityManager.appTasks` enumerates TASKS, not live activities.** A task
+>   whose activity the system reclaimed still appears there, so a window the
+>   user can no longer see would hold the cap engaged forever. Self-healing in
+>   appearance only.
+> - **Hand-rolled `onCreate`/`onDestroy` overrides** pair correctly today but are
+>   one early-return from leaking, with nothing to catch it.
+>
+> Used instead: **`Application.ActivityLifecycleCallbacks`**, registered in
+> `SimplePhotosApplication.onCreate` before any activity can exist. The framework
+> pairs created/destroyed for every instance within a process lifetime, and the
+> one case where destroy is never delivered — the process being killed — takes
+> the counter with it, so the count resets to 0 alongside the activities it was
+> counting. **The leak and its cure arrive together**, which is what makes the
+> "survives process death" requirement answerable rather than merely tested.
+
+- [x] Live-instance tracking via `ActivityLifecycleCallbacks` in `AppWindows.kt`, not a hand-rolled counter and not `appTasks`. `WindowCounter` holds no Activity reference so the logic is JVM-testable; `AppWindows` is only the glue. — `d663da7`
+- [x] `openInNewWindow` refuses at the cap and returns false; the toast now says "Already using 2 windows" instead of "Couldn't open a second window", which implied a malfunction. — `d663da7`
+- [x] Menu entry is `enabled = false` at the cap and reads "New Window (limit reached)". Enforcement stays in `openInNewWindow` — the menu is an affordance, and the launcher is reachable from more than one place. — `d663da7`
+- [x] **Configuration changes cannot inflate the count**: MainActivity's extensive `android:configChanges` means the OS does not destroy and recreate it — the #17 biometric-lock fix paying off a second time. **Process death cannot leak it** per the argument above. — `d663da7`
+- [x] Test: `WindowCounterTest` (6). Verified RED against two plausible-but-wrong implementations — an `!=` cap test and an unclamped `closed()` — exactly 2 of 6 fail, one per defect. 179 Android tests green (was 173). — `d663da7`
+- [ ] **Device-verify on the S21+ harness.** The arithmetic is unit-tested; that two real windows are counted as two, and that killing one re-enables the menu entry, has only ever run in a compiler.
+
+**Both guarded cases are asymmetric in the same direction, which is why they are
+tested at all:** `<` rather than `!=` so a count that overshoots still refuses
+instead of waving every window through forever, and a zero clamp so an
+unbalanced close cannot go negative — each step below zero buys one extra window
+above the cap.
 
 ---
 
@@ -768,9 +866,9 @@ Dependencies are real here â€” A1 gates the honest measurement of C1(b), an
 1. **A1** (#42) â€” counts + the pagination off-by-one. Everything downstream is measured against correct numbers.
 2. **A3** (#51) â€” the crash. Highest user pain, self-contained once you accept virtualization.
 3. **A2** (#38) â€” delta sync + server cache. Builds on A1's schema work.
-4. **B1** (#45) â€” failure logging. Cheap, and makes B2/B3 diagnosable.
-5. **D1** (#44), **D2** (#50), **C2** (#39), **F1** (#41) â€” quick wins, one commit each. Good palate cleansers between the heavy items.
-6. **C1** (#48) â€” face centering. Do after A1 so (b) can be measured honestly.
+4. ~~**B1** (#45) â€” failure logging.~~ **DONE** `298fd99`.
+5. ~~**D1** (#44), **D2** (#50), **C2** (#39), **F1** (#41) â€” quick wins.~~ **ALL DONE** 2026-07-21 — `0fb7bdb`, `90aa0cd`, `736a927`, `d663da7`. One commit each as planned. Two of the four had a wrong plan in this file (D2's web half was a no-op; F1's both suggested mechanisms leak) — **read the corrections in those sections before trusting any other plan here.**
+6. **C1** (#48) â€” face centering. **NEXT.** Do after A1 so (b) can be measured honestly. Note D2 just built the "one shared formula, defined once" precedent that C1(a) needs.
 7. **B3** (#46) â€” codec probing.
 8. **B2** (#40) â€” ETA rework + 3-strike cap.
 9. **E1** (#43), **E2** (#52) â€” album features.
