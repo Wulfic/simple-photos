@@ -72,6 +72,17 @@ android {
         // bump-version script (AGP 8+ defaults buildConfig to false).
         buildConfig = true
     }
+
+    testOptions {
+        unitTests {
+            // android.util.Log is a stub in android.jar that THROWS when a JVM
+            // unit test calls it. Every recovery path in this codebase logs
+            // before degrading, so without this a test that exercises one dies
+            // on the log line instead of asserting the recovery — which is the
+            // half worth testing. Returning defaults makes Log a no-op there.
+            isReturnDefaultValues = true
+        }
+    }
 }
 
 dependencies {

@@ -15,6 +15,7 @@ import com.simplephotos.data.collapseBursts
 import com.simplephotos.data.local.AppDatabase
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.local.entities.SyncStatus
+import com.simplephotos.data.media.renditionsEqual
 import com.simplephotos.data.remote.ApiService
 import com.simplephotos.data.remote.dto.DuplicatePhotoRequest
 import com.simplephotos.data.remote.dto.DuplicatePhotoResponse
@@ -24,6 +25,7 @@ import com.simplephotos.data.remote.dto.FullMetadataResponse
 import com.simplephotos.data.remote.dto.MetadataUpdateRequest
 import com.simplephotos.data.remote.dto.MetadataUpdateResponse
 import com.simplephotos.data.remote.dto.SetCropRequest
+import com.simplephotos.data.remote.dto.toDomain
 import com.simplephotos.data.remote.dto.WriteExifResponse
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_SERVER_URL
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -980,6 +982,18 @@ class PhotoRepository @Inject constructor(
                             motionBlobId = photo.motionVideoBlobId,
                         )
                     }
+                    // Land the #49 ladder on rows that synced before their rung
+                    // existed. This is not an edge case — it is the ONLY case
+                    // that matters: rungs are produced by a background sweep
+                    // long after the photo synced, so without this branch every
+                    // video already in the mirror (i.e. all of them) keeps an
+                    // empty ladder forever and the picker never appears. The
+                    // equality guard is what keeps this from rewriting every
+                    // video on every pass.
+                    val incoming = photo.renditions.toDomain()
+                    if (!renditionsEqual(existing.renditions, incoming)) {
+                        db.photoDao().updateRenditions(photo.id, incoming)
+                    }
                     continue
                 }
 
@@ -1015,6 +1029,12 @@ class PhotoRepository @Inject constructor(
                             burstId = photo.burstId,
                             motionBlobId = photo.motionVideoBlobId,
                         )
+                    }
+                    // mergeServerPhoto writes only the identity columns, so the
+                    // ladder needs the same separate write as the branch above.
+                    val mergedRenditions = photo.renditions.toDomain()
+                    if (mergedRenditions.isNotEmpty()) {
+                        db.photoDao().updateRenditions(photo.id, mergedRenditions)
                     }
                     android.util.Log.d("PhotoRepository", "syncFromServerEncrypted: merged server photo '${photo.filename}' (${photo.id}) into local entity ${localMatch.localId}")
                     merged++
@@ -1116,7 +1136,8 @@ class PhotoRepository @Inject constructor(
             photoSubtype = photo.photoSubtype,
             burstId = photo.burstId,
             motionVideoBlobId = photo.motionVideoBlobId,
-            sourcePath = photo.sourcePath
+            sourcePath = photo.sourcePath,
+            renditions = photo.renditions.toDomain()
         )
     }
 

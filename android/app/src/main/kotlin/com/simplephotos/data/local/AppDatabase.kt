@@ -22,7 +22,10 @@ import com.simplephotos.data.local.entities.*
  */
 @Database(
     entities = [PhotoEntity::class, AlbumEntity::class, PhotoAlbumXRef::class, BlobQueueEntity::class, BackupFolderEntity::class],
-    version = 11,
+    // 12: PhotoEntity.renditions — the #49 video resolution ladder. The
+    // destructive migration drops the mirror, which the next sync rebuilds from
+    // a full walk; that is also what re-populates the ladder for every video.
+    version = 12,
     exportSchema = false
 )
 @TypeConverters(Converters::class)

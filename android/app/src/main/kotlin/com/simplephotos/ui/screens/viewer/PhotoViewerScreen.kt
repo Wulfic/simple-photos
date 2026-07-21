@@ -220,6 +220,10 @@ fun PhotoViewerScreen(
     var activeVideoUri by remember { mutableStateOf<Uri?>(null) }
     // Track player errors at this level so the page can display them
     var sharedPlayerError by remember { mutableStateOf<String?>(null) }
+    // Default video quality on a metered link (#49). Read once here rather than
+    // per page: the pager keeps several pages composed, and each would register
+    // its own ConnectivityManager callback.
+    val qualityConstrained = rememberQualityConstrained()
     DisposableEffect(sharedPlayer) {
         val listener = object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
@@ -829,7 +833,8 @@ fun PhotoViewerScreen(
                     // Only the active page may drive the screen-level zoom gate,
                     // so an adjacent page resetting its zoom can't clobber it. (#9)
                     onZoomChange = { z -> if (pagerState.currentPage == page) photoZoomed = z },
-                    onVideoUriReady = { uri, filename ->
+                    qualityConstrained = qualityConstrained,
+                    onVideoUriReady = { uri, filename, resume ->
                         // Load the new media item into the shared player.
                         // Only swap if the URI actually changed (avoids re-prepare
                         // on every recomposition).
@@ -855,9 +860,28 @@ fun PhotoViewerScreen(
                             // causing a transient peak that triggers OOM.
                             // setMediaItem + prepare reuses the codec if the format
                             // is compatible (e.g., both H.264 MP4).
-                            sharedPlayer.setMediaItem(MediaItem.fromUri(uri))
-                            sharedPlayer.prepare()
-                            sharedPlayer.playWhenReady = true
+                            //
+                            // A non-null `resume` means this is a #49 quality
+                            // swap rather than a new video, so the playhead and
+                            // play/pause state carry across. The start position
+                            // goes through setMediaItem rather than a seekTo
+                            // after prepare(): seeking afterwards makes the
+                            // player visibly start at zero and jump, and a
+                            // rendition has the same duration as its source so
+                            // the position transfers directly.
+                            if (resume != null) {
+                                sharedPlayer.setMediaItem(MediaItem.fromUri(uri), resume.positionMs)
+                                sharedPlayer.prepare()
+                                // Restore BOTH directions: the fresh-load path
+                                // below always plays, so without this a video
+                                // the user had paused would silently resume on
+                                // every quality change.
+                                sharedPlayer.playWhenReady = resume.playing
+                            } else {
+                                sharedPlayer.setMediaItem(MediaItem.fromUri(uri))
+                                sharedPlayer.prepare()
+                                sharedPlayer.playWhenReady = true
+                            }
                         }
                     },
                     onDurationKnown = { dur ->

@@ -348,6 +348,34 @@ fun SettingsScreen(
                         )
                     }
                 }
+                Spacer(Modifier.height(16.dp))
+                // ── Cellular data saver (#49) ────────────────────────────
+                Text(
+                    "Play videos at a lower resolution on mobile data. Turn this " +
+                        "off to always play the highest quality available.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f, fill = false).padding(end = 12.dp)) {
+                        Text("Cellular Data Saver")
+                        Text(
+                            if (viewModel.cellularDataSaver) "Videos capped at 1080p on mobile data"
+                            else "Always play the highest quality",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = viewModel.cellularDataSaver,
+                        onCheckedChange = { viewModel.toggleCellularDataSaver() }
+                    )
+                }
             }
 
             // ── Storage Stats ────────────────────────────────────────────

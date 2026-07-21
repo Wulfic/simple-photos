@@ -57,5 +57,14 @@ data class PhotoEntity(
     /** Server blob ID of the embedded motion-photo video, if any. */
     val motionVideoBlobId: String? = null,
     /** Original source path on the capturing device (for de-duplication). */
-    val sourcePath: String? = null
+    val sourcePath: String? = null,
+    /**
+     * The video resolution ladder (#49), highest quality first.
+     *
+     * Empty is the normal case and means "one quality, draw no picker" — which
+     * is also what a pre-#49 server's null collapses to, since nothing
+     * downstream can act on the difference. Only videos whose short edge clears
+     * the 1080p tier ever get a second rung (measured live: 136 of 742).
+     */
+    val renditions: List<com.simplephotos.data.media.Rendition> = emptyList()
 )

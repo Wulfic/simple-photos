@@ -85,7 +85,64 @@ data class EncryptedSyncRecord(
     @SerializedName("photo_subtype") val photoSubtype: String? = null,
     @SerializedName("burst_id") val burstId: String? = null,
     @SerializedName("motion_video_blob_id") val motionVideoBlobId: String? = null,
+    /**
+     * The video resolution ladder (#49), highest quality first, `is_source`
+     * marking the untouched original.
+     *
+     * Null means the server predates #49; an **empty list is the normal case**
+     * and means "one quality, draw no picker". Those two states are deliberately
+     * collapsed by `renditionsEqual` rather than distinguished — see
+     * [com.simplephotos.data.media.renditionsEqual].
+     *
+     * Gson has silently ignored this field since the server started sending it,
+     * which is why `8564636` broke neither client.
+     */
+    val renditions: List<RenditionDto>? = null,
 )
+
+/**
+ * One playable quality of a video (#49).
+ *
+ * `file_path` is deliberately absent from the wire shape — it is a server-side
+ * storage path no client can fetch — so [shortEdge] doubles as the selector for
+ * the `?rendition=` form used on unencrypted installs.
+ */
+data class RenditionDto(
+    @SerializedName("short_edge") val shortEdge: Int,
+    val width: Int,
+    val height: Int,
+    @SerializedName("is_source") val isSource: Boolean = false,
+    /**
+     * Encrypted mode: stream as `spblob://<blob_id>`.
+     *
+     * Null on an unencrypted install, where the bytes live behind
+     * `GET /api/photos/{id}/file?rendition={short_edge}`. This client has no
+     * plaintext playback branch, so such rungs are filtered out of the picker.
+     */
+    @SerializedName("blob_id") val blobId: String? = null,
+    val codec: String? = null,
+    @SerializedName("size_bytes") val sizeBytes: Long = 0,
+)
+
+/**
+ * Wire shape → the domain model the picker and Room both use.
+ *
+ * Null collapses to empty deliberately: a pre-#49 server sends no field at all
+ * and a #49 server sends `[]` for the ~600 videos needing no rung, and nothing
+ * downstream can act on the difference between them.
+ */
+fun List<RenditionDto>?.toDomain(): List<com.simplephotos.data.media.Rendition> =
+    this.orEmpty().map {
+        com.simplephotos.data.media.Rendition(
+            shortEdge = it.shortEdge,
+            width = it.width,
+            height = it.height,
+            isSource = it.isSource,
+            blobId = it.blobId,
+            codec = it.codec,
+            sizeBytes = it.sizeBytes,
+        )
+    }
 
 data class EncryptedSyncResponse(
     val photos: List<EncryptedSyncRecord>,

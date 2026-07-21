@@ -96,6 +96,19 @@ interface PhotoDao {
         motionBlobId: String?,
     )
 
+    /**
+     * Land the #49 resolution ladder on an already-synced photo.
+     *
+     * Separate from [backfillSubtypeFields] because it fires on a different
+     * schedule: a rung is produced by a background sweep *long after* the photo
+     * synced, so the ladder arrives on a row that has been local for weeks. The
+     * caller must guard with `renditionsEqual` — the ladder is unchanged for
+     * every photo on every pass, and writing it unconditionally is the
+     * O(library) write amplification #38 spent a workstream removing.
+     */
+    @Query("UPDATE photos SET renditions = :renditions WHERE serverPhotoId = :serverPhotoId")
+    suspend fun updateRenditions(serverPhotoId: String, renditions: List<com.simplephotos.data.media.Rendition>)
+
     @Query("UPDATE photos SET thumbnailPath = :path WHERE localId = :id")
     suspend fun updateThumbnailPath(id: String, path: String)
 

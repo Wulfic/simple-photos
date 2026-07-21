@@ -176,7 +176,16 @@ internal fun PhotoPageContent(
     // Shared ExoPlayer — owned by PhotoViewerScreen, one instance for all pages
     sharedPlayer: ExoPlayer? = null,
     activeVideoUri: Uri? = null,
-    onVideoUriReady: ((Uri, String) -> Unit)? = null,
+    onVideoUriReady: ((Uri, String, VideoResume?) -> Unit)? = null,
+    /**
+     * Whether to default video playback to a reduced quality (#49).
+     *
+     * Resolved once at the screen and passed down rather than read here: this
+     * composable runs for every page the pager keeps alive, and reading it
+     * locally would register a ConnectivityManager callback per page instead of
+     * one per viewer.
+     */
+    qualityConstrained: Boolean = false,
     onDurationKnown: ((Float) -> Unit)? = null,
     playerError: String? = null,
     onMediaSizeLoaded: ((Float, Float) -> Unit)? = null,
@@ -581,7 +590,13 @@ internal fun PhotoPageContent(
                         photoHeight = if (intrinsicHeight > 0f) intrinsicHeight.toInt() else photo.height,
                         playerError = playerError,
                         onMediaSizeLoaded = onMediaSizeLoaded,
-                        onToggleControls = onToggleControls
+                        onToggleControls = onToggleControls,
+                        // The ladder rides the photo row, mirrored from the
+                        // sync record — no per-video fetch when the viewer
+                        // opens. Empty for audio and for the ~600 videos that
+                        // need no rung, which is what suppresses the gear icon.
+                        renditions = photo.renditions,
+                        qualityConstrained = qualityConstrained
                     )
                 } else if (mediaUri == null) {
                     Text("Media not available", color = Color.White)
