@@ -736,6 +736,61 @@ async fn convert_image(input: &str, output: &str) -> bool {
     ok
 }
 
+/// Transcode a video to an explicit ladder rung (#49).
+///
+/// The ladder's entry point into this module. It exists so the generation pass
+/// does not have to know about `GPU_CONFIG`, CPU fallback or thread budgeting —
+/// all three are decisions this file already owns for first-pass conversion,
+/// and a second copy of them would drift.
+///
+/// `rung` is a concrete `(width, height)` from `ladder::rung_dimensions`, which
+/// derived it from a *probe of this file*. Passing dimensions taken from
+/// `photos.width`/`height` instead squashes the frame: those columns are
+/// transposed for part of the live library (see `transcode::rung_queue`).
+pub(crate) async fn transcode_to_rung(
+    input: &std::path::Path,
+    output: &std::path::Path,
+    rung: (i64, i64),
+) -> Result<(), String> {
+    let input_str = input.to_str().ok_or("Invalid input path encoding")?;
+    let output_str = output.to_str().ok_or("Invalid output path encoding")?;
+
+    let gpu = gpu_config();
+    // Share the batch thread budget rather than letting a background rendition
+    // take every core: a ladder encode runs alongside first-pass conversions and
+    // must never be the reason a user waits to see their video at all.
+    let threads = plan_parallelism(num_cpus::get(), gpu.map(|g| g.hwaccel.is_gpu()).unwrap_or(false))
+        .video_threads;
+
+    let ok = convert_video(
+        input_str,
+        output_str,
+        gpu.map(|g| &g.hwaccel),
+        gpu.map(|g| g.fallback_to_cpu).unwrap_or(true),
+        Some(threads),
+        Some(rung),
+    )
+    .await;
+
+    if !ok {
+        // The partial output is removed here rather than by the caller: an
+        // interrupted encode leaves a truncated MP4 that is indistinguishable
+        // from a complete one by size alone, and encrypting it would publish a
+        // rendition that plays for two seconds and stops.
+        let _ = tokio::fs::remove_file(output).await;
+        return Err(format!("ffmpeg failed to produce the {}x{} rung", rung.0, rung.1));
+    }
+
+    match tokio::fs::metadata(output).await {
+        Ok(m) if m.len() > 0 => Ok(()),
+        Ok(_) => {
+            let _ = tokio::fs::remove_file(output).await;
+            Err("ffmpeg reported success but produced an empty file".into())
+        }
+        Err(e) => Err(format!("rung output missing after a successful encode: {e}")),
+    }
+}
+
 /// Video → MP4 (H.264 + AAC).  Quality-tuned for clarity at reasonable sizes.
 /// When a GPU `hwaccel` capability is provided, uses hardware-accelerated
 /// encoding.  Falls back to CPU (libx264) if the GPU transcode fails and

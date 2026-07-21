@@ -96,6 +96,11 @@ pub async fn find_rung_candidates(
     // admit unknown geometry (58 live rows) and let the probe decide, and it
     // must not admit anything `needs_rung` would reject on known geometry —
     // `prefilter_agrees_with_the_ladder_on_every_live_shape` pins both halves.
+    //
+    // Being wider is what makes `not_needed` (037) load-bearing rather than
+    // cosmetic: a blind selection whose probe says "no rung owed" must be able
+    // to record that as final, or the widening costs three ffprobes and a
+    // spurious retirement warning per file, forever.
     let sql = format!(
         "SELECT p.id AS photo_id, p.user_id, p.filename, p.mime_type, \
                 p.file_path, p.encrypted_blob_id, p.width, p.height \
@@ -109,6 +114,7 @@ pub async fn find_rung_candidates(
                  WHERE r.photo_id = p.id AND r.short_edge = ?2 \
                    AND ( r.blob_id IS NOT NULL \
                          OR r.file_path IS NOT NULL \
+                         OR r.not_needed = 1 \
                          OR r.attempt_count >= ?3 ) ) \
          ORDER BY CASE WHEN p.width <= 0 OR p.height <= 0 THEN 0 \
                        ELSE MIN(p.width, p.height) END ASC, \
@@ -177,6 +183,49 @@ pub async fn begin_attempt(
     })?;
 
     Ok(count)
+}
+
+/// Record that a rung is not owed at all, so the candidate query stops
+/// returning this photo.
+///
+/// This is the verdict for a source the probe finds at or below the tier — the
+/// expected outcome for most of the 58 rows selected blind because they have no
+/// recorded geometry. It is a *success*: no encode was attempted and none was
+/// needed, so the attempt budget is reset rather than spent. Leaving a charged
+/// attempt behind would mean a file that is later replaced with a genuine 4K
+/// source starts its real work with part of its retry budget already gone.
+///
+/// See `037_video_rendition_verdicts.sql` for why this cannot be expressed with
+/// the locator columns alone. The row it writes stays unplayable, so no picker
+/// can offer it and no client is nominated.
+pub async fn mark_rung_not_needed(
+    pool: &sqlx::SqlitePool,
+    photo_id: &str,
+    short_edge: i64,
+) -> Result<(), AppError> {
+    sqlx::query(
+        "INSERT INTO video_renditions \
+           (photo_id, short_edge, width, height, is_source, size_bytes, \
+            not_needed, attempt_count, created_at) \
+         VALUES (?, ?, 0, 0, 0, 0, 1, 0, datetime('now')) \
+         ON CONFLICT(photo_id, short_edge) DO UPDATE SET \
+           not_needed    = 1, \
+           attempt_count = 0, \
+           last_error    = NULL",
+    )
+    .bind(photo_id)
+    .bind(short_edge)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        tracing::error!(
+            photo_id = %photo_id,
+            short_edge,
+            "failed to record that no rung is owed: {e}"
+        );
+        AppError::from(e)
+    })?;
+    Ok(())
 }
 
 /// Attach the reason a rung attempt failed.

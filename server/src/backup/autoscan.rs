@@ -86,7 +86,18 @@ pub async fn background_auto_scan_task(
                 )
                 .await;
             }
-            crate::ingest::run_conversion_pass(pool_clone, root_clone, jwt_clone).await;
+            crate::ingest::run_conversion_pass(
+                pool_clone.clone(),
+                root_clone.clone(),
+                jwt_clone.clone(),
+            )
+            .await;
+            // Ladder rungs last (#49): a secondary rendition must never delay a
+            // video becoming playable in the first place.
+            crate::transcode::rung_generate::generate_rungs_after_scan(
+                pool_clone, root_clone, jwt_clone,
+            )
+            .await;
         });
     }
 
@@ -170,7 +181,16 @@ pub async fn background_auto_scan_task(
                     )
                     .await;
                 }
-                crate::ingest::run_conversion_pass(pool_clone, root_clone, jwt_clone).await;
+                crate::ingest::run_conversion_pass(
+                    pool_clone.clone(),
+                    root_clone.clone(),
+                    jwt_clone.clone(),
+                )
+                .await;
+                crate::transcode::rung_generate::generate_rungs_after_scan(
+                    pool_clone, root_clone, jwt_clone,
+                )
+                .await;
             });
         }
     }
@@ -242,7 +262,16 @@ pub async fn trigger_auto_scan(
                 )
                 .await;
             }
-            crate::ingest::run_conversion_pass(pool_clone, root_clone, jwt_secret).await;
+            crate::ingest::run_conversion_pass(
+                pool_clone.clone(),
+                root_clone.clone(),
+                jwt_secret.clone(),
+            )
+            .await;
+            crate::transcode::rung_generate::generate_rungs_after_scan(
+                pool_clone, root_clone, jwt_secret,
+            )
+            .await;
         });
     }
 

@@ -50,6 +50,11 @@ impl StoredRendition {
 /// pass, a re-encode after a failure — must refresh a rung in place. The
 /// primary key is `(photo_id, short_edge)`, so a duplicate rung is impossible
 /// by construction rather than by discipline at the call sites.
+///
+/// Clears `not_needed` (037): producing bytes for a rung settles the question
+/// of whether it was owed, whatever an earlier probe concluded. Leaving the two
+/// set at once would be a row that claims both "here are the bytes" and "no
+/// bytes are required", and the next reader would have to guess which is meant.
 pub async fn upsert_rendition(
     pool: &sqlx::SqlitePool,
     r: &StoredRendition,
@@ -63,7 +68,8 @@ pub async fn upsert_rendition(
            width = excluded.width, height = excluded.height, \
            is_source = excluded.is_source, blob_id = excluded.blob_id, \
            file_path = excluded.file_path, codec = excluded.codec, \
-           bitrate = excluded.bitrate, size_bytes = excluded.size_bytes",
+           bitrate = excluded.bitrate, size_bytes = excluded.size_bytes, \
+           not_needed = 0",
     )
     .bind(&r.photo_id)
     .bind(r.short_edge)
@@ -296,6 +302,48 @@ mod tests {
             vec![("b1".to_string(), "u1".to_string())],
             "the cascade must queue the blob for sweeping, with a user_id the \
              sweeper can still resolve a path from"
+        );
+    }
+
+    /// **A source rendition never owns its bytes**, so deleting one must never
+    /// queue them for collection.
+    ///
+    /// The generation pass records a source rung pointing at the photo's own
+    /// `encrypted_blob_id` — a second reference to bytes the photo still owns,
+    /// not a copy of them. `035`'s trigger predates that row and cannot tell the
+    /// two cases apart, so it queued the user's ORIGINAL video for the GC sweep.
+    ///
+    /// The sweeper is required to re-check references before unlinking, so this
+    /// is not by itself data loss. But that makes the safety of an original 4K
+    /// video depend on a sweeper that does not exist yet being careful about a
+    /// case its author has to know about. `037` guards the trigger on
+    /// `is_source = 0` so the queue can only ever name bytes a rendition owns.
+    ///
+    /// Verified RED against `035`'s unguarded trigger: `b1` is queued.
+    #[tokio::test]
+    async fn deleting_a_source_rendition_never_queues_the_photos_own_blob() {
+        let pool = test_pool().await;
+        insert_photo(&pool, "p1").await;
+        insert_blob(&pool, "b1").await;
+
+        let mut source = rendition("p1", 2160, Some("b1"));
+        source.is_source = 1;
+        upsert_rendition(&pool, &source).await.unwrap();
+
+        sqlx::query("DELETE FROM photos WHERE id = 'p1'")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let orphans: Vec<(String,)> =
+            sqlx::query_as("SELECT blob_id FROM orphaned_rendition_blobs")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert!(
+            orphans.is_empty(),
+            "a source rung shares the photo's blob; queueing it points the sweeper \
+             at the user's original video, got {orphans:?}"
         );
     }
 
