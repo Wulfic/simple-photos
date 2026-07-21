@@ -281,16 +281,92 @@ equivalent question is whether the memory cache is bounded at all.
 
 **Root cause (ETA):** [server/src/status.rs:70-83](server/src/status.rs#L70-L83) `progress_math` is a naive cumulative mean â€” `per_item = elapsed / done`, `eta = remaining * per_item`. It treats every queue item as equal cost. The queue deliberately mixes categories and sorts images first ([`conversion_priority`, conversion.rs:584](server/src/conversion.rs#L584) orders videos last), so the estimator spends the whole image phase learning a per-item cost that is orders of magnitude too small, then hits the video tail and the ETA explodes. It is also cumulative (early samples bias it forever) and the denominator can move mid-batch.
 
-**Fix (ETA):**
-- [ ] Weight by work, not item count. Use `size_bytes` (already on `ConvertCandidate`) â€” and for video, duration where known â€” as the denominator. Track completed *weight* vs total *weight*.
-- [ ] Estimate per-category throughput separately (image / video / audio). A mixed queue's ETA is then the sum of per-category remainders.
-- [ ] Use a sliding-window / EWMA rate rather than the batch-lifetime mean so it adapts.
-- [ ] Keep `progress_math` pure and unit-tested; add cases for a mixed image-then-video queue asserting the ETA does not swing by >2Ã— across the category boundary.
+**Fix (ETA):** — **DONE**, commit `08bc838`. 416 server tests green (was 400), 275 web green.
+
+> **Three corrections to the plan below, and one thing the plan did not mention
+> at all that turned out to be the whole difficulty.**
+>
+> **1. "For video, duration where known" is a TRAP — rejected.** Duration is only
+> known for the containers B3 routes through `transcode::probe`
+> (`.mp4`/`.mov`/`.m4v`/`.webm`); `.mkv`/`.avi`/`.wmv` are matched by extension
+> and never probed. Taking duration "where known" makes the weight unit
+> inconsistent *within* the video category, and a rate estimator whose
+> denominator silently changes units between samples is worse than one that is
+> merely coarse. Weight is `size_bytes` for every category; because the rate is
+> tracked **per category**, the unit only ever has to be comparable with itself
+> and cancels before the per-category times are summed.
+>
+> **2. The plan had no answer for the unsampled category, which is the entire
+> bug.** At the moment the last image finishes, **zero** videos have completed,
+> so there is no measured video throughput to apply to the tail. An estimator
+> built only from measurements must therefore return nothing for the whole image
+> phase — i.e. stay silent for the first hour of a Takeout import, which is
+> exactly when the old one was most wrong. So per-category **seed rates** are
+> structurally required, not a nicety. The first real sample **replaces** a seed
+> outright rather than blending: the seed carries no evidence about this machine.
+>
+> Idea considered and rejected: derive the video seed from the *measured* image
+> rate via a fixed cost ratio, so it self-calibrates to the hardware. The ratio
+> is not stable across boxes — the fast lane runs at full core width while video
+> is GPU-session- or thread-capped, so a GPU box moves video's rate without
+> moving image's at all. An absolute seed is wrong in a simpler, predictable way.
+>
+> **3. `EWMA(weight / secs)` is the obvious sliding rate and it is WRONG.** It is
+> a time-unweighted mean of instantaneous rates, biased high by short deltas —
+> and short deltas are precisely what a wide lane produces, because N concurrent
+> encodes finish in a burst. The estimator keeps **two** EWMAs and divides:
+> `EWMA(weight) / EWMA(secs)`, which converges to `Σweight / Σtime`. Verified:
+> the average-of-ratios form reports **24.1s** where true throughput says ~100s.
+>
+> **Deltas are wall-clock between ticks in a category, seeded from a phase
+> start** — never a sum of per-file durations, which would overstate elapsed by
+> the lane width. What is measured is therefore throughput-at-current-lane-width,
+> which is what the remaining queue will actually experience.
+>
+> **Known wart, accepted and documented in the source:** the *first* video sample
+> underestimates the rate by roughly the video lane width (N videos start
+> together, so sample 1 reads one file's weight over the whole phase). It
+> overestimates the ETA for exactly one tick and samples 2..N correct it
+> immediately. Overestimating is the safe direction.
+
+- [x] Weight by work, not item count — `size_bytes`, uniformly (see correction 1). Completed weight vs total weight, per category.
+- [x] Per-category throughput (image / audio / video); the ETA is the sum of per-category remainders. Summing is right because the pass drains the fast lane to exhaustion *before* the video lane — the phases are serial. Image and audio do overlap inside the fast lane, so those two remainders are summed when they partly run concurrently; that overestimates by a fraction of the short phase, which is the safe direction.
+- [x] Sliding EWMA rather than the batch-lifetime mean — as a ratio of two EWMAs (correction 3).
+- [x] `progress_math` kept pure and unit-tested, and **moved** to a new `server/src/progress.rs` alongside the weighted estimator, with its 4 tests. `conversion.rs` had been reaching into `crate::status::progress_math` — the conversion banner borrowing its ETA math out of a module whose docs are entirely about the *encryption* banner. The encryption banner deliberately **stays** on the count-based one: its queue items are one photo each, so there is no cost heterogeneity to correct and no reported bug.
+- [x] Weighted ledger is **parallel to** `CONV_TOTAL`/`CONV_DONE`, not a replacement. Those are counts, they render the "3 / 4" banner text, and they carry #11's pinned-denominator fix — rewriting them in bytes reopens that. The client-declared upload batch (`POST /api/admin/conversion-batch/start`) carries a count and no sizes, so it keeps the count-based estimator as a **fallback**; #40's mechanism is the mixed autoscan queue, not the homogeneous upload path.
+- [x] Weight is charged on the **failure** path too (`process_candidate` ticks in both arms). A failed transcode still burned the wall-clock the rate is measured against, so skipping it would make throughput climb silently as failures accumulate *and* leave that weight outstanding forever, so the ETA never drains.
+- [x] Tests: 16 pure (`progress`) + 4 wiring (`conversion`, under the existing `global_state_lock`). **Verified RED against five plausible-but-wrong implementations**, each biting exactly the tests it should — see the trap list below.
+
+**Traps this exposed:**
+1. **A "sliding vs cumulative" test that asserts only `slower ⇒ bigger ETA` is
+   vacuous.** A cumulative mean *also* goes up (10 MB/s → 4 MB/s ⇒ 20s → 40s).
+   The RED check caught that my own first version of that test passed against
+   the very implementation it existed to reject. It now asserts the estimate
+   tracks the **recent** rate (>90s where cumulative lands at 40s).
+2. **A ratio-stability assertion alone cannot catch a pooled rate.** Against a
+   single global rate the mixed-queue ETA is perfectly *stable* across the
+   boundary — and stably wrong (40s for a 2 GB video tail). The magnitude
+   assertion added next to it is what bites.
+3. **`eta_reset()` in `clear_start_clock` is NOT redundant with the one in
+   `raw_start`**, and the first test written for it could not tell the
+   difference because `raw_start` covers the common path. The interactive upload
+   path (`progress_add`) re-arms the banner **without** going through
+   `raw_start`, so an abandoned pass's outstanding weight is quoted to the next
+   upload — verified RED at exactly `Some(2048.0)`, the 4 GB tail at the video
+   seed.
+4. **Enqueue must come AFTER `ConversionBatchGuard::start`.** The guard resets
+   the ledger along with the counters, so enqueuing first is silently wiped.
+5. Two web comments asserted the opposite of the new behaviour (`eta_seconds`
+   "null until throughput is known"; "same throughput estimator as the
+   encryption banner"). Both corrected — the D1/#44 precedent.
+
+- [ ] **Follow-up: persist measured per-category rates across passes.** The seeds only govern a machine that has never converted anything, but today *every* server boot is that machine. Persisting the last measured rate per category would retire the seeds on any box that has run one pass. Not urgent; the seeds are conservative and decay on first sample.
+- [ ] **Deploy + observe.** The estimator is pure and unit-tested; whether the seeded video rate is within ~2× on CT132's hardware has not been measured. Watch a real mixed Takeout pass and compare the reported ETA against the actual drain time.
 
 **Root cause (repeat failures):** nothing anywhere persists a per-file failure count. On failure, `process_candidate` registers the ORIGINAL to avoid data loss ([ingest.rs:437-455](server/src/ingest.rs#L437-L455)), but several paths `return false` **without registering anything** â€” e.g. the register error at [ingest.rs:391-398](server/src/ingest.rs#L391-L398). A file that leaves no row is re-walked, re-converted and re-failed on every single autoscan pass, forever.
 
 **Fix (3-strike cap):** extend the existing skip cache rather than inventing a new mechanism. `scan_skipped_paths` ([server/migrations/031_scan_skipped_paths.sql](server/migrations/031_scan_skipped_paths.sql)) already keys on `(user_id, rel_path)`, already stores `size_bytes` + `mtime`, and **already invalidates when either changes** â€” which is exactly the semantics you want ("if the file is replaced, try again").
-> **3-strike cap DONE — commit pending. The ETA half of #40 is still open.**
+> **3-strike cap DONE — `8bfe66a`. The ETA half is now done too, above.**
 > 400 server tests green (was 382), 275 web green. **Four corrections to the plan
 > below, the third of which changes what the fix actually is.**
 >
@@ -934,7 +1010,7 @@ Dependencies are real here â€” A1 gates the honest measurement of C1(b), an
 5. ~~**D1** (#44), **D2** (#50), **C2** (#39), **F1** (#41) â€” quick wins.~~ **ALL DONE** 2026-07-21 — `0fb7bdb`, `90aa0cd`, `736a927`, `d663da7`. One commit each as planned. Two of the four had a wrong plan in this file (D2's web half was a no-op; F1's both suggested mechanisms leak) — **read the corrections in those sections before trusting any other plan here.**
 6. ~~**C1** (#48) — face centering.~~ **(a), (c), (d-People) DONE** 2026-07-21 — `5c4d776`. **(b) still open** and still gated on A1's deploy. Read the (a) corrections before trusting any other plan in this file: the formula was right, the *mechanism* was not, and the existing test suite asserted the bug.
 7. ~~**B3** (#46) — codec probing.~~ **Code landed `65389a7`; backfill + corrupt-file honesty still open.**
-8. **B2** (#40) — **3-strike cap DONE** (see corrections in B2 — the plan was wrong 4×, and the worst loop was a file that *converts fine*). **ETA rework is what remains, and is NEXT.**
+8. ~~**B2** (#40).~~ **BOTH HALVES DONE** — 3-strike cap `8bfe66a`, ETA rework `08bc838`. The plan was wrong 4× on the cap (the worst loop was a file that *converts fine*) and 3× on the ETA (duration weighting is a trap; the plan had no answer for the unsampled category; the obvious EWMA form is biased). Read both correction blocks before trusting anything else in this file.
    > **B2 was resequenced ahead of B3's remainder deliberately.** B3's own
    > `VIDEO0063.mp4` item says it needs "the terminal unplayable state from
    > B2/#40", and B3's backfill queues 38 files that, without a cap, re-attempt
