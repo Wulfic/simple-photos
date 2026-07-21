@@ -665,10 +665,16 @@ Android: [LibraryFeatureScreens.kt:177-192](android/app/src/main/kotlin/com/simp
 
 The correct formula already exists in this repo â€” [PhotoInfoPanel.tsx:80-97](web/src/components/viewer/PhotoInfoPanel.tsx#L80-L97) `FaceCrop` uses the proper normalised sub-rectangle mapping (`(bbox_x / (1 - w)) * 100%`). Two implementations of the same operation, one right, one wrong.
 
-- [ ] Fix `computeFaceCropStyle` to the correct mapping: visible fraction `z = 1/zoom`, position `p = clamp((c - z/2) / (1 - z), 0, 1)`. Verify it degenerates correctly when `z â†’ 1`.
-- [ ] Have `FaceCrop` and `computeFaceCropStyle` share **one** helper. Two copies is how they drifted.
-- [ ] Android: scale about centre and translate the face centre to the middle, and correct for the centre-crop coordinate space before applying the bbox. See memory `android-crop-display-bug` â€” the `TopStart` scale+translate pattern is the one that works here.
-- [ ] Unit-test the pure math on both platforms with known bboxes (corner, centre, edge-clamped). This is arithmetic; it must not need a device to verify.
+**(a) — DONE**, commit `5c4d776`
+
+- [x] `computeFaceCropStyle` rewritten. The position formula above was right — `p = (c - z/2)/(1 - z)` — but **the mechanism this file prescribed was wrong**, the third wrong plan in this document. `z = 1/zoom` holds only for a square source. Under `object-fit: cover` the visible fraction is per-axis and aspect-dependent, and along the **uncropped** axis the whole image is visible (`z = 1`), so `object-position` has zero freedom and cannot centre anything — no amount of correct arithmetic rescues a crop built on `cover`. Every formula starting from "where does the face land after a cover crop?" needs the image aspect ratio, which we do not have for a cached thumbnail. — `5c4d776`
+- [x] **The fix places the window itself** rather than asking where the face landed. The window is the bbox scaled about its own centre by a single factor `k`, drawn with explicit width/height + `object-fit: fill` (the `getThumbnailStyle` rotated-crop precedent). A face square in *pixels* yields a square window: `zx`/`zy` differ by exactly the photo's aspect ratio, which is the term that cancels. **That is why it needs no aspect ratio at all** — the property the old comment claimed and the old code did not have. — `5c4d776`
+- [x] `z → 1` degenerates correctly: the axis is fully visible, so there is no pan freedom and no solution; `facePosition` returns the midpoint instead of dividing by zero. — `5c4d776`
+- [x] One helper: `faceCropRect` (web) / `FaceCrop.kt` (Android), parameterised by `targetFraction` + `minVisibleFraction`. `FaceCrop` in PhotoInfoPanel — the copy that was already correct — now calls it at `targetFraction: 1`. A third copy, the four-nullable-column bbox guard, was inlined at each cluster call site and is now `clusterFaceCropStyle`. — `5c4d776`
+- [x] Android: `TopStart` scale+translate as predicted (memory `android-crop-display-bug` was right), **plus `ContentScale.Crop` → `FillBounds`** — which the plan above missed. Correcting "for the centre-crop coordinate space" is not possible without the aspect ratio; the centre-crop has to be *removed*, not corrected. Aspect is preserved by `zx`/`zy` differing, not by the scaler. — `5c4d776`
+- [x] Unit-tested on both platforms — 14 web + 9 Android, no device required. — `5c4d776`
+
+> **The existing web suite asserted the bug.** `thumbnailCss.faceCrop.test.ts` carried a test named *"centres the crop on the face centre"* whose body asserted `objectPosition: "75.00% 75.00%"` for a face centred at 0.75 — it pinned the face staying exactly where it was. The assertion and the defect agreed, so #48 shipped with a green suite. Both suites now assert the **property** — invert the produced geometry, check the face centre lands at 0.5 — rather than the formula's own output, so they cannot re-agree with a broken implementation. Verified RED against the old formula: it lands the face at 0.30 where the property demands 0.50, precisely the reported "up and to the left".
 
 **(b) Many People albums have no thumbnail.** [server/src/ai/handlers.rs:283-314](server/src/ai/handlers.rs#L283-L314) `fetch_face_clusters` LEFT-JOINs the representative detection, so `rep_bbox_*` is legitimately NULL when it cannot resolve â€” the client then renders the placeholder. **HYPOTHESIS, and it likely chains to A1:** the representative *photo* is resolved client-side against the local mirror, and the web mirror is missing every unencrypted row (`usePhotoSync.ts:205`). A cluster whose representative happens to be an unencrypted photo has no thumbnail on web but would on Android.
 - [ ] Fix A1 first, then re-measure how many clusters are still thumbnail-less.
@@ -676,10 +682,11 @@ The correct formula already exists in this repo â€” [PhotoInfoPanel.tsx:80-
 - [ ] Log (don't silently placeholder) when a cluster cannot resolve a thumbnail â€” otherwise this is invisible again.
 
 **(c) Android uses square tiles where web uses circular portraits.** [LibraryFeatureScreens.kt:163-171](android/app/src/main/kotlin/com/simplephotos/ui/screens/library/LibraryFeatureScreens.kt#L163-L171) uses `RoundedCornerShape(12.dp)`; web's People list uses `variant="avatar"`.
-- [ ] Use `CircleShape` for person/pet cluster tiles on Android to match web.
+- [x] `CircleShape` for person **and** pet cluster tiles on Android, threaded as a `circular` flag through `GridScaffold` so Trips and Memories stay rectangular. — `5c4d776`
 
 **(d) The Albums page doesn't use face centering at all.** [web/src/pages/Albums.tsx:669-690](web/src/pages/Albums.tsx#L669-L690) renders the People row without applying `faceCropStyle` â€” that only happens in `PeopleView`.
-- [ ] Apply the shared face-crop helper to the Albums-page People (and Pets) row tiles.
+- [x] Applied to the Albums-page **People** row via the shared `clusterFaceCropStyle`. It had no face framing at all, so the same person was framed one way on the People page and another in the Albums row. — `5c4d776`
+- [ ] **Pets cannot be done here — this plan was wrong.** `PetCluster` carries no `rep_bbox_*` on the server, in `web/src/api/ai.ts`, or in Android's `AiDto.kt`; only `FaceCluster` does. There is nothing to frame until the server resolves and emits a representative pet detection bbox, which is its own server-side task, not a client wire-up. Pet tiles are circular (c) but centre-cropped.
 
 ### C2 â€” #39 Cannot rename pets on Android (Low) â€” CONFIRMED
 
@@ -868,8 +875,8 @@ Dependencies are real here â€” A1 gates the honest measurement of C1(b), an
 3. **A2** (#38) â€” delta sync + server cache. Builds on A1's schema work.
 4. ~~**B1** (#45) â€” failure logging.~~ **DONE** `298fd99`.
 5. ~~**D1** (#44), **D2** (#50), **C2** (#39), **F1** (#41) â€” quick wins.~~ **ALL DONE** 2026-07-21 — `0fb7bdb`, `90aa0cd`, `736a927`, `d663da7`. One commit each as planned. Two of the four had a wrong plan in this file (D2's web half was a no-op; F1's both suggested mechanisms leak) — **read the corrections in those sections before trusting any other plan here.**
-6. **C1** (#48) â€” face centering. **NEXT.** Do after A1 so (b) can be measured honestly. Note D2 just built the "one shared formula, defined once" precedent that C1(a) needs.
-7. **B3** (#46) â€” codec probing.
+6. ~~**C1** (#48) — face centering.~~ **(a), (c), (d-People) DONE** 2026-07-21 — `5c4d776`. **(b) still open** and still gated on A1's deploy. Read the (a) corrections before trusting any other plan in this file: the formula was right, the *mechanism* was not, and the existing test suite asserted the bug.
+7. **B3** (#46) — codec probing. **NEXT.**
 8. **B2** (#40) â€” ETA rework + 3-strike cap.
 9. **E1** (#43), **E2** (#52) â€” album features.
 10. **B4** (#49) â€” the resolution ladder. Largest scope; do not let it block anything above.
