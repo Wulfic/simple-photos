@@ -12,6 +12,7 @@ use axum::Json;
 
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
+use crate::gallery::eligibility::ELIGIBLE_PREDICATE;
 use crate::state::AppState;
 
 use super::models::*;
@@ -270,28 +271,62 @@ pub async fn list_face_clusters(
     // person card. This prevents random faces in group photos / crowds from
     // creating noisy single-photo "People" entries.
     let clusters = fetch_face_clusters(&state.pool, &auth.user_id).await?;
+
+    // #48(b): a cluster whose representative could not resolve to an eligible
+    // photo hands the client a placeholder tile. That used to be silent — the
+    // whole complaint in the issue was "many People albums have no thumbnail"
+    // with nothing saying why. Surface it instead of hiding it.
+    for c in &clusters {
+        if c.representative.is_none() {
+            tracing::warn!(
+                cluster_id = c.id,
+                label = c.label.as_deref().unwrap_or("(unnamed)"),
+                photo_count = c.photo_count,
+                "face cluster has no thumbnail-resolvable representative — every \
+                 detection is on a secured or ineligible photo; tile will placeholder"
+            );
+        }
+    }
+
     Ok(Json(clusters))
 }
 
 /// Query the face-cluster summaries for a user, including the representative
 /// face's bbox so clients can crop the People tile to the face.
 ///
-/// `rep` is the highest-confidence detection on the representative photo. The
-/// join is LEFT so clusters whose representative detection can't be resolved
-/// still list (bbox simply comes back NULL). Extracted from the handler so it
-/// can be unit-tested against an in-memory DB.
+/// The representative is the highest-confidence detection whose photo is
+/// **eligible** — i.e. one the client can actually render. #48(b): the old
+/// query took the highest-confidence detection unconditionally, so a cluster
+/// whose best face happened to sit on a secure-hidden photo resolved to a
+/// photo id the gallery mirror does not contain, and the tile fell back to a
+/// placeholder (and, worse, would have cropped to a *secured* face had the
+/// client held it). Now a stored `fc.representative` is used only if it is
+/// itself eligible, else selection falls through remaining detections by
+/// confidence to the first eligible one. `representative` (and the bbox) come
+/// back NULL only when the whole cluster is ineligible, which the caller logs.
+///
+/// Extracted from the handler so it can be unit-tested against an in-memory DB.
 pub(crate) async fn fetch_face_clusters(
     pool: &sqlx::SqlitePool,
     user_id: &str,
 ) -> Result<Vec<FaceClusterSummary>, sqlx::Error> {
-    sqlx::query_as(
+    // The representative photo, resolved to one the client can render: the
+    // stored representative if still eligible, else the highest-confidence
+    // detection whose photo is eligible. `?1` is the user id (bound once, reused
+    // by every occurrence per SQLite numbered-parameter semantics).
+    let rep_photo = format!(
+        "COALESCE(\
+            (SELECT p.id FROM photos p \
+             WHERE p.id = fc.representative AND p.user_id = ?1 AND {ELIGIBLE_PREDICATE}), \
+            (SELECT fd.photo_id FROM face_detections fd \
+             JOIN photos p ON p.id = fd.photo_id \
+             WHERE fd.cluster_id = fc.id AND p.user_id = ?1 AND {ELIGIBLE_PREDICATE} \
+             ORDER BY fd.confidence DESC LIMIT 1))"
+    );
+
+    let sql = format!(
         "SELECT fc.id, fc.label, fc.photo_count, \
-                COALESCE(\
-                    fc.representative, \
-                    (SELECT fd.photo_id FROM face_detections fd \
-                     WHERE fd.cluster_id = fc.id \
-                     ORDER BY fd.confidence DESC LIMIT 1) \
-                ) AS representative, \
+                {rep_photo} AS representative, \
                 rep.bbox_x AS rep_bbox_x, rep.bbox_y AS rep_bbox_y, \
                 rep.bbox_w AS rep_bbox_w, rep.bbox_h AS rep_bbox_h, \
                 fc.created_at, fc.updated_at \
@@ -299,18 +334,13 @@ pub(crate) async fn fetch_face_clusters(
          LEFT JOIN face_detections rep ON rep.id = (\
              SELECT fd2.id FROM face_detections fd2 \
              WHERE fd2.cluster_id = fc.id \
-               AND fd2.photo_id = COALESCE(\
-                   fc.representative, \
-                   (SELECT fd3.photo_id FROM face_detections fd3 \
-                    WHERE fd3.cluster_id = fc.id \
-                    ORDER BY fd3.confidence DESC LIMIT 1)) \
+               AND fd2.photo_id = {rep_photo} \
              ORDER BY fd2.confidence DESC LIMIT 1) \
          WHERE fc.user_id = ?1 AND fc.photo_count >= 2 \
-         ORDER BY fc.photo_count DESC",
-    )
-    .bind(user_id)
-    .fetch_all(pool)
-    .await
+         ORDER BY fc.photo_count DESC"
+    );
+
+    sqlx::query_as(&sql).bind(user_id).fetch_all(pool).await
 }
 
 /// GET /api/ai/faces/:cluster_id/photos — list photos in a face cluster.
@@ -932,11 +962,44 @@ mod tests {
         .unwrap();
     }
 
+    /// A minimal, eligible photo row. The representative selection now joins to
+    /// `photos`, so a detection with no backing photo resolves to nothing —
+    /// which mirrors production, where `face_detections` cascades on photo delete.
+    async fn insert_photo(pool: &sqlx::SqlitePool, id: &str, user: &str) {
+        sqlx::query(
+            "INSERT INTO photos (id, user_id, filename, mime_type, created_at) \
+             VALUES (?, ?, ?, 'image/jpeg', '2026-01-01T00:00:00Z')",
+        )
+        .bind(id)
+        .bind(user)
+        .bind(format!("{id}.jpg"))
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    /// Hide a photo inside a secure gallery, making it ineligible without
+    /// touching its `photos` row — exactly how a client loses the ability to
+    /// render it.
+    async fn secure_photo(pool: &sqlx::SqlitePool, photo_id: &str) {
+        sqlx::query(
+            "INSERT INTO encrypted_gallery_items (id, gallery_id, blob_id, added_at) \
+             VALUES (?, 'g1', ?, '2026-01-01T00:00:00Z')",
+        )
+        .bind(format!("egi-{photo_id}"))
+        .bind(photo_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
     #[tokio::test]
     async fn face_clusters_carry_representative_bbox() {
         let pool = memory_pool().await;
         let u = "user-1";
         insert_cluster(&pool, 1, u, 2).await;
+        insert_photo(&pool, "p1", u).await;
+        insert_photo(&pool, "p2", u).await;
         // Highest-confidence detection (0.9) on photo "p1" is the representative;
         // its bbox must be the one surfaced, not the lower-confidence one.
         insert_detection(&pool, u, "p1", 1, (0.1, 0.2, 0.3, 0.4), 0.9).await;
@@ -958,6 +1021,7 @@ mod tests {
         let u = "user-1";
         // Single-photo cluster is filtered out (photo_count < 2).
         insert_cluster(&pool, 1, u, 1).await;
+        insert_photo(&pool, "p1", u).await;
         insert_detection(&pool, u, "p1", 1, (0.1, 0.1, 0.2, 0.2), 0.8).await;
         // Eligible cluster with no linked detections → representative + bbox NULL.
         insert_cluster(&pool, 2, u, 2).await;
@@ -965,6 +1029,79 @@ mod tests {
         let clusters = fetch_face_clusters(&pool, u).await.unwrap();
         assert_eq!(clusters.len(), 1, "only the >=2-photo cluster surfaces");
         assert_eq!(clusters[0].id, 2);
+        assert_eq!(clusters[0].rep_bbox_x, None);
+    }
+
+    /// #48(b): the highest-confidence detection sits on a SECURED photo, so it
+    /// cannot be the tile (the client cannot render it, and cropping to it would
+    /// surface a hidden face). Selection must fall through to the next
+    /// detection whose photo is eligible, and surface THAT face's bbox.
+    ///
+    /// Verified RED against the old unconditional highest-confidence query:
+    /// representative came back as the secured "p1".
+    #[tokio::test]
+    async fn representative_falls_through_a_secured_photo_to_an_eligible_one() {
+        let pool = memory_pool().await;
+        let u = "user-1";
+        insert_cluster(&pool, 1, u, 2).await;
+        insert_photo(&pool, "p1", u).await;
+        insert_photo(&pool, "p2", u).await;
+        // Best face is on p1 — but p1 is secure-hidden.
+        insert_detection(&pool, u, "p1", 1, (0.1, 0.2, 0.3, 0.4), 0.9).await;
+        insert_detection(&pool, u, "p2", 1, (0.5, 0.6, 0.1, 0.1), 0.5).await;
+        secure_photo(&pool, "p1").await;
+
+        let clusters = fetch_face_clusters(&pool, u).await.unwrap();
+        assert_eq!(clusters.len(), 1);
+        let c = &clusters[0];
+        assert_eq!(c.representative.as_deref(), Some("p2"), "must skip the secured photo");
+        assert_eq!(c.rep_bbox_x, Some(0.5), "bbox must be p2's face, not p1's");
+        assert_eq!(c.rep_bbox_y, Some(0.6));
+    }
+
+    /// A stored `fc.representative` that is no longer eligible must not win over
+    /// an eligible detection — the COALESCE first arm is guarded on eligibility.
+    #[tokio::test]
+    async fn stored_representative_is_ignored_when_secured() {
+        let pool = memory_pool().await;
+        let u = "user-1";
+        // Cluster explicitly names p1 as representative, but p1 is secured.
+        sqlx::query(
+            "INSERT INTO face_clusters (id, user_id, label, representative, photo_count, created_at, updated_at) \
+             VALUES (1, ?, NULL, 'p1', 2, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        )
+        .bind(u)
+        .execute(&pool)
+        .await
+        .unwrap();
+        insert_photo(&pool, "p1", u).await;
+        insert_photo(&pool, "p2", u).await;
+        insert_detection(&pool, u, "p1", 1, (0.1, 0.2, 0.3, 0.4), 0.9).await;
+        insert_detection(&pool, u, "p2", 1, (0.5, 0.6, 0.1, 0.1), 0.5).await;
+        secure_photo(&pool, "p1").await;
+
+        let clusters = fetch_face_clusters(&pool, u).await.unwrap();
+        assert_eq!(clusters[0].representative.as_deref(), Some("p2"));
+    }
+
+    /// When every detection is on an ineligible photo, representative and bbox
+    /// come back NULL — the state the handler logs rather than silently
+    /// placeholdering.
+    #[tokio::test]
+    async fn all_secured_yields_null_representative() {
+        let pool = memory_pool().await;
+        let u = "user-1";
+        insert_cluster(&pool, 1, u, 2).await;
+        insert_photo(&pool, "p1", u).await;
+        insert_photo(&pool, "p2", u).await;
+        insert_detection(&pool, u, "p1", 1, (0.1, 0.2, 0.3, 0.4), 0.9).await;
+        insert_detection(&pool, u, "p2", 1, (0.5, 0.6, 0.1, 0.1), 0.5).await;
+        secure_photo(&pool, "p1").await;
+        secure_photo(&pool, "p2").await;
+
+        let clusters = fetch_face_clusters(&pool, u).await.unwrap();
+        assert_eq!(clusters.len(), 1, "the cluster still lists");
+        assert_eq!(clusters[0].representative, None);
         assert_eq!(clusters[0].rep_bbox_x, None);
     }
 }
