@@ -935,12 +935,52 @@ Saying so beats inventing a test that asserts a string is missing from a file.
 
 Good news â€” the hard parts are done. A photo lives in at most one secure album (server-enforced), so this is a **move**, and `resolveSecureMoves` + the server endpoint already implement exactly that operation. This is predominantly UI.
 
-- [ ] Web: selection mode on the secure grid + a "Move to album" action in the selection bar â†’ target-album picker â†’ reuse `resolveSecureMoves`.
-- [ ] Reuse `usePhotoSelection` / `SelectablePhotoGrid` rather than hand-rolling selection (see memory `selection-refactor`).
-- [ ] Handle the smart-album case: in a secure smart view the "current gallery" is synthetic, so the source gallery must come from each item's own `gallery_id` â€” the removal path at [SecureGallery.tsx:329-334](web/src/pages/SecureGallery.tsx#L329-L334) already does this; follow that precedent.
-- [ ] Batch the moves resiliently â€” partial failure must not lose items (see memory `a2-album-epic-27-16-25-20`, the resilient secure-add batch).
-- [ ] Android parity in `SecureGallery`.
-- [ ] E2E: move items Aâ†’B, assert membership on both sides and that no item ends up in two albums or none.
+**DONE â€” `d1f439a`. web 284 green (was 275), android 196 green, e2e move suite green.
+Two plan items were wrong and one whole hazard the plan never mentioned turned
+out to be the interesting part.**
+
+> **The server op is direction-agnostic, so "push" is entirely client framing.**
+> `move_gallery_item` verifies ownership of BOTH galleries and reassigns
+> membership scoped to `(item_id, source gallery_id)` â€” it does not care whether
+> the caller is pulling in or pushing out. Confirmed by reading it before writing
+> a line: there is **no server change here**, and the E2E pins that the exact same
+> endpoint the #31 pull picker calls also satisfies #43.
+>
+> **`SelectablePhotoGrid` is NOT reusable â€” only `usePhotoSelection` is.** The
+> plan said "reuse `usePhotoSelection` / `SelectablePhotoGrid`". The grid is
+> welded to `CachedPhoto` + `AlbumTile` + trash/add-to-album and renders regular
+> photos from IDB; secure items are `SecureGalleryItem`, rendered from encrypted
+> blobs through `SecureGalleryItem`/`ThumbnailTile` with a gallery token. Reusing
+> it was never possible. The *hook* is, and it needed one additive method
+> (`enterEmpty`) so a toolbar "Select" button can enter selection mode with an
+> empty set â€” the hook only had "enter seeded with one id" (long-press) before.
+>
+> **Android already had multi-select in the secure album detail â€” for delete.**
+> The plan's "Android parity in SecureGallery" implied building selection from
+> scratch. `GalleryDetailView` already has `selectionMode`/`selectedItemIds`
+> (long-press to enter, tap to toggle, select-all, âœ“ overlay) driving the Remove
+> action. Push was a "Move" entry added to that existing bar + a target-album
+> dialog â€” not a new selection system.
+>
+> **Bursts were the hazard the plan didn't name.** The grid collapses a burst to
+> one tile, so a naive move ships only the cover and strands the rest in the
+> source album â€” the same split `removeItems`/secure-add already guard against.
+> The move must expand a selected representative to every frame sharing its
+> `burst_id`. That, plus routing each item from its **own** `gallery_id` (so a
+> synthetic smart view works) and dropping items already in the target (a no-op
+> move), is the entire content of the pure planners â€” `secureMovePicker.ts`
+> (`expandSecureSelection`/`planSecureMovesToTarget`/`secureMoveTargets`) and
+> Android's `SecureMovePlan.kt`. Both were RED-verified by neutering the burst
+> expansion and the same-target drop: web 4/15 fail, android 3/8 fail, exactly
+> the new-behaviour tests, the rest green in both states.
+
+- [x] Web: selection via `usePhotoSelection` + a "Select" toolbar button, a selection bar with "Move to album", and a target-album picker modal (`secureMoveTargets`). â€” `d1f439a`
+- [x] Reuse `usePhotoSelection` (added `enterEmpty`). **`SelectablePhotoGrid` was not reusable** â€” see correction above. â€” `d1f439a`
+- [x] Smart-album case: each item routes from its own `gallery_id` via `planSecureMovesToTarget`; a synthetic open id offers every real album as a target. Follows the removal-path precedent. â€” `d1f439a`
+- [x] Resilient batch: each `moveItem` is isolated (one failure never aborts the rest), success/failure surfaced; same shape as secure-add and the pull picker. â€” `d1f439a`
+- [x] Android parity: "Move" added to the **existing** selection bar + target dialog; pure planning in `SecureMovePlan.kt` (8 JVM tests). â€” `d1f439a`
+- [x] E2E: `tests/test_06 TestSecureGalleryMove` (4) â€” membership reassigned Aâ†’B, move scoped to the named source (wrong source is a no-op 404), IDOR-guarded target (another user's album rejected, item untouched), original stays hidden after a move. â€” `d1f439a`
+- [ ] **Device-verify on the S21+ harness.** The move arithmetic + persistence are tested; the actual selection→dialog→move gesture on a real device has only run in a compiler. Same standing gap as every other Android UI item in this batch.
 
 ### E2 â€” #52 Sort button on the album header (Feature) â€” CONFIRMED
 
@@ -1015,7 +1055,7 @@ Dependencies are real here â€” A1 gates the honest measurement of C1(b), an
    > `VIDEO0063.mp4` item says it needs "the terminal unplayable state from
    > B2/#40", and B3's backfill queues 38 files that, without a cap, re-attempt
    > forever. Shipping the backfill first would have shipped a loop.
-9. **E1** (#43), **E2** (#52) â€” album features.
+9. ~~**E1** (#43)~~ **DONE** `d1f439a` â€” push move, client + E2E, no server change (the move endpoint is direction-agnostic). **E2** (#52) â€” album sort, still open.
 10. **B4** (#49) â€” the resolution ladder. Largest scope; do not let it block anything above.
 
 ## Cross-cutting risks
