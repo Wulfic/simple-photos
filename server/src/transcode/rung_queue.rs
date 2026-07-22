@@ -121,12 +121,19 @@ pub async fn find_rung_candidates(
     // cosmetic: a blind selection whose probe says "no rung owed" must be able
     // to record that as final, or the widening costs three ffprobes and a
     // spurious retirement warning per file, forever.
+    //
+    // `encryption_deferred = 0` excludes rows the encryption migration parked
+    // after three hard failures. They never gain an encrypted blob, so
+    // `generate_one` could only ever defer them "awaiting encryption" on every
+    // sweep — measured re-thrash on the live library (16 parked videos, forever
+    // producing nothing). `server_migrate` and `status.rs` park them the same way.
     let sql = format!(
         "SELECT p.id AS photo_id, p.user_id, p.filename, p.mime_type, \
                 p.file_path, p.encrypted_blob_id, p.width, p.height \
          FROM photos p \
          WHERE p.media_type = 'video' \
            AND {ELIGIBLE_PREDICATE} \
+           AND p.encryption_deferred = 0 \
            AND ( (p.width > 0 AND p.height > 0 AND MIN(p.width, p.height) > ?1) \
                  OR p.width <= 0 OR p.height <= 0 ) \
            AND {NO_TERMINAL_NONSOURCE_RENDITION} \
@@ -184,12 +191,16 @@ pub async fn find_codec_backfill_candidates(
     // and the container extension is exactly what #46 stopped trusting — but for
     // *narrowing* which rows to probe (not for the verdict) it is the only signal
     // available without a probe, and it mirrors `probe::is_opaque_video_container`.
+    //
+    // `encryption_deferred = 0`, as in `find_rung_candidates`: a parked row can
+    // never gain an encrypted blob, so the backfill could only defer it forever.
     let sql = format!(
         "SELECT p.id AS photo_id, p.user_id, p.filename, p.mime_type, \
                 p.file_path, p.encrypted_blob_id, p.width, p.height \
          FROM photos p \
          WHERE p.media_type = 'video' \
            AND {ELIGIBLE_PREDICATE} \
+           AND p.encryption_deferred = 0 \
            AND ( lower(p.filename) LIKE '%.mp4' \
                  OR lower(p.filename) LIKE '%.mov' \
                  OR lower(p.filename) LIKE '%.m4v' \
@@ -805,6 +816,49 @@ mod tests {
             bitrate: Some(1_000_000),
             size_bytes: 512,
         }
+    }
+
+    /// Videos parked by the encryption migration (`encryption_deferred = 1`, set
+    /// after `MIGRATION_MAX_ATTEMPTS` hard encryption failures) never gain an
+    /// encrypted blob, so `generate_one` defers them "awaiting encryption" on
+    /// every sweep and can never produce a servable rung. Selecting them is pure
+    /// re-thrash. Measured on the live library (2026-07-22): all 2,500
+    /// unencrypted rows were parked, and 16 of them were videos the ladder
+    /// re-selected on every hourly sweep, producing nothing. `server_migrate` and
+    /// `status.rs` already exclude parked rows; both candidate queries must too.
+    #[tokio::test]
+    async fn parked_videos_are_never_ladder_candidates() {
+        let pool = test_pool().await;
+
+        // An oversized source the ladder wants, and a known-small opaque one the
+        // #46 codec backfill wants. Disjoint sets by construction.
+        insert_video(&pool, "p_4k", 3840, 2160).await;
+        insert_video_named(&pool, "p_small", 640, 480, "480P_clip.mp4").await;
+
+        // Control: both are offered while un-parked.
+        assert!(candidate_ids(&pool).await.contains(&"p_4k".to_string()));
+        assert!(backfill_ids(&pool).await.contains(&"p_small".to_string()));
+
+        // Park both exactly as `server_migrate` does at the attempt cap.
+        for id in ["p_4k", "p_small"] {
+            sqlx::query("UPDATE photos SET encryption_deferred = 1 WHERE id = ?")
+                .bind(id)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        assert!(
+            !candidate_ids(&pool).await.contains(&"p_4k".to_string()),
+            "a parked oversized video must leave the rung queue — it can never \
+             gain an encrypted blob, so it would defer 'awaiting encryption' \
+             on every sweep forever"
+        );
+        assert!(
+            !backfill_ids(&pool).await.contains(&"p_small".to_string()),
+            "a parked small video must leave the codec-backfill queue for the \
+             same reason"
+        );
     }
 
     /// The generalisation behind #46: the ladder's own source-resolution codec
