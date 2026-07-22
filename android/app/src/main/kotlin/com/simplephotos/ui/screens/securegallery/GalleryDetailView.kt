@@ -7,6 +7,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items as lazyItems
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -73,6 +75,8 @@ internal fun GalleryDetailView(
     var selectionMode by remember { mutableStateOf(false) }
     var selectedItemIds by remember { mutableStateOf(emptySet<String>()) }
     var confirmDelete by remember { mutableStateOf(false) }
+    // Push (#43): pick a target secure album for the current selection.
+    var showMoveTarget by remember { mutableStateOf(false) }
     // Exiting selection mode whenever the album's items change keeps the bar
     // honest (e.g. after a delete the selection is gone).
     fun exitSelection() { selectionMode = false; selectedItemIds = emptySet() }
@@ -153,6 +157,53 @@ internal fun GalleryDetailView(
         )
     }
 
+    // Target-album picker for the push move (#43).
+    if (showMoveTarget) {
+        val targets = viewModel.moveTargets
+        AlertDialog(
+            onDismissRequest = { showMoveTarget = false },
+            title = { Text("Move ${selectedItemIds.size} to") },
+            text = {
+                if (targets.isEmpty()) {
+                    Text("No other secure albums to move into.")
+                } else {
+                    Column(
+                        modifier = Modifier
+                            .heightIn(max = 320.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        targets.forEach { g ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        viewModel.pushItemsTo(selectedItemIds.toList(), g.id)
+                                        showMoveTarget = false
+                                        exitSelection()
+                                    }
+                                    .padding(vertical = 12.dp, horizontal = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Folder,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(20.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(g.name, maxLines = 1)
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showMoveTarget = false }) { Text("Cancel") }
+            }
+        )
+    }
+
     Scaffold(
         topBar = {
             if (selectionMode) {
@@ -175,6 +226,16 @@ internal fun GalleryDetailView(
                             if (selectedItemIds.isEmpty()) selectionMode = false
                         }) {
                             Text(if (allSelected) "Deselect all" else "Select all")
+                        }
+                        // Move the selection to another secure album (#43) — only
+                        // when there's somewhere to move it to.
+                        if (viewModel.moveTargets.isNotEmpty()) {
+                            TextButton(
+                                onClick = { if (selectedItemIds.isNotEmpty()) showMoveTarget = true },
+                                enabled = selectedItemIds.isNotEmpty()
+                            ) {
+                                Text("Move")
+                            }
                         }
                         IconButton(
                             onClick = { if (selectedItemIds.isNotEmpty()) confirmDelete = true },

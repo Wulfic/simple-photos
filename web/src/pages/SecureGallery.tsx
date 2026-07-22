@@ -9,6 +9,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useAppNavigate } from "../hooks/useAppNavigate";
 import { useScrollMemory } from "../hooks/useScrollMemory";
+import { usePhotoSelection } from "../hooks/usePhotoSelection";
 import { api } from "../api/client";
 import { db } from "../db";
 import AppHeader from "../components/AppHeader";
@@ -16,7 +17,13 @@ import AppIcon from "../components/AppIcon";
 import JustifiedGrid from "../components/gallery/JustifiedGrid";
 import { getErrorMessage } from "../utils/formatters";
 import { getEffectiveAspectRatio } from "../utils/thumbnailCss";
-import { otherSecureAlbumItems, resolveSecureMoves } from "../gallery/secureMovePicker";
+import {
+  otherSecureAlbumItems,
+  resolveSecureMoves,
+  expandSecureSelection,
+  planSecureMovesToTarget,
+  secureMoveTargets,
+} from "../gallery/secureMovePicker";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
 import { useAuthStore } from "../store/auth";
 import {
@@ -123,6 +130,13 @@ export default function SecureGallery() {
   const [showMovePicker, setShowMovePicker] = useState(false);
   const [moveSelected, setMoveSelected] = useState<Set<string>>(new Set());
   const [moving, setMoving] = useState(false);
+
+  // Push direction (#43): select items in the OPEN album and move them OUT to
+  // another secure album. Same server op as the pull picker, opposite framing.
+  // Reuses the shared multi-select hook so behaviour matches every other grid.
+  const pushSelect = usePhotoSelection();
+  const [showMoveTarget, setShowMoveTarget] = useState(false);
+  const [movingPush, setMovingPush] = useState(false);
 
   // Error / success
   const [error, setError] = useState("");
@@ -261,6 +275,13 @@ export default function SecureGallery() {
     }
   }, [selectedGallery, allItems]);
 
+  // Reset the push selection whenever the open album changes (or we return to
+  // the list) so a selection never carries across albums or lingers on Back.
+  useEffect(() => {
+    pushSelect.clear();
+    setShowMoveTarget(false);
+  }, [selectedGallery?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Handle password auth
   async function handleUnlock(e: React.FormEvent) {
     e.preventDefault();
@@ -361,6 +382,13 @@ export default function SecureGallery() {
     ? otherSecureAlbumItems(allItems, selectedGallery.id)
     : [];
 
+  // Real secure albums the current selection can be pushed INTO (#43). Excludes
+  // the open album; for a smart view its synthetic id matches nothing, so every
+  // real album is offered.
+  const moveTargets = selectedGallery
+    ? secureMoveTargets(galleries, selectedGallery.id)
+    : [];
+
   function toggleMoveSelect(itemId: string) {
     setMoveSelected((prev) => {
       const next = new Set(prev);
@@ -398,6 +426,50 @@ export default function SecureGallery() {
     await loadAllItems();
     await loadGalleries();
     await loadItems(selectedGallery.id);
+  }
+
+  // Push (#43): move the items selected in the OPEN album into `targetGalleryId`.
+  async function moveSelectedTo(targetGalleryId: string) {
+    if (!selectedGallery || pushSelect.selectedIds.size === 0 || movingPush) return;
+    setMovingPush(true);
+    setError("");
+    setSuccess("");
+    // A burst tile stands in for every frame, so a move must carry them all
+    // (mirrors secure-add) or a burst is split across two albums. Each item
+    // routes from its own gallery_id — right for a real album AND a smart view.
+    const expanded = expandSecureSelection(items, pushSelect.selectedIds);
+    const moves = planSecureMovesToTarget(items, expanded, targetGalleryId);
+    const targetName = galleries.find((g) => g.id === targetGalleryId)?.name ?? "the album";
+    if (moves.length === 0) {
+      // Everything selected already lives in the target — nothing to do.
+      setSuccess(`Those photos are already in "${targetName}".`);
+      pushSelect.clear();
+      setShowMoveTarget(false);
+      setMovingPush(false);
+      return;
+    }
+    let moved = 0;
+    let failed = 0;
+    // Each move is isolated so one failure never aborts the rest — a partial
+    // failure must not lose items (mirrors the pull picker and secure-add).
+    for (const mv of moves) {
+      try {
+        await api.secureGalleries.moveItem(mv.sourceGalleryId, mv.itemId, targetGalleryId);
+        moved++;
+      } catch (err) {
+        console.error("[SecureGallery] push move failed", err); // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
+        failed++;
+      }
+    }
+    if (moved > 0) setSuccess(`Moved ${moved} item${moved !== 1 ? "s" : ""} into "${targetName}".`);
+    if (failed > 0) setError(`${failed} item${failed !== 1 ? "s" : ""} couldn't be moved.`);
+    pushSelect.clear();
+    setShowMoveTarget(false);
+    setMovingPush(false);
+    // Refresh: aggregate feed re-derives smart views; a real album re-fetches.
+    await loadAllItems();
+    await loadGalleries();
+    if (!isSecureSmartAlbum(selectedGallery.id)) await loadItems(selectedGallery.id);
   }
 
   // Collapse burst stacks → one tile / viewer page per burst (the album still
@@ -506,38 +578,96 @@ export default function SecureGallery() {
               </h2>
               <span className="text-fg-muted text-sm">{displayItems.length} items</span>
             </div>
-            {!isBackupServer && !isSecureSmartAlbum(selectedGallery.id) && (
+            {!isBackupServer && !pushSelect.selectionMode && (
               <div className="flex gap-2">
-                {/* Move media in from the user's OTHER secure albums (#31). Only
-                    offered when there's somewhere to pull from. */}
-                {otherSecureItems.length > 0 && (
+                {/* Select items to push OUT to another secure album (#43). Works
+                    in real AND smart albums, whenever there's a target to move
+                    into. */}
+                {items.length > 0 && moveTargets.length > 0 && (
                   <button
-                    onClick={() => { setShowMovePicker((v) => !v); setMoveSelected(new Set()); }}
-                    className={`btn btn-md inline-flex items-center ${showMovePicker ? "btn-primary" : "btn-secondary"}`}
-                    title="Move photos in from your other secure albums"
+                    onClick={() => pushSelect.enterEmpty()}
+                    className="btn btn-secondary btn-md inline-flex items-center"
+                    title="Select photos to move to another secure album"
                   >
-                    <span className="mr-1">🔒</span>
-                    {showMovePicker ? "Done" : "From secure albums"}
+                    Select
                   </button>
                 )}
-                <button
-                  onClick={() => {
-                    // Browse your regular/smart albums to pick photos, instead
-                    // of scrolling one giant flat master list. The secure-add
-                    // session lets every album grid offer an "Add to 🔒" action.
-                    startSecureAdd(selectedGallery.id, selectedGallery.name);
-                    navigate("/albums");
-                  }}
-                  className="btn btn-primary btn-md inline-flex items-center"
-                >
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-                  </svg>
-                  Add Photos
-                </button>
+                {!isSecureSmartAlbum(selectedGallery.id) && (
+                  <>
+                    {/* Move media in from the user's OTHER secure albums (#31).
+                        Only offered when there's somewhere to pull from. */}
+                    {otherSecureItems.length > 0 && (
+                      <button
+                        onClick={() => { setShowMovePicker((v) => !v); setMoveSelected(new Set()); }}
+                        className={`btn btn-md inline-flex items-center ${showMovePicker ? "btn-primary" : "btn-secondary"}`}
+                        title="Move photos in from your other secure albums"
+                      >
+                        <span className="mr-1">🔒</span>
+                        {showMovePicker ? "Done" : "From secure albums"}
+                      </button>
+                    )}
+                    <button
+                      onClick={() => {
+                        // Browse your regular/smart albums to pick photos, instead
+                        // of scrolling one giant flat master list. The secure-add
+                        // session lets every album grid offer an "Add to 🔒" action.
+                        startSecureAdd(selectedGallery.id, selectedGallery.name);
+                        navigate("/albums");
+                      }}
+                      className="btn btn-primary btn-md inline-flex items-center"
+                    >
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                      </svg>
+                      Add Photos
+                    </button>
+                  </>
+                )}
               </div>
             )}
           </div>
+
+          {/* Push selection bar (#43): move the selected items OUT to another
+              secure album. Mirrors the main gallery's selection bar. */}
+          {pushSelect.selectionMode && (
+            <div className="flex items-center justify-between gap-3 mb-4 p-3 bg-accent-50 dark:bg-accent-900/30 rounded-lg">
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => pushSelect.clear()}
+                  className="text-fg-muted hover:text-fg"
+                  aria-label="Cancel selection"
+                >
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+                <span className="text-sm font-medium tabular-nums">
+                  {pushSelect.selectedIds.size} selected
+                </span>
+                <button
+                  onClick={() =>
+                    pushSelect.selectedIds.size === displayItems.length
+                      ? pushSelect.clear()
+                      : pushSelect.setAll(displayItems.map((i) => i.id))
+                  }
+                  className="text-accent-600 dark:text-accent-400 text-sm hover:underline"
+                >
+                  {displayItems.length > 0 && pushSelect.selectedIds.size === displayItems.length
+                    ? "Deselect All"
+                    : "Select All"}
+                </button>
+              </div>
+              <button
+                onClick={() => setShowMoveTarget(true)}
+                disabled={pushSelect.selectedIds.size === 0 || movingPush}
+                className="btn btn-primary btn-md inline-flex items-center gap-1.5"
+                title="Move selected photos to another secure album"
+              >
+                <span>🔒</span>
+                {`Move to album (${pushSelect.selectedIds.size})`}
+              </button>
+            </div>
+          )}
 
           {/* Cross-secure-album move picker (#31) */}
           {showMovePicker && !isBackupServer && !isSecureSmartAlbum(selectedGallery.id) && (
@@ -615,13 +745,21 @@ export default function SecureGallery() {
                 getEffectiveAspectRatio(item.width, item.height, item.crop_metadata)
               }
               getKey={(item) => item.id}
-              renderItem={(item, idx) => (
-                <div className="group relative w-full h-full">
+              renderItem={(item, idx) => {
+                const pushSelected = pushSelect.selectedIds.has(item.id);
+                return (
+                <div
+                  className={`group relative w-full h-full ${
+                    pushSelect.selectionMode && pushSelected ? "ring-2 ring-accent-500 rounded" : ""
+                  }`}
+                >
                   <SecureGalleryItem
                     item={item}
                     burstCount={item.burst_id ? secureBurstCounts.get(item.burst_id) : undefined}
                     onClick={() =>
-                      navigate(`/photo/${item.blob_id}`, {
+                      pushSelect.selectionMode
+                        ? pushSelect.toggle(item.id)
+                        : navigate(`/photo/${item.blob_id}`, {
                         state: {
                           photoIds: displayItems.map((i) => i.blob_id),
                           currentIndex: idx,
@@ -638,7 +776,14 @@ export default function SecureGallery() {
                       })
                     }
                   />
-                  {!isBackupServer && (
+                  {pushSelect.selectionMode && pushSelected && (
+                    <div className="absolute top-1 right-1 w-5 h-5 rounded-full bg-green-500 flex items-center justify-center z-10 pointer-events-none">
+                      <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                      </svg>
+                    </div>
+                  )}
+                  {!isBackupServer && !pushSelect.selectionMode && (
                     <button
                       onClick={(e) => { e.stopPropagation(); handleRemoveItem(item); }}
                       className="absolute top-1 right-1 hidden group-hover:flex items-center justify-center w-7 h-7 bg-black/60 hover:bg-red-600 text-white rounded-full transition-colors z-10"
@@ -649,8 +794,51 @@ export default function SecureGallery() {
                     </button>
                   )}
                 </div>
-              )}
+                );
+              }}
             />
+          )}
+
+          {/* Target-album picker (#43): pick which secure album to move the
+              selection into. */}
+          {showMoveTarget && (
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+              onClick={() => { if (!movingPush) setShowMoveTarget(false); }}
+            >
+              <div className="card p-5 w-full max-w-sm" onClick={(e) => e.stopPropagation()}>
+                <h3 className="text-base font-semibold text-fg mb-3 flex items-center gap-2">
+                  <span>🔒</span>
+                  Move {pushSelect.selectedIds.size} item{pushSelect.selectedIds.size !== 1 ? "s" : ""} to
+                </h3>
+                {moveTargets.length === 0 ? (
+                  <p className="text-sm text-fg-muted">No other secure albums to move into.</p>
+                ) : (
+                  <div className="space-y-1 max-h-72 overflow-y-auto">
+                    {moveTargets.map((t) => (
+                      <button
+                        key={t.id}
+                        onClick={() => moveSelectedTo(t.id)}
+                        disabled={movingPush}
+                        className="w-full text-left px-3 py-2 rounded-md hover:bg-surface-raised flex items-center gap-2 disabled:opacity-50"
+                      >
+                        <span className="shrink-0">🔒</span>
+                        <span className="truncate">{t.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <div className="flex justify-end mt-4">
+                  <button
+                    onClick={() => setShowMoveTarget(false)}
+                    disabled={movingPush}
+                    className="btn btn-secondary btn-md"
+                  >
+                    {movingPush ? "Moving…" : "Cancel"}
+                  </button>
+                </div>
+              </div>
+            </div>
           )}
         </main>
       </div>

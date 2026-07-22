@@ -402,6 +402,16 @@ class APIClient:
         """Remove an item from a secure gallery (returns it to the regular gallery)."""
         return self.delete(f"/api/galleries/secure/{gallery_id}/items/{item_id}")
 
+    def move_secure_gallery_item(
+        self, source_gallery_id: str, item_id: str, target_gallery_id: str
+    ) -> requests.Response:
+        """Move an item from one secure gallery to another (#31/#43). A photo may
+        live in at most one secure album, so this reassigns membership."""
+        return self.post(
+            f"/api/galleries/secure/{source_gallery_id}/items/{item_id}/move",
+            json_data={"target_gallery_id": target_gallery_id},
+        )
+
     # ── Shared album helpers ─────────────────────────────────────────
 
     def list_shared_albums(self) -> list:

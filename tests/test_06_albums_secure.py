@@ -1375,6 +1375,97 @@ class TestSecureAggregateItems:
         )
 
 
+class TestSecureGalleryMove:
+    """Move items between secure albums (#31 pull picker + #43 push flow).
+
+    Both directions hit the same server op — POST .../items/:id/move — so these
+    pin the operation the UI is built on: membership is REASSIGNED (a photo lives
+    in at most one secure album), ownership of BOTH galleries is verified, and
+    the move is scoped to the named source so a guessed item id can't be shuffled.
+    """
+
+    def _item_ids(self, client, gallery_id, token):
+        return {i["id"] for i in client.list_secure_gallery_items(gallery_id, token)["items"]}
+
+    def test_move_reassigns_membership(self, user_client):
+        """Move A→B: the item leaves A, appears in B, and lands in neither two
+        albums nor none — the whole point of #43."""
+        token = user_client.unlock_secure_gallery(USER_PASSWORD)["gallery_token"]
+        g_a = user_client.create_secure_gallery("Move Source")["gallery_id"]
+        g_b = user_client.create_secure_gallery("Move Target")["gallery_id"]
+
+        blob = user_client.upload_blob("photo", generate_random_bytes(512))
+        item_id = user_client.add_secure_gallery_item(g_a, blob["blob_id"], token)["item_id"]
+
+        # Precondition: in A, not in B.
+        assert item_id in self._item_ids(user_client, g_a, token)
+        assert item_id not in self._item_ids(user_client, g_b, token)
+
+        r = user_client.move_secure_gallery_item(g_a, item_id, g_b)
+        assert r.status_code == 204, f"move should 204, got {r.status_code}: {r.text}"
+
+        # Postcondition: gone from A, present in B — exactly once, exactly one album.
+        a_items = self._item_ids(user_client, g_a, token)
+        b_items = self._item_ids(user_client, g_b, token)
+        assert item_id not in a_items, "item still in source album after move"
+        assert item_id in b_items, "item missing from target album after move"
+        assert not (a_items & b_items), "item ended up in BOTH albums"
+
+    def test_move_is_scoped_to_named_source(self, user_client):
+        """Naming the wrong source gallery must NOT move the item (the UPDATE is
+        scoped to source gallery_id) — otherwise a guessed item id from another
+        album could be shuffled."""
+        token = user_client.unlock_secure_gallery(USER_PASSWORD)["gallery_token"]
+        g_a = user_client.create_secure_gallery("Scoped A")["gallery_id"]
+        g_b = user_client.create_secure_gallery("Scoped B")["gallery_id"]
+        g_c = user_client.create_secure_gallery("Scoped C")["gallery_id"]
+
+        blob = user_client.upload_blob("photo", generate_random_bytes(512))
+        item_id = user_client.add_secure_gallery_item(g_a, blob["blob_id"], token)["item_id"]
+
+        # Claim the item lives in C (it doesn't) and try to move it to B.
+        r = user_client.move_secure_gallery_item(g_c, item_id, g_b)
+        assert r.status_code == 404, f"wrong-source move should 404, got {r.status_code}"
+        # The item is untouched — still in A.
+        assert item_id in self._item_ids(user_client, g_a, token)
+
+    def test_move_to_unowned_target_rejected(self, user_client, second_user_client):
+        """Moving into a gallery owned by another user is an IDOR — rejected, and
+        the item stays put."""
+        token = user_client.unlock_secure_gallery(USER_PASSWORD)["gallery_token"]
+        g_a = user_client.create_secure_gallery("Owner A")["gallery_id"]
+        other = second_user_client.create_secure_gallery("Stranger's Album")["gallery_id"]
+
+        blob = user_client.upload_blob("photo", generate_random_bytes(512))
+        item_id = user_client.add_secure_gallery_item(g_a, blob["blob_id"], token)["item_id"]
+
+        r = user_client.move_secure_gallery_item(g_a, item_id, other)
+        assert r.status_code in (400, 404), (
+            f"move to another user's album should be rejected, got {r.status_code}"
+        )
+        assert item_id in self._item_ids(user_client, g_a, token), "item moved despite IDOR guard"
+
+    def test_move_keeps_original_hidden_from_main_gallery(self, user_client):
+        """A moved photo's original must stay hidden from the regular gallery —
+        moving between secure albums never un-hides it."""
+        token = user_client.unlock_secure_gallery(USER_PASSWORD)["gallery_token"]
+        g_a = user_client.create_secure_gallery("Hide A")["gallery_id"]
+        g_b = user_client.create_secure_gallery("Hide B")["gallery_id"]
+
+        blob = user_client.upload_blob("photo", generate_random_bytes(512))
+        bid = blob["blob_id"]
+        item_id = user_client.add_secure_gallery_item(g_a, bid, token)["item_id"]
+
+        assert bid not in _blob_ids(user_client), "original should be hidden after secure add"
+
+        r = user_client.move_secure_gallery_item(g_a, item_id, g_b)
+        assert r.status_code == 204
+
+        after = _blob_ids(user_client)
+        assert_no_duplicates(after, "blobs after cross-album move")
+        assert bid not in after, "original leaked back into the main gallery after a move"
+
+
 class TestSecureDuplicateGuard:
     """Phase 0: the one-secure-album invariant is enforced SERVER-SIDE.  A photo
     may live in at most one secure gallery — a second add (same album or a

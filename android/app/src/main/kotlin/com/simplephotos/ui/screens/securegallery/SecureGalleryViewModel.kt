@@ -443,6 +443,55 @@ class SecureGalleryViewModel @Inject constructor(
         }
     }
 
+    // ── Push direction (#43): move items OUT of the open album ───────────────
+    // Real albums the current selection can be pushed INTO. Excludes the open
+    // album; in a smart view (`selectedGallery` null) every album is a target,
+    // and each item still routes from its own owning gallery.
+    val moveTargets: List<SecureGallery>
+        get() = SecureMovePlan.moveTargets(galleries, selectedGallery?.id)
+
+    /**
+     * Move the given selected items (by id) into [targetGalleryId] (#43). Expands
+     * bursts so a stack moves as one, routes each item from its own owning album,
+     * skips items already in the target, and isolates each move so one failure
+     * never aborts the rest (mirrors the pull picker and secure-add).
+     */
+    fun pushItemsTo(itemIds: List<String>, targetGalleryId: String) {
+        if (itemIds.isEmpty()) return
+        val expanded = SecureMovePlan.expandBurstSelection(items, itemIds.toSet())
+        val moves = SecureMovePlan.planMovesToTarget(items, expanded, targetGalleryId)
+        if (moves.isEmpty()) {
+            Log.i(TAG, "pushItemsTo: nothing to move (all already in $targetGalleryId)")
+            return
+        }
+        viewModelScope.launch {
+            val outcomes = withContext(Dispatchers.IO) {
+                coroutineScope {
+                    moves.map { mv ->
+                        async {
+                            try {
+                                secureGalleryRepository.moveItem(mv.sourceGalleryId, mv.itemId, targetGalleryId)
+                                true
+                            } catch (e: Exception) {
+                                Log.e(TAG, "  push move failed for item ${mv.itemId}", e)
+                                false
+                            }
+                        }
+                    }.awaitAll()
+                }
+            }
+            val moved = outcomes.count { it }
+            val failed = outcomes.size - moved
+            Log.i(TAG, "Pushed $moved/${moves.size} items into $targetGalleryId ($failed failed)")
+            if (failed > 0) {
+                error = "$failed item${if (failed != 1) "s" else ""} couldn't be moved"
+            }
+            loadAllItems()
+            loadGalleries()
+            selectedGallery?.let { loadItems(it.id) }
+        }
+    }
+
     /**
      * Persist (or clear, with null) a secure item's crop/edit metadata (#31),
      * then refresh so the tile + viewer re-render with the applied crop.
