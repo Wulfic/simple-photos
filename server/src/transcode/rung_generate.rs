@@ -155,6 +155,12 @@ pub async fn run_sweep(
 ) -> SweepOutcome {
     let mut outcome = SweepOutcome::default();
 
+    // Reclaim the bytes of any renditions deleted since the last sweep, first
+    // and unconditionally: it is cheap, independent of whether there is any rung
+    // work, and a deleted 4K source's rendition is hundreds of megabytes leaking
+    // until this runs. Its own summary is logged inside; it never errors out.
+    crate::transcode::orphan_sweep::sweep_orphaned_rendition_blobs(pool, storage_root).await;
+
     // Resolution rungs first: these deliver a quality a client is actively
     // waiting on. The candidate set is deliberately narrow (oversized + unknown
     // geometry).
