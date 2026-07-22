@@ -293,6 +293,26 @@ pub async fn upload(
     ))
 }
 
+/// Excludes blobs that back a secure-gallery item (directly, via the photo's
+/// encrypted/thumb blob, or via an `encrypted_gallery_items` locator). No bind
+/// parameters — every subquery is self-contained — so it can be concatenated
+/// into any of the `list_blobs_page` variants without shifting the bind order.
+const BLOB_SECURE_EXCLUSION: &str = " \
+     AND id NOT IN (SELECT blob_id FROM encrypted_gallery_items) \
+     AND id NOT IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL) \
+     AND id NOT IN ( \
+         SELECT p.encrypted_blob_id FROM photos p \
+         WHERE p.encrypted_blob_id IS NOT NULL \
+         AND (p.id IN (SELECT blob_id FROM encrypted_gallery_items) \
+              OR p.id IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL))) \
+     AND id NOT IN ( \
+         SELECT p.encrypted_thumb_blob_id FROM photos p \
+         WHERE p.encrypted_thumb_blob_id IS NOT NULL \
+         AND (p.id IN (SELECT blob_id FROM encrypted_gallery_items) \
+              OR p.id IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL))) \
+     AND id NOT IN (SELECT encrypted_blob_id FROM encrypted_gallery_items WHERE encrypted_blob_id IS NOT NULL) \
+     AND id NOT IN (SELECT encrypted_thumb_blob_id FROM encrypted_gallery_items WHERE encrypted_thumb_blob_id IS NOT NULL)";
+
 /// GET /api/blobs — list blobs for the authenticated user with cursor-based pagination.
 /// Supports filtering by `blob_type` and forward-only cursor via `after`.
 pub async fn list(
@@ -302,8 +322,7 @@ pub async fn list(
 ) -> Result<Json<BlobListResponse>, AppError> {
     let limit = params.limit.unwrap_or(50).min(200);
 
-    let blobs = if let Some(ref blob_type) = params.blob_type {
-        // Validate blob_type query parameter
+    if let Some(ref blob_type) = params.blob_type {
         if !VALID_BLOB_TYPES.contains(&blob_type.as_str()) {
             return Err(AppError::BadRequest(format!(
                 "Invalid blob_type filter '{}'. Valid: {}",
@@ -311,125 +330,84 @@ pub async fn list(
                 VALID_BLOB_TYPES.join(", ")
             )));
         }
+    }
 
-        if let Some(ref after) = params.after {
-            sqlx::query_as::<_, BlobRecord>(
-                "SELECT id, blob_type, size_bytes, client_hash, upload_time, content_hash FROM blobs \
-                 WHERE user_id = ? AND blob_type = ? AND upload_time > ? \
-                 AND id NOT IN (SELECT blob_id FROM encrypted_gallery_items) \
-                 AND id NOT IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL) \
-                 AND id NOT IN ( \
-                     SELECT p.encrypted_blob_id FROM photos p \
-                     WHERE p.encrypted_blob_id IS NOT NULL \
-                     AND (p.id IN (SELECT blob_id FROM encrypted_gallery_items) \
-                          OR p.id IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL))) \
-                 AND id NOT IN ( \
-                     SELECT p.encrypted_thumb_blob_id FROM photos p \
-                     WHERE p.encrypted_thumb_blob_id IS NOT NULL \
-                     AND (p.id IN (SELECT blob_id FROM encrypted_gallery_items) \
-                          OR p.id IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL))) \
-                 AND id NOT IN (SELECT encrypted_blob_id FROM encrypted_gallery_items WHERE encrypted_blob_id IS NOT NULL) \
-                 AND id NOT IN (SELECT encrypted_thumb_blob_id FROM encrypted_gallery_items WHERE encrypted_thumb_blob_id IS NOT NULL) \
-                 ORDER BY upload_time ASC LIMIT ?",
-            )
-            .bind(&auth.user_id)
-            .bind(blob_type)
-            .bind(after)
-            .bind(limit + 1)
-            .fetch_all(&state.read_pool)
-            .await?
-        } else {
-            sqlx::query_as::<_, BlobRecord>(
-                "SELECT id, blob_type, size_bytes, client_hash, upload_time, content_hash FROM blobs \
-                 WHERE user_id = ? AND blob_type = ? \
-                 AND id NOT IN (SELECT blob_id FROM encrypted_gallery_items) \
-                 AND id NOT IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL) \
-                 AND id NOT IN ( \
-                     SELECT p.encrypted_blob_id FROM photos p \
-                     WHERE p.encrypted_blob_id IS NOT NULL \
-                     AND (p.id IN (SELECT blob_id FROM encrypted_gallery_items) \
-                          OR p.id IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL))) \
-                 AND id NOT IN ( \
-                     SELECT p.encrypted_thumb_blob_id FROM photos p \
-                     WHERE p.encrypted_thumb_blob_id IS NOT NULL \
-                     AND (p.id IN (SELECT blob_id FROM encrypted_gallery_items) \
-                          OR p.id IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL))) \
-                 AND id NOT IN (SELECT encrypted_blob_id FROM encrypted_gallery_items WHERE encrypted_blob_id IS NOT NULL) \
-                 AND id NOT IN (SELECT encrypted_thumb_blob_id FROM encrypted_gallery_items WHERE encrypted_thumb_blob_id IS NOT NULL) \
-                 ORDER BY upload_time ASC LIMIT ?",
-            )
-            .bind(&auth.user_id)
-            .bind(blob_type)
-            .bind(limit + 1)
-            .fetch_all(&state.read_pool)
-            .await?
-        }
-    } else if let Some(ref after) = params.after {
-        sqlx::query_as::<_, BlobRecord>(
-            "SELECT id, blob_type, size_bytes, client_hash, upload_time, content_hash FROM blobs \
-             WHERE user_id = ? AND upload_time > ? \
-             AND id NOT IN (SELECT blob_id FROM encrypted_gallery_items) \
-             AND id NOT IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL) \
-             AND id NOT IN ( \
-                 SELECT p.encrypted_blob_id FROM photos p \
-                 WHERE p.encrypted_blob_id IS NOT NULL \
-                 AND (p.id IN (SELECT blob_id FROM encrypted_gallery_items) \
-                      OR p.id IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL))) \
-             AND id NOT IN ( \
-                 SELECT p.encrypted_thumb_blob_id FROM photos p \
-                 WHERE p.encrypted_thumb_blob_id IS NOT NULL \
-                 AND (p.id IN (SELECT blob_id FROM encrypted_gallery_items) \
-                      OR p.id IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL))) \
-             AND id NOT IN (SELECT encrypted_blob_id FROM encrypted_gallery_items WHERE encrypted_blob_id IS NOT NULL) \
-             AND id NOT IN (SELECT encrypted_thumb_blob_id FROM encrypted_gallery_items WHERE encrypted_thumb_blob_id IS NOT NULL) \
-             ORDER BY upload_time ASC LIMIT ?",
+    Ok(Json(
+        list_blobs_page(
+            &state.read_pool,
+            &auth.user_id,
+            params.blob_type.as_deref(),
+            params.after.as_deref(),
+            limit,
         )
-        .bind(&auth.user_id)
-        .bind(after)
-        .bind(limit + 1)
-        .fetch_all(&state.read_pool)
-        .await?
-    } else {
-        sqlx::query_as::<_, BlobRecord>(
-            "SELECT id, blob_type, size_bytes, client_hash, upload_time, content_hash FROM blobs \
-             WHERE user_id = ? \
-             AND id NOT IN (SELECT blob_id FROM encrypted_gallery_items) \
-             AND id NOT IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL) \
-             AND id NOT IN ( \
-                 SELECT p.encrypted_blob_id FROM photos p \
-                 WHERE p.encrypted_blob_id IS NOT NULL \
-                 AND (p.id IN (SELECT blob_id FROM encrypted_gallery_items) \
-                      OR p.id IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL))) \
-             AND id NOT IN ( \
-                 SELECT p.encrypted_thumb_blob_id FROM photos p \
-                 WHERE p.encrypted_thumb_blob_id IS NOT NULL \
-                 AND (p.id IN (SELECT blob_id FROM encrypted_gallery_items) \
-                      OR p.id IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL))) \
-             AND id NOT IN (SELECT encrypted_blob_id FROM encrypted_gallery_items WHERE encrypted_blob_id IS NOT NULL) \
-             AND id NOT IN (SELECT encrypted_thumb_blob_id FROM encrypted_gallery_items WHERE encrypted_thumb_blob_id IS NOT NULL) \
-             ORDER BY upload_time ASC LIMIT ?",
-        )
-        .bind(&auth.user_id)
-        .bind(limit + 1)
-        .fetch_all(&state.read_pool)
-        .await?
-    };
+        .await?,
+    ))
+}
+
+/// Split an `"<upload_time>|<id>"` blob cursor. A legacy bare-timestamp cursor
+/// maps to an empty id; because the boundary compares `id > cursor_id` and every
+/// real id sorts after the empty string, that re-serves the whole timestamp
+/// group — a duplicate, never a skip. Neither an ISO timestamp nor a UUID
+/// contains `|`, so splitting on the last `|` is unambiguous.
+fn parse_blob_cursor(after: &str) -> (String, String) {
+    match after.rfind('|') {
+        Some(idx) => (after[..idx].to_string(), after[idx + 1..].to_string()),
+        None => (after.to_string(), String::new()),
+    }
+}
+
+/// Fetch one keyset page of the blob listing.
+///
+/// Split out of the handler so the pagination contract is unit-testable without
+/// an HTTP stack. The cursor is composite — `"<upload_time>|<id>"` — because
+/// `upload_time` is **not unique**: batch encryption stamps a run of blobs with
+/// the same `upload_time`, so a bare-timestamp cursor with a strict
+/// `upload_time > ?` predicate drops every member of such a run after the first
+/// whenever a page boundary falls inside it. Same off-by-one as
+/// `gallery::sync::fetch_page`, in a paginator that never had an `id` tiebreak.
+pub async fn list_blobs_page(
+    pool: &sqlx::SqlitePool,
+    user_id: &str,
+    blob_type: Option<&str>,
+    after: Option<&str>,
+    limit: i64,
+) -> Result<BlobListResponse, AppError> {
+    let mut sql = String::from(
+        "SELECT id, blob_type, size_bytes, client_hash, upload_time, content_hash FROM blobs \
+         WHERE user_id = ?",
+    );
+    if blob_type.is_some() {
+        sql.push_str(" AND blob_type = ?");
+    }
+    if after.is_some() {
+        sql.push_str(" AND (upload_time > ? OR (upload_time = ? AND id > ?))");
+    }
+    sql.push_str(BLOB_SECURE_EXCLUSION);
+    sql.push_str(" ORDER BY upload_time ASC, id ASC LIMIT ?");
+
+    let mut q = sqlx::query_as::<_, BlobRecord>(&sql).bind(user_id.to_string());
+    if let Some(bt) = blob_type {
+        q = q.bind(bt.to_string());
+    }
+    if let Some(after) = after {
+        let (ts, id) = parse_blob_cursor(after);
+        q = q.bind(ts.clone()).bind(ts).bind(id);
+    }
+    let mut blobs = q.bind(limit + 1).fetch_all(pool).await?;
 
     // Truncate before deriving the cursor: the extra row exists only to detect
-    // a next page, and the next-page predicate (`upload_time > ?`) is strict, so
-    // a cursor built from the peeked row skips it permanently. See
-    // `gallery::sync::fetch_page` for the same fix and its regression test.
+    // a next page, and the next-page predicate is strict, so a cursor built from
+    // the peeked row skips it permanently. See `gallery::sync::fetch_page`.
     let has_more = blobs.len() as i64 > limit;
-    let mut blobs = blobs;
     blobs.truncate(limit as usize);
 
     let next_cursor = if has_more {
-        blobs.last().map(|b| b.upload_time.clone())
+        blobs.last().map(|b| format!("{}|{}", b.upload_time, b.id))
     } else {
         None
     };
 
-    Ok(Json(BlobListResponse { blobs, next_cursor }))
+    Ok(BlobListResponse { blobs, next_cursor })
 }
 
 /// DELETE /api/blobs/:id — delete a blob and its on-disk file. Returns 204 on success.
@@ -545,5 +523,135 @@ mod tests {
     fn blob_format_rejects_empty_value() {
         let err = parse_blob_format(&headers_with_format("")).unwrap_err();
         assert!(matches!(err, AppError::BadRequest(_)));
+    }
+
+    // ── Keyset pagination (composite upload_time|id cursor) ────────────────
+
+    use std::collections::HashSet;
+    use std::str::FromStr;
+
+    async fn test_pool() -> sqlx::SqlitePool {
+        let opts = sqlx::sqlite::SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .foreign_keys(false);
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        pool
+    }
+
+    async fn insert_blob(pool: &sqlx::SqlitePool, id: &str, user: &str, upload_time: &str) {
+        sqlx::query(
+            "INSERT INTO blobs (id, user_id, blob_type, size_bytes, upload_time, storage_path) \
+             VALUES (?, ?, 'photo', 0, ?, ?)",
+        )
+        .bind(id)
+        .bind(user)
+        .bind(upload_time)
+        .bind(format!("blobs/{id}"))
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn paginate_all(pool: &sqlx::SqlitePool, user: &str, limit: i64) -> Vec<String> {
+        let mut ids = Vec::new();
+        let mut cursor: Option<String> = None;
+        for _ in 0..100 {
+            let page = list_blobs_page(pool, user, None, cursor.as_deref(), limit)
+                .await
+                .unwrap();
+            ids.extend(page.blobs.iter().map(|b| b.id.clone()));
+            match page.next_cursor {
+                Some(c) => cursor = Some(c),
+                None => return ids,
+            }
+        }
+        panic!("pagination did not terminate — cursor is not advancing");
+    }
+
+    fn assert_round_trip(got: &[String], seeded: &[String]) {
+        let got_set: HashSet<&String> = got.iter().collect();
+        let want_set: HashSet<&String> = seeded.iter().collect();
+        let missing: Vec<_> = want_set.difference(&got_set).collect();
+        assert!(missing.is_empty(), "blobs never returned by ANY page: {missing:?}");
+        assert_eq!(got.len(), seeded.len(), "expected each blob exactly once");
+        assert_eq!(got_set, want_set);
+    }
+
+    #[test]
+    fn parses_legacy_and_composite_blob_cursors() {
+        assert_eq!(
+            parse_blob_cursor("2026-01-01T00:00:00Z|b7"),
+            ("2026-01-01T00:00:00Z".to_string(), "b7".to_string())
+        );
+        assert_eq!(
+            parse_blob_cursor("2026-01-01T00:00:00Z"),
+            ("2026-01-01T00:00:00Z".to_string(), String::new())
+        );
+    }
+
+    #[tokio::test]
+    async fn distinct_upload_times_round_trip() {
+        let pool = test_pool().await;
+        let mut seeded = Vec::new();
+        for i in 0..7 {
+            let id = format!("d{i:02}");
+            insert_blob(&pool, &id, "u1", &format!("2026-01-{:02}T00:00:00Z", i + 1)).await;
+            seeded.push(id);
+        }
+        for limit in [1, 2, 3, 7] {
+            assert_round_trip(&paginate_all(&pool, "u1", limit).await, &seeded);
+        }
+    }
+
+    /// The bug: batch encryption stamps a run of blobs with one `upload_time`.
+    /// A bare-timestamp cursor with a strict `upload_time > ?` drops every blob
+    /// in the run after the first at a page boundary. Verified RED against the
+    /// old cursor: `limit=1` returned a single blob.
+    #[tokio::test]
+    async fn blobs_sharing_an_upload_time_survive_a_page_boundary() {
+        let pool = test_pool().await;
+        let mut seeded = Vec::new();
+        for i in 0..5 {
+            let id = format!("b{i:02}");
+            insert_blob(&pool, &id, "u1", "2026-02-01T00:00:00Z").await;
+            seeded.push(id);
+        }
+        for limit in [1, 2, 3, 4, 5] {
+            assert_round_trip(&paginate_all(&pool, "u1", limit).await, &seeded);
+        }
+    }
+
+    #[tokio::test]
+    async fn blob_type_filter_still_paginates_completely() {
+        let pool = test_pool().await;
+        // Two 'photo' blobs and one 'thumbnail', all sharing one upload_time.
+        insert_blob(&pool, "p1", "u1", "2026-03-01T00:00:00Z").await;
+        insert_blob(&pool, "p2", "u1", "2026-03-01T00:00:00Z").await;
+        sqlx::query(
+            "INSERT INTO blobs (id, user_id, blob_type, size_bytes, upload_time, storage_path) \
+             VALUES ('th1', 'u1', 'thumbnail', 0, '2026-03-01T00:00:00Z', 'blobs/th1')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let mut got = Vec::new();
+        let mut cursor: Option<String> = None;
+        for _ in 0..100 {
+            let page = list_blobs_page(&pool, "u1", Some("photo"), cursor.as_deref(), 1)
+                .await
+                .unwrap();
+            got.extend(page.blobs.iter().map(|b| b.id.clone()));
+            match page.next_cursor {
+                Some(c) => cursor = Some(c),
+                None => break,
+            }
+        }
+        assert_round_trip(&got, &["p1".to_string(), "p2".to_string()]);
     }
 }
