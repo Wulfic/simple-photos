@@ -477,6 +477,53 @@ Same class as the GIF misdetection fixed by magic-byte sniffing (memory `c1-gif-
 - [x] **`VIDEO0063.mp4` has no decodable video stream at all.** — DONE `6663a4c`. It was **not just unfixed — it thrashed**: never registered, so `existing_set` could not cover it, so the conversion walk re-probed it every pass forever. `opaque_container_needs_conversion` now returns a 3-state `OpaqueVerdict`; the `NoVideoStream` arm records a terminal `scan_skipped_paths` row (reason `unplayable`, terminal via `skip_verdict`'s conservative default, un-retired if the file changes on disk) + a `MediaConvertFailure` audit so the unregistered file is visible in Server Logs.
 - [ ] `needs_web_preview` still has the same extension-only blind spot; the probe is not wired into it yet. **Deliberately deferred from `6663a4c`** — wiring the probe in turns a pure `fn(&str) -> Option<&str>` into an async, path-taking probe touching every caller in `server_migrate_encrypt.rs`, a separable refactor with its own risk. The picker/serving path already covers registered videos via the backfill; this only matters for the on-the-fly web-preview path.
 
+**#46 re-thrash FIXED -- `602264b` (2026-07-22).** Live verification on the
+un-wiped CT132 exposed a defect the plan never anticipated: **neither ladder
+candidate query excluded `encryption_deferred = 1`.** On the live library ALL
+2,500 unencrypted rows are parked (3 failed encryptions each; drainable backlog
+= 0), and 16 of them are videos `find_rung_candidates` re-selected on *every*
+hourly sweep -- `examined=16 produced=0 skipped=16`, each deferred "awaiting
+encryption" forever. It never settled to zero (the memory's own success
+criterion). Added `AND p.encryption_deferred = 0` to `find_rung_candidates` AND
+`find_codec_backfill_candidates`, matching the parking already respected by
+`server_migrate` and `status.rs` (backed by migration 024's
+`(encrypted_blob_id, encryption_deferred)` index). Test
+`parked_videos_are_never_ladder_candidates`, RED first; 432 green. **This bug is
+in dev generally, not just the old build -- it would have kneecapped #46 the
+moment it deployed.**
+
+- [ ] **DEPLOY-STATE TRAP (2026-07-22): the #46 backfill was NEVER actually
+  deployed when we set out to "test backfilling un-wiped".** CT132 was found
+  running commit `214ced8` (image built 21:51 UTC 2026-07-21); `6663a4c` (#46
+  backfill) landed ~3h later, and `d1f439a` (#43) too -- the box was 4 commits
+  behind dev. The symptom that caught it: the live `[LADDER]` log still used the
+  OLD `candidates=N` format with no `backfill_examined`/`backfill_produced`
+  fields that `6663a4c` added. **Lesson: confirm the deployed commit (box `git
+  HEAD` + log schema) before trusting a "we deployed it" -- container uptime
+  proves nothing about which code is in it.** Redeploy no-wipe to current dev
+  (now includes `602264b`), then re-verify the backfill actually drains.
+
+### B3a -- Parked (permanently unencrypted) photos -- NEW, found 2026-07-22
+
+**2,500 of 15,014 photos (~17% of the live library) are `encryption_deferred = 1`
+with `encryption_attempts = 3`** -- parked after three hard encryption failures
+(historically the pre-chunked OOM, ~5x RAM). They never encrypt on their own, so
+they sit as **plaintext originals at rest** indefinitely: a confidentiality gap,
+not a cosmetic one. Found while verifying #46 (the parked set is exactly what was
+re-thrashing the ladder).
+
+- [ ] Confirm the failure cause per row. Migration 024's chunked `SPCHNKB2` path
+  may now encrypt cleanly the files that OOM'd the old whole-file path.
+- [ ] One-shot un-park: reset `encryption_deferred = 0` (and `encryption_attempts
+  = 0`) for these rows and let `server_migrate` retry them through the chunked
+  path. The existing 3-attempt cap already re-parks a genuinely un-encryptable
+  file, so this cannot reintroduce the infinite-retry -> re-OOM loop.
+- [ ] Surface the parked count in Server Logs / the encryption banner. `status.rs`
+  deliberately hides parked rows today so the banner does not wedge -- that hiding
+  is precisely why 17% of the library sat unencrypted unnoticed.
+- [ ] Verify on the live box before/after: the parked count must fall to ~0 (minus
+  any truly corrupt originals, which must re-park terminally, not loop).
+
 ### B4 â€” #49 Resolution ladder + player quality picker (High, largest item in this file)
 
 **Reported:** >1080p sources should also produce a 1080p rendition; gear icon in the player for resolution choice; default highest on Wi-Fi, lower on cellular; Android needs a cellular data-saver toggle.
