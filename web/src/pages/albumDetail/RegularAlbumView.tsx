@@ -11,6 +11,8 @@ import { api } from "../../api/client";
 import { db, type CachedAlbum } from "../../db";
 import { saveAlbumManifest } from "../../utils/albumManifest";
 import { useAlbumPhotos } from "../../hooks/useAlbumPhotos";
+import { useAlbumSort } from "../../hooks/useAlbumSort";
+import AlbumSortControl from "../../components/AlbumSortControl";
 import AppHeader from "../../components/AppHeader";
 import AppIcon from "../../components/AppIcon";
 import DetailHeader from "../../components/DetailHeader";
@@ -86,12 +88,13 @@ export default function RegularAlbumView({ albumId }: { albumId: string | undefi
   // come from one source, so the header badge can no longer diverge from the
   // rendered grid (#12 missing counts, #20 count flicker). `album` is the
   // manifest used by the CRUD handlers below.
+  const { sort, displaySort, selectField } = useAlbumSort(albumId);
   const {
     photos: albumPhotos,
     album,
     allPhotos,
     secureBlobIds,
-  } = useAlbumPhotos(albumId);
+  } = useAlbumPhotos(albumId, sort);
 
   // Preserve scroll position when opening a photo and returning to the album.
   const { pathname } = useLocation();
@@ -369,8 +372,13 @@ export default function RegularAlbumView({ albumId }: { albumId: string | undefi
           backTo="/albums"
           backTitle="Back to Albums"
           title={album.name}
-          actions={!isBackupServer ? (
+          actions={
             <>
+              {/* Sort is a read-only view preference, so it shows even on a
+                  backup server where the CRUD actions are hidden. */}
+              <AlbumSortControl sort={displaySort} onSelectField={selectField} />
+              {!isBackupServer && (
+                <>
               <button
                 onClick={() => setShowAddPhotos(!showAddPhotos)}
                 title={showAddPhotos ? "Done adding" : "Add photos"}
@@ -452,8 +460,10 @@ export default function RegularAlbumView({ albumId }: { albumId: string | undefi
                   </div>
                 )}
               </div>
+                </>
+              )}
             </>
-          ) : undefined}
+          }
         >
           <SlideshowTriggers slideshow={slideshow} />
         </DetailHeader>

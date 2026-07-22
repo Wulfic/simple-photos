@@ -24,6 +24,7 @@ import { db, type CachedPhoto, type CachedAlbum } from "../db";
 import { useSecureBlobFilter } from "../gallery/hooks/useSecureBlobFilter";
 import { SMART_ALBUM_DEFS, type SmartAlbumDef } from "../gallery/smartAlbums";
 import { collapseBursts, type PhotoWithBurstCount } from "../utils/burstCollapse";
+import { sortAlbumPhotos, type AlbumSort } from "../gallery/albumSort";
 
 export type AlbumKind = "smart" | "regular" | "unknown";
 
@@ -59,6 +60,13 @@ export interface UseAlbumPhotosResult {
  * Note: bursts are collapsed only for smart albums. Regular albums keep every
  * frame a user explicitly added, so removal/secure-add over the rendered list
  * stays faithful to the manifest.
+ *
+ * `sort` (#52) is applied last of all — after the smart-album addedAt selection,
+ * after burst collapse, after the regular-album intersection — so a burst is
+ * ordered by its representative frame and every album kind inherits the same
+ * comparator. It is *optional*: when absent, the album keeps its intrinsic order
+ * (which is what preserves "Recently Added"'s add-order), so a user who has made
+ * no choice sees exactly the pre-#52 ordering.
  */
 export function resolveAlbumPhotos(params: {
   kind: AlbumKind;
@@ -66,8 +74,12 @@ export function resolveAlbumPhotos(params: {
   secureBlobIds: Set<string>;
   smartDef?: SmartAlbumDef;
   album?: CachedAlbum;
+  sort?: AlbumSort;
 }): PhotoWithBurstCount[] {
-  const { kind, allPhotos, secureBlobIds, smartDef, album } = params;
+  const { kind, allPhotos, secureBlobIds, smartDef, album, sort } = params;
+
+  const withSort = (list: PhotoWithBurstCount[]): PhotoWithBurstCount[] =>
+    sort ? sortAlbumPhotos(list, sort) : list;
 
   if (kind === "smart" && smartDef) {
     let next = allPhotos
@@ -80,15 +92,20 @@ export function resolveAlbumPhotos(params: {
     }
     let collapsed = collapseBursts(next);
     if (smartDef.limit !== undefined) {
+      // Cap FIRST, then sort: the limit selects "the N most recently added",
+      // and the user's chosen order rearranges that set — it must not change
+      // which N are in it.
       collapsed = collapsed.slice(0, smartDef.limit);
     }
-    return collapsed;
+    return withSort(collapsed);
   }
 
   if (kind === "regular" && album) {
     const members = new Set(album.photoBlobIds);
-    return allPhotos.filter(
-      (p) => members.has(p.blobId) && !secureBlobIds.has(p.blobId)
+    return withSort(
+      allPhotos.filter(
+        (p) => members.has(p.blobId) && !secureBlobIds.has(p.blobId)
+      )
     );
   }
 
@@ -148,7 +165,9 @@ export async function reconcileAlbumCount(
 }
 
 export function useAlbumPhotos(
-  albumId: string | undefined
+  albumId: string | undefined,
+  /** #52: user-selected ordering. `null`/`undefined` keeps the intrinsic order. */
+  sort?: AlbumSort | null
 ): UseAlbumPhotosResult {
   const { secureBlobIds, refreshSecureBlobIds, startPolling } =
     useSecureBlobFilter();
@@ -195,14 +214,17 @@ export function useAlbumPhotos(
       secureBlobIds,
       smartDef,
       album: album ?? undefined,
+      sort: sort ?? undefined,
     });
 
+    // Key on order, not just membership: a re-sort changes no ids but must still
+    // produce a new list so the grid re-renders in the chosen order.
     const key = next.map((p) => p.blobId).join(",");
     if (key === prevKeyRef.current) return prevListRef.current;
     prevKeyRef.current = key;
     prevListRef.current = next;
     return next;
-  }, [allPhotos, album, kind, smartDef, secureBlobIds]);
+  }, [allPhotos, album, kind, smartDef, secureBlobIds, sort]);
 
   // Feed the resolved count back into the cache: this hook *is* the album's
   // authoritative count, so opening an album is what teaches its tile the right

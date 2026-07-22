@@ -142,6 +142,78 @@ describe("resolveAlbumPhotos — smart albums", () => {
   });
 });
 
+describe("resolveAlbumPhotos — sort (#52)", () => {
+  it("leaves the intrinsic order untouched when no sort is given", () => {
+    // Mirror is takenAt-desc; a regular album preserves that order.
+    const mirror = [
+      photo("c", { takenAt: 300, filename: "c.jpg" }),
+      photo("a", { takenAt: 100, filename: "a.jpg" }),
+      photo("b", { takenAt: 200, filename: "b.jpg" }),
+    ];
+    const out = resolveAlbumPhotos({
+      kind: "regular",
+      allPhotos: mirror,
+      secureBlobIds: new Set(),
+      album: album(["a", "b", "c"]),
+    });
+    expect(out.map((p) => p.blobId)).toEqual(["c", "a", "b"]);
+  });
+
+  it("applies a name-asc sort to a regular album (numeric-aware)", () => {
+    const mirror = [
+      photo("x", { filename: "IMG_10.jpg" }),
+      photo("y", { filename: "IMG_2.jpg" }),
+      photo("z", { filename: "IMG_1.jpg" }),
+    ];
+    const out = resolveAlbumPhotos({
+      kind: "regular",
+      allPhotos: mirror,
+      secureBlobIds: new Set(),
+      album: album(["x", "y", "z"]),
+      sort: { field: "name", dir: "asc" },
+    });
+    expect(out.map((p) => p.blobId)).toEqual(["z", "y", "x"]);
+  });
+
+  it("sorts a smart album AFTER burst collapse, by the representative frame", () => {
+    const withBurst = [
+      photo("cover", { mediaType: "video", burstId: "grp", takenAt: 300, filename: "z.mp4" }),
+      photo("frame2", { mediaType: "video", burstId: "grp", takenAt: 350, filename: "a.mp4" }),
+      photo("solo", { mediaType: "video", takenAt: 100, filename: "m.mp4" }),
+    ];
+    const out = resolveAlbumPhotos({
+      kind: "smart",
+      allPhotos: withBurst,
+      secureBlobIds: new Set(),
+      smartDef: SMART_ALBUM_DEFS["smart-videos"],
+      sort: { field: "name", dir: "asc" },
+    });
+    // The burst collapses to its representative ("cover", filename z.mp4). Name
+    // asc then orders the two tiles by the representative's name: m < z.
+    expect(out.map((p) => p.blobId)).toEqual(["solo", "cover"]);
+    expect(out.find((p) => p.blobId === "cover")?._burstCount).toBe(2);
+  });
+
+  it("re-sorts the recently-added set without changing which N are in it", () => {
+    // 150 photos: addedAt selects the newest 100 (r50..r149); the date-asc sort
+    // must reorder THOSE, not pull older ones back in.
+    const many: CachedPhoto[] = Array.from({ length: 150 }, (_, i) =>
+      photo(`r${i}`, { addedAt: i, takenAt: i })
+    );
+    const out = resolveAlbumPhotos({
+      kind: "smart",
+      allPhotos: many,
+      secureBlobIds: new Set(),
+      smartDef: SMART_ALBUM_DEFS["smart-recent"],
+      sort: { field: "date", dir: "asc" },
+    });
+    expect(out.length).toBe(100);
+    // Oldest-of-the-recent first, and the set is still r50..r149.
+    expect(out[0].blobId).toBe("r50");
+    expect(out[99].blobId).toBe("r149");
+  });
+});
+
 describe("countRegularAlbum — album-list badge source (#12)", () => {
   const mirror = [photo("a"), photo("b"), photo("secret"), photo("c")];
 

@@ -15,11 +15,14 @@ import { usePhotoSlideshow } from "../../hooks/useSlideshow";
 import SlideshowHost from "../../components/viewer/SlideshowHost";
 import SlideshowTriggers from "../../components/viewer/SlideshowTriggers";
 import { useAlbumPhotos } from "../../hooks/useAlbumPhotos";
+import { useAlbumSort } from "../../hooks/useAlbumSort";
+import AlbumSortControl from "../../components/AlbumSortControl";
 import { SMART_ALBUM_DEFS } from "../../gallery/smartAlbums";
 
 export default function SmartAlbumView({ albumId }: { albumId: string }) {
   const def = SMART_ALBUM_DEFS[albumId];
-  const { photos, count, loading } = useAlbumPhotos(albumId);
+  const { sort, displaySort, selectField } = useAlbumSort(albumId);
+  const { photos, count, loading } = useAlbumPhotos(albumId, sort);
   const slideshow = usePhotoSlideshow(photos);
 
   return (
@@ -33,6 +36,9 @@ export default function SmartAlbumView({ albumId }: { albumId: string }) {
           backTitle="Back to Albums"
           title={def.label}
           count={`${count} items`}
+          actions={
+            <AlbumSortControl sort={displaySort} onSelectField={selectField} />
+          }
         >
           <SlideshowTriggers slideshow={slideshow} />
         </DetailHeader>
