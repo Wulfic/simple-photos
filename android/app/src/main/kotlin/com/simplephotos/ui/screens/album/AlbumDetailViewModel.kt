@@ -3,10 +3,21 @@ package com.simplephotos.ui.screens.album
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
 import com.simplephotos.ui.components.SelectionState
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.simplephotos.data.album.AlbumSort
+import com.simplephotos.data.album.AlbumSortField
+import com.simplephotos.data.album.DEFAULT_ALBUM_SORT
+import com.simplephotos.data.album.nextSort
+import com.simplephotos.data.album.parseAlbumSort
+import com.simplephotos.data.album.serialize
+import com.simplephotos.data.album.sortAlbumItems
 import com.simplephotos.data.excludeSecure
 import com.simplephotos.data.local.entities.AlbumEntity
 import com.simplephotos.data.local.entities.PhotoEntity
@@ -29,7 +40,8 @@ class AlbumDetailViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val albumRepository: AlbumRepository,
     private val photoRepository: PhotoRepository,
-    private val secureGalleryRepository: SecureGalleryRepository
+    private val secureGalleryRepository: SecureGalleryRepository,
+    private val dataStore: DataStore<Preferences>
 ) : ViewModel() {
 
     /** Blob IDs currently inside a secure gallery — hidden from this album's
@@ -56,6 +68,22 @@ class AlbumDetailViewModel @Inject constructor(
     var photos by mutableStateOf<List<PhotoEntity>>(emptyList())
     var allPhotos by mutableStateOf<List<PhotoEntity>>(emptyList())
     var loading by mutableStateOf(true)
+
+    // ── Sort (#52) ────────────────────────────────────────────────────────
+    // The intrinsic-order (secure-excluded) list as loaded; the displayed
+    // `photos` is this re-ordered by the user's choice. Held separately so a
+    // sort change re-orders without a reload.
+    private var basePhotos: List<PhotoEntity> = emptyList()
+
+    /** User's chosen sort, or null (intrinsic order — e.g. Recently Added's
+     *  add-order). null keeps exactly the pre-#52 ordering. */
+    var sort by mutableStateOf<AlbumSort?>(null)
+        private set
+
+    /** Concrete sort for the header control's visual state. */
+    val displaySort: AlbumSort get() = sort ?: DEFAULT_ALBUM_SORT
+
+    private val sortPrefKey = stringPreferencesKey("albumSort:$albumId")
     var error by mutableStateOf<String?>(null)
     var showAddPanel by mutableStateOf(false)
     var selectedToAdd by mutableStateOf<Set<String>>(emptySet())
@@ -77,7 +105,42 @@ class AlbumDetailViewModel @Inject constructor(
                 serverBaseUrl = photoRepository.getServerBaseUrl()
             } catch (_: Exception) {}
         }
-        if (isSmartAlbum) loadSmartAlbum() else loadAlbum()
+        viewModelScope.launch {
+            // Read the persisted choice before the first render's sort applies.
+            // A missing/corrupt value parses to null (intrinsic order).
+            sort = try {
+                parseAlbumSort(dataStore.data.first()[sortPrefKey])
+            } catch (_: Exception) {
+                null
+            }
+            if (isSmartAlbum) loadSmartAlbum() else loadAlbum()
+        }
+    }
+
+    /** Re-derive the displayed list from the intrinsic-order base + current sort. */
+    private fun applySort() {
+        val s = sort
+        photos = if (s == null) {
+            basePhotos
+        } else {
+            sortAlbumItems(basePhotos, s, { it.takenAt }, { it.filename }, { it.localId })
+        }
+    }
+
+    /** Header control tapped a field: toggle direction if active, else switch to
+     *  it. Persists the choice and re-orders the grid without a reload (#52). */
+    fun selectSortField(field: AlbumSortField) {
+        val next = nextSort(displaySort, field)
+        sort = next
+        applySort()
+        viewModelScope.launch {
+            try {
+                dataStore.edit { it[sortPrefKey] = next.serialize() }
+            } catch (e: Exception) {
+                // The sort still applies this session; only persistence is lost.
+                android.util.Log.w("AlbumDetailViewModel", "could not persist sort", e)
+            }
+        }
     }
 
     /** Load filtered photos for smart albums */
@@ -89,7 +152,8 @@ class AlbumDetailViewModel @Inject constructor(
                 // Shared resolver — same source the viewer pager uses. Secure-
                 // excluded so a secured favorite/photo/video doesn't reappear
                 // inside its smart album after being hidden from the gallery (#16).
-                photos = photoRepository.getAlbumPhotos(albumId).excludeSecure(secureBlobIds)
+                basePhotos = photoRepository.getAlbumPhotos(albumId).excludeSecure(secureBlobIds)
+                applySort()
             } catch (e: Exception) {
                 error = e.message
             } finally {
@@ -108,7 +172,8 @@ class AlbumDetailViewModel @Inject constructor(
                 // tapped tile and the viewer's initial page always agree.
                 // Secure-excluded so the grid + count match the main gallery (#16):
                 // securing a photo removes it from its albums too.
-                photos = photoRepository.getAlbumPhotos(albumId).excludeSecure(secureBlobIds)
+                basePhotos = photoRepository.getAlbumPhotos(albumId).excludeSecure(secureBlobIds)
+                applySort()
             } catch (e: Exception) {
                 error = e.message
             } finally {

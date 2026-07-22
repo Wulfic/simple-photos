@@ -38,6 +38,8 @@ import com.simplephotos.ui.components.CloudBackupBadge
 import com.simplephotos.ui.components.TileSelectionCircle
 import com.simplephotos.ui.components.rememberThumbnailRequest
 import com.simplephotos.ui.navigation.DetailNavBar
+import com.simplephotos.data.album.AlbumSortDir
+import com.simplephotos.data.album.AlbumSortField
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.local.entities.SyncStatus
 import java.io.File
@@ -55,6 +57,7 @@ fun AlbumDetailScreen(
 ) {
     val context = LocalContext.current
     var menuExpanded by remember { mutableStateOf(false) }
+    var sortMenuExpanded by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -137,6 +140,38 @@ fun AlbumDetailScreen(
                     // Add-items `+` and a ⋮ overflow menu (Rename · Delete),
                     // replacing the standalone trashcan (#35).
                     actions = {
+                        // Sort control (#52) — shown for every album kind. The menu
+                        // stays open on tap so a second tap on the active field
+                        // reverses its direction (mirrors web's toggle); dismiss by
+                        // tapping outside.
+                        Box {
+                            val d = viewModel.displaySort
+                            TextButton(onClick = { sortMenuExpanded = true }) {
+                                Text(
+                                    (if (d.field == AlbumSortField.DATE) "Date" else "Name") +
+                                        (if (d.dir == AlbumSortDir.ASC) " ↑" else " ↓")
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = sortMenuExpanded,
+                                onDismissRequest = { sortMenuExpanded = false }
+                            ) {
+                                listOf(
+                                    AlbumSortField.DATE to "Date",
+                                    AlbumSortField.NAME to "Name",
+                                ).forEach { (field, label) ->
+                                    val active = d.field == field
+                                    val arrow = if (d.dir == AlbumSortDir.ASC) " ↑" else " ↓"
+                                    DropdownMenuItem(
+                                        text = { Text(label + if (active) arrow else "") },
+                                        onClick = { viewModel.selectSortField(field) },
+                                        trailingIcon = if (active) {
+                                            { Icon(Icons.Default.Check, contentDescription = null) }
+                                        } else null,
+                                    )
+                                }
+                            }
+                        }
                         if (!viewModel.isSmartAlbum) {
                             IconButton(onClick = { viewModel.openAddPanel() }) {
                                 Icon(
