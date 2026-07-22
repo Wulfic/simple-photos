@@ -89,9 +89,11 @@ pub struct RungCandidate {
 impl RungCandidate {
     /// Whether the recorded geometry can be believed enough to skip a probe.
     ///
-    /// Even when true the generation pass still probes — see the module note on
-    /// orientation. This distinguishes "narrowed by the prefilter" from
-    /// "selected blind", which is only useful for logging and ordering.
+    /// The generation pass probes regardless — the module note on orientation
+    /// explains why stored geometry is never trusted for the encode. This does
+    /// NOT gate that; it only distinguishes "narrowed by the prefilter" from
+    /// "selected blind", which `rung_generate` reports as the sweep's `blind`
+    /// count so a budget spent mostly on speculative probes is legible.
     pub fn geometry_is_known(&self) -> bool {
         self.width > 0 && self.height > 0
     }

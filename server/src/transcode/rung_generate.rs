@@ -198,8 +198,18 @@ pub async fn run_sweep(
         }
     };
 
+    // `blind` are rung candidates the prefilter selected without usable stored
+    // geometry (the ~58 rows with width/height <= 0): they are probed to find
+    // out whether they even need a rung, rather than because they are known
+    // oversized. Surfacing the split makes a sweep that spends its budget mostly
+    // on speculative probes legible instead of looking like real rung work.
+    let blind = rung_candidates
+        .iter()
+        .filter(|c| !c.geometry_is_known())
+        .count();
     tracing::info!(
         rungs = rung_candidates.len(),
+        blind,
         backfill = backfill_candidates.len(),
         "[LADDER] starting video rendition sweep"
     );
