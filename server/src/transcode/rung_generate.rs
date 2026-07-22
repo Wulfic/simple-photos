@@ -71,6 +71,12 @@ pub struct SweepOutcome {
     pub not_needed: usize,
     pub failed: usize,
     pub skipped: usize,
+    /// Of `examined`/`produced`, how many came from the #46 codec backfill
+    /// (registered videos re-examined for a non-native codec) rather than the
+    /// resolution ladder. Split out only so the logs can tell "the library is
+    /// still draining its one-off codec pass" from "new 4K uploads need rungs".
+    pub backfill_examined: usize,
+    pub backfill_produced: usize,
 }
 
 /// A file that must not outlive the step that made it.
@@ -133,6 +139,8 @@ pub async fn generate_rungs_after_scan(
             not_needed = outcome.not_needed,
             failed = outcome.failed,
             skipped = outcome.skipped,
+            backfill_examined = outcome.backfill_examined,
+            backfill_produced = outcome.backfill_produced,
             "[LADDER] rung sweep complete"
         );
     }
@@ -147,20 +155,41 @@ pub async fn run_sweep(
 ) -> SweepOutcome {
     let mut outcome = SweepOutcome::default();
 
-    let candidates = match rung_queue::find_rung_candidates(pool, SWEEP_CANDIDATE_LIMIT).await {
+    // Resolution rungs first: these deliver a quality a client is actively
+    // waiting on. The candidate set is deliberately narrow (oversized + unknown
+    // geometry).
+    let rung_candidates = match rung_queue::find_rung_candidates(pool, SWEEP_CANDIDATE_LIMIT).await {
         Ok(c) => c,
         Err(e) => {
             tracing::error!("[LADDER] failed to select rung candidates: {e}");
             return outcome;
         }
     };
-    if candidates.is_empty() {
+
+    // The #46 codec backfill: known-small registered videos whose container was
+    // trusted by extension and never re-examined. Fetched even when there are no
+    // rungs, because after the ladder has drained this is the only work left and
+    // it must still make progress — but its failure is non-fatal to the rung
+    // pass, so a query error here is logged and treated as "no backfill work".
+    let backfill_candidates =
+        match rung_queue::find_codec_backfill_candidates(pool, SWEEP_CANDIDATE_LIMIT).await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!("[LADDER] failed to select codec-backfill candidates: {e}");
+                Vec::new()
+            }
+        };
+
+    // Nothing to do at all — return BEFORE loading the key. Unwrapping it is a
+    // KDF, and paying it on every idle autoscan tick (the steady state, once the
+    // library has drained) is exactly the needless work this pass must not add.
+    if rung_candidates.is_empty() && backfill_candidates.is_empty() {
         return outcome;
     }
 
-    // Loaded once per sweep, not once per file: it is the same key every time and
-    // unwrapping it is a KDF. `None` is legitimate — an unencrypted install has
-    // no stored key, and its candidates are served from `file_path` instead.
+    // Loaded once per sweep, not once per file: it is the same key every time.
+    // `None` is legitimate — an unencrypted install has no stored key, and its
+    // candidates are served from `file_path` instead.
     let key = match crate::crypto::load_wrapped_key(pool, jwt_secret).await {
         Ok(k) => k,
         Err(e) => {
@@ -170,15 +199,51 @@ pub async fn run_sweep(
     };
 
     tracing::info!(
-        candidates = candidates.len(),
+        rungs = rung_candidates.len(),
+        backfill = backfill_candidates.len(),
         "[LADDER] starting video rendition sweep"
     );
 
+    // One wall-clock budget spans BOTH phases: rungs get first call on it, and
+    // the backfill runs only with whatever is left. So a busy rung queue can
+    // starve the backfill for a sweep, which is the correct priority — a rendition
+    // a client plays outranks re-examining a file's codec — and the backfill is
+    // bounded work that resumes next sweep regardless.
     let started = std::time::Instant::now();
+    process_phase(pool, storage_root, key.as_ref(), rung_candidates, started, false, &mut outcome)
+        .await;
+    process_phase(
+        pool,
+        storage_root,
+        key.as_ref(),
+        backfill_candidates,
+        started,
+        true,
+        &mut outcome,
+    )
+    .await;
 
+    outcome
+}
+
+/// Drain one phase's candidate list through [`generate_one`], sharing the sweep's
+/// wall-clock budget. `is_backfill` only selects which counters to bump and the
+/// log label — the encode path is identical, which is the whole point of routing
+/// #46's backfill through the ladder's existing pipeline.
+async fn process_phase(
+    pool: &sqlx::SqlitePool,
+    storage_root: &Path,
+    key: Option<&[u8; 32]>,
+    candidates: Vec<RungCandidate>,
+    started: std::time::Instant,
+    is_backfill: bool,
+    outcome: &mut SweepOutcome,
+) {
+    let phase = if is_backfill { "backfill" } else { "rung" };
     for candidate in candidates {
         if started.elapsed() >= SWEEP_TIME_BUDGET {
             tracing::info!(
+                phase,
                 elapsed_secs = started.elapsed().as_secs(),
                 "[LADDER] sweep budget reached — remaining candidates deferred to the next sweep"
             );
@@ -186,12 +251,19 @@ pub async fn run_sweep(
         }
 
         outcome.examined += 1;
+        if is_backfill {
+            outcome.backfill_examined += 1;
+        }
         let file_start = std::time::Instant::now();
 
-        match generate_one(pool, storage_root, key.as_ref(), &candidate).await {
+        match generate_one(pool, storage_root, key, &candidate).await {
             Ok(Verdict::Produced { short_edge }) => {
                 outcome.produced += 1;
+                if is_backfill {
+                    outcome.backfill_produced += 1;
+                }
                 tracing::info!(
+                    phase,
                     photo_id = %candidate.photo_id,
                     filename = %candidate.filename,
                     short_edge,
@@ -202,6 +274,7 @@ pub async fn run_sweep(
             Ok(Verdict::NotNeeded) => {
                 outcome.not_needed += 1;
                 tracing::debug!(
+                    phase,
                     photo_id = %candidate.photo_id,
                     filename = %candidate.filename,
                     "[LADDER] no rung owed"
@@ -215,6 +288,7 @@ pub async fn run_sweep(
                 // encryption-backlog case would otherwise warn once per
                 // candidate per sweep for as long as the backlog exists.
                 tracing::info!(
+                    phase,
                     photo_id = %candidate.photo_id,
                     filename = %candidate.filename,
                     "[LADDER] skipped: {reason}"
@@ -223,6 +297,7 @@ pub async fn run_sweep(
             Err(e) => {
                 outcome.failed += 1;
                 tracing::error!(
+                    phase,
                     photo_id = %candidate.photo_id,
                     filename = %candidate.filename,
                     elapsed_secs = file_start.elapsed().as_secs(),
@@ -231,8 +306,6 @@ pub async fn run_sweep(
             }
         }
     }
-
-    outcome
 }
 
 /// The outcome for one candidate that did not error.
@@ -434,6 +507,29 @@ pub async fn generate_one(
                 "[LADDER] produced a rung but failed to record the source rendition: {e}"
             );
         }
+    }
+
+    // #46 corrupt-file honesty: if the source did not decode cleanly, this rung
+    // is a *salvage* — ffmpeg kept the frames it could read and dropped the rest,
+    // so the rendition is shorter than the source. Surface the loss in the audit
+    // log rather than handing the user a silently-truncated video (the natural
+    // first consumer of #45's failure events). A merely non-native but clean
+    // source — a healthy HEVC — is a lossless re-encode and says nothing here.
+    if let Some(h) = health.as_ref().filter(|h| !h.is_clean()) {
+        crate::audit::log_background(
+            pool,
+            crate::audit::AuditEvent::MediaConvert,
+            Some(serde_json::json!({
+                "filename": candidate.filename,
+                "category": "video",
+                "short_edge": rung.short_edge,
+                "salvage": true,
+                "decode_errors": h.error_count,
+                "first_error": h.first_error,
+                "note": "corrupt source salvaged; rendition is shorter than the original",
+                "origin": "rung_backfill",
+            })),
+        );
     }
 
     Ok(Verdict::Produced {
@@ -693,6 +789,41 @@ mod tests {
         }
     }
 
+    /// Encode a clip a browser cannot decode natively: MPEG-4 Part 2 in an `.mp4`
+    /// container — exactly the 10-file class the #46 backfill exists for. `mpeg4`
+    /// is built into ffmpeg (no libx265 dependency), so this is reliable on the
+    /// same minimal images `make_video` runs on. `None` when ffmpeg is missing.
+    fn make_nonnative_video(root: &Path, rel: &str, size: &str) -> Option<PathBuf> {
+        let path = root.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+
+        let ok = std::process::Command::new("ffmpeg")
+            .args([
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                &format!("testsrc2=duration=1:size={size}:rate=10"),
+                "-c:v",
+                "mpeg4",
+                "-pix_fmt",
+                "yuv420p",
+            ])
+            .arg(&path)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+
+        if ok && std::fs::metadata(&path).map(|m| m.len() > 0).unwrap_or(false) {
+            Some(path)
+        } else {
+            None
+        }
+    }
+
     /// Register a video. `width`/`height` are what the DB *claims*, which the
     /// pass must never use for geometry.
     async fn insert_video(pool: &sqlx::SqlitePool, id: &str, rel: &str, width: i64, height: i64) {
@@ -915,6 +1046,74 @@ mod tests {
             second,
             SweepOutcome::default(),
             "a second sweep must find no work at all, got {second:?}"
+        );
+    }
+
+    /// The #46 backfill, end to end. A registered small non-native video (MPEG-4
+    /// Part 2, which no browser decodes) is re-encoded to a source-resolution
+    /// H.264 rendition through the SAME pass as the resolution ladder. The ladder
+    /// never selects it — it is far below the tier — so this exercises the
+    /// backfill phase specifically, and the whole reason the file was invisible
+    /// before: `existing_set` skipped it at ingest and the ladder rule excluded it.
+    #[tokio::test]
+    async fn the_backfill_reencodes_a_small_non_native_video_to_h264() {
+        let root = TempRoot::new("codec_backfill");
+        let Some(_) = make_nonnative_video(&root.0, "videos/sd.mp4", "320x240") else {
+            eprintln!("ffmpeg/mpeg4 unavailable — skipping");
+            return;
+        };
+
+        let pool = test_pool().await;
+        insert_video(&pool, "p1", "videos/sd.mp4", 320, 240).await;
+
+        // The two candidate sets prove the routing: the ladder does not see it,
+        // the backfill does.
+        assert!(
+            rung_queue::find_rung_candidates(&pool, 10)
+                .await
+                .unwrap()
+                .is_empty(),
+            "a 320x240 source is far below the tier — the resolution ladder must ignore it"
+        );
+        assert_eq!(
+            rung_queue::find_codec_backfill_candidates(&pool, 10)
+                .await
+                .unwrap()
+                .len(),
+            1,
+            "the codec backfill must pick up the registered small container"
+        );
+
+        let outcome = run_sweep(&pool, &root.0, "test-secret").await;
+        assert_eq!(
+            (outcome.backfill_examined, outcome.backfill_produced),
+            (1, 1),
+            "the sweep must examine and fix it as backfill work, got {outcome:?}"
+        );
+
+        // Exactly one playable rung, at the source resolution, and NOT the source
+        // (the unplayable original must never be offered as "Original").
+        let rungs = list_renditions(&pool, "p1").await.unwrap();
+        assert_eq!(rungs.len(), 1, "one playable rung, no unplayable original: {rungs:?}");
+        assert!(!rungs[0].is_source(), "the mpeg4 source itself is not offerable");
+        assert_eq!(rungs[0].short_edge, 240);
+
+        // What ffmpeg actually wrote is H.264 — the codec fix, not merely a row.
+        let produced = root.0.join(rungs[0].file_path.as_ref().unwrap());
+        let info = probe::probe_video_stream(&produced).await.unwrap();
+        assert_eq!(info.codec, "h264", "the re-encode must be browser-native H.264");
+        assert!(
+            probe::is_browser_native(&info),
+            "the produced rendition must actually be playable, got {info:?}"
+        );
+        assert_eq!((info.width, info.height), (320, 240), "codec-only: resolution is unchanged");
+
+        // One-shot: the produced is_source=0 rung retires it from the backfill set.
+        let second = run_sweep(&pool, &root.0, "test-secret").await;
+        assert_eq!(
+            second,
+            SweepOutcome::default(),
+            "the backfill must examine each file exactly once, got {second:?}"
         );
     }
 }

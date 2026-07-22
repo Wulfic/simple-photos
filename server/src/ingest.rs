@@ -146,6 +146,11 @@ struct ConvertCandidate {
     target: conversion::ConversionTarget,
     size: i64,
     modified: Option<String>,
+    /// Set when this file is a *corrupt-bitstream salvage* rather than an ordinary
+    /// conversion (#46). Carried so the `MediaConvert` audit row can record that
+    /// the output is shorter than the source — the loss must be surfaced, not
+    /// silent. `None` for every ordinary conversion.
+    salvage: Option<crate::transcode::probe::DecodeHealth>,
 }
 
 /// Shared, cheaply-cloneable context for the concurrent per-file conversion
@@ -271,16 +276,34 @@ async fn process_candidate(
 
             // Audit the conversion so it's visible in the Server Logs tab.
             // Streams live via the globally-registered broadcast sender.
+            let mut convert_details = serde_json::json!({
+                "filename": candidate.name,
+                "converted": new_name,
+                "category": conversion::media_type_str(candidate.target.category),
+                "size_bytes": candidate.size,
+                "elapsed_ms": file_start.elapsed().as_millis() as u64,
+            });
+            if let (Some(health), Some(obj)) =
+                (&candidate.salvage, convert_details.as_object_mut())
+            {
+                // #46: this was a corrupt-bitstream salvage. ffmpeg keeps the
+                // frames it can read and drops the rest, so the output is SHORTER
+                // than the source — record the loss instead of presenting a
+                // silently-truncated video as a clean conversion.
+                obj.insert("salvage".into(), serde_json::Value::Bool(true));
+                obj.insert("decode_errors".into(), serde_json::json!(health.error_count));
+                obj.insert("first_error".into(), serde_json::json!(health.first_error));
+                obj.insert(
+                    "note".into(),
+                    serde_json::Value::String(
+                        "corrupt source salvaged; output is shorter than the original".into(),
+                    ),
+                );
+            }
             crate::audit::log_background(
                 pool,
                 crate::audit::AuditEvent::MediaConvert,
-                Some(serde_json::json!({
-                    "filename": candidate.name,
-                    "converted": new_name,
-                    "category": conversion::media_type_str(candidate.target.category),
-                    "size_bytes": candidate.size,
-                    "elapsed_ms": file_start.elapsed().as_millis() as u64,
-                })),
+                Some(convert_details),
             );
 
             // ── Register the converted file in the DB ────
@@ -714,12 +737,30 @@ async fn process_candidate(
     }
 }
 
+/// The codec probe's decision about an "already native" container.
+enum OpaqueVerdict {
+    /// Re-encode to browser-native MP4. `salvage` carries the decode health when
+    /// the reason is a *corrupt bitstream* rather than a wrong codec, so the
+    /// audit trail can warn that the output will be shorter than the source.
+    Convert {
+        target: conversion::ConversionTarget,
+        salvage: Option<crate::transcode::probe::DecodeHealth>,
+    },
+    /// Already browser-native, not an opaque container, or un-probeable this pass
+    /// (an environmental probe error is retried next pass, never retired).
+    Leave,
+    /// The container has no decodable video stream at all. A re-encode cannot
+    /// invent one, so it must be retired with a terminal skip rather than
+    /// re-probed on every pass forever (#46: `VIDEO0063.mp4`).
+    Unplayable,
+}
+
 /// Decide whether an "already native" container actually needs converting, by
 /// inspecting its streams instead of trusting its extension.
 ///
 /// [`conversion::conversion_target`] answers from the filename alone, so every
 /// `.mp4`/`.mov`/`.m4v` is assumed browser-playable and skipped. That is wrong
-/// in two independent ways, both measured on the live library (2026-07-20):
+/// in three ways, all measured on the live library (2026-07-20):
 ///
 /// * **Wrong codec.** An MP4 *container* happily carries HEVC, 10-bit H.264 or
 ///   MPEG-4 Part 2, none of which a browser can decode. 38 of 742 videos
@@ -730,17 +771,13 @@ async fn process_candidate(
 ///   `Invalid NAL unit size` errors on decode. A codec allowlist passes it.
 ///   Re-encoding rescues it because ffmpeg is lenient where browser decoders
 ///   are strict: 51s of corrupt input yields 28s of clean, playable output.
-///
-/// Returns the MP4 conversion target when the file must be re-encoded, or
-/// `None` to leave it alone.
-async fn opaque_container_needs_conversion(
-    abs_path: &std::path::Path,
-    name: &str,
-) -> Option<conversion::ConversionTarget> {
+/// * **No video stream at all** (`VIDEO0063.mp4`). A re-encode cannot help, so
+///   it is retired rather than retried — see [`OpaqueVerdict::Unplayable`].
+async fn opaque_container_needs_conversion(abs_path: &std::path::Path, name: &str) -> OpaqueVerdict {
     use crate::transcode::probe;
 
     if !probe::is_opaque_video_container(name) {
-        return None;
+        return OpaqueVerdict::Leave;
     }
 
     let mp4_target = conversion::ConversionTarget {
@@ -752,16 +789,16 @@ async fn opaque_container_needs_conversion(
     let info = match probe::probe_video_stream(abs_path).await {
         Ok(info) => info,
         Err(probe::ProbeError::NoVideoStream) => {
-            // The container parsed but exposes nothing decodable. Re-encoding
-            // cannot invent a video stream, so queueing it would only produce
-            // a guaranteed failure on every pass forever. Leave it out and say
-            // so loudly — a terminal "unplayable" state is #40's 3-strike cap.
+            // The container parsed but exposes nothing decodable. Retire it: the
+            // caller records a terminal skip so this file stops costing an
+            // ffprobe on every pass (it never registers, so `existing_set` cannot
+            // cover it — this is the one file that would thrash forever).
             tracing::warn!(
                 file = %abs_path.display(),
                 "[INGEST] Video container has no decodable video stream — \
-                 cannot convert, leaving unregistered (needs #40 terminal state)"
+                 retiring as unplayable (no re-encode can invent a stream)"
             );
-            return None;
+            return OpaqueVerdict::Unplayable;
         }
         Err(e) => {
             // Probe failure is not evidence either way. Skipping is the safe
@@ -772,7 +809,7 @@ async fn opaque_container_needs_conversion(
                 error = %e,
                 "[INGEST] Could not probe video container — skipping this pass"
             );
-            return None;
+            return OpaqueVerdict::Leave;
         }
     };
 
@@ -785,7 +822,11 @@ async fn opaque_container_needs_conversion(
             "[INGEST] Container extension says native but codec is not \
              browser-decodable — queueing for conversion"
         );
-        return Some(mp4_target);
+        // A wrong codec re-encodes cleanly — not a lossy salvage, so no health.
+        return OpaqueVerdict::Convert {
+            target: mp4_target,
+            salvage: None,
+        };
     }
 
     // Codec-native, so the only remaining question is whether the bitstream
@@ -801,16 +842,20 @@ async fn opaque_container_needs_conversion(
                  decode — queueing a salvage re-encode (output WILL be shorter \
                  than the source; the undecodable tail is unrecoverable)"
             );
-            Some(mp4_target)
+            // Carry the health so the conversion's audit row records the loss.
+            OpaqueVerdict::Convert {
+                target: mp4_target,
+                salvage: Some(health),
+            }
         }
-        Ok(_) => None,
+        Ok(_) => OpaqueVerdict::Leave,
         Err(e) => {
             tracing::warn!(
                 file = %abs_path.display(),
                 error = %e,
                 "[INGEST] Could not decode-check video — leaving as native"
             );
-            None
+            OpaqueVerdict::Leave
         }
     }
 }
@@ -1034,11 +1079,44 @@ async fn run_conversion_pass_inner(
                     // browser-native. For opaque containers (.mp4/.mov/...)
                     // the extension is a guess, so ask ffprobe what is
                     // actually inside — see `transcode::probe`.
-                    let target = match conversion::conversion_target(&name) {
-                        Some(t) => t,
+                    let (target, salvage) = match conversion::conversion_target(&name) {
+                        Some(t) => (t, None),
                         None => match opaque_container_needs_conversion(&abs_path, &name).await {
-                            Some(t) => t,
-                            None => continue,
+                            OpaqueVerdict::Convert { target, salvage } => (target, salvage),
+                            OpaqueVerdict::Leave => continue,
+                            OpaqueVerdict::Unplayable => {
+                                // No decodable video stream (#46: VIDEO0063.mp4).
+                                // Retire it with a terminal skip so the walk stops
+                                // spawning an ffprobe for it on every pass — it
+                                // never registers, so `existing_set` cannot cover
+                                // it, and it would thrash forever otherwise. A
+                                // change on disk re-evaluates it (031's rule).
+                                crate::photos::register::record_scan_skip_path(
+                                    &pool,
+                                    &admin_id,
+                                    &rel_path,
+                                    size,
+                                    modified.as_deref(),
+                                    crate::photos::scan_skip::REASON_UNPLAYABLE,
+                                    None,
+                                    &utc_now_iso(),
+                                )
+                                .await;
+                                // Surface it: an unregistered, unplayable file is
+                                // invisible in the UI otherwise (the #45 complaint).
+                                crate::audit::log_background(
+                                    &pool,
+                                    crate::audit::AuditEvent::MediaConvertFailure,
+                                    Some(serde_json::json!({
+                                        "filename": name,
+                                        "source_path": rel_path,
+                                        "category": "video",
+                                        "error": "no decodable video stream",
+                                        "origin": "ingest",
+                                    })),
+                                );
+                                continue;
+                            }
                         },
                     };
 
@@ -1054,6 +1132,7 @@ async fn run_conversion_pass_inner(
                         target,
                         size,
                         modified,
+                        salvage,
                     });
                 }
             }
@@ -1276,7 +1355,7 @@ mod opaque_container_tests {
     //! the defect being guarded is precisely that the old extension-only path
     //! never looked inside the file. A pure unit test cannot show that.
     //! Skipped when FFmpeg is unavailable so minimal CI images stay green.
-    use super::opaque_container_needs_conversion;
+    use super::{opaque_container_needs_conversion, OpaqueVerdict};
 
     /// Encode a tiny fixture clip with an explicit codec. Returns `None` when
     /// FFmpeg or the requested encoder is unavailable on this host.
@@ -1330,8 +1409,8 @@ mod opaque_container_tests {
         let _ = std::fs::remove_file(&path);
 
         assert!(
-            verdict.is_none(),
-            "a browser-native H.264 MP4 must NOT be queued for a pointless re-encode"
+            matches!(verdict, OpaqueVerdict::Leave),
+            "a browser-native H.264 MP4 must be left alone, not queued for a pointless re-encode"
         );
     }
 
@@ -1358,9 +1437,15 @@ mod opaque_container_tests {
         let verdict = opaque_container_needs_conversion(&path, "hevc.mp4").await;
         let _ = std::fs::remove_file(&path);
 
-        let target = verdict.expect("HEVC in an .mp4 container must be queued for conversion");
+        let OpaqueVerdict::Convert { target, salvage } = verdict else {
+            panic!("HEVC in an .mp4 container must be queued for conversion");
+        };
         assert_eq!(target.extension, "mp4");
         assert_eq!(target.category, crate::conversion::MediaCategory::Video);
+        assert!(
+            salvage.is_none(),
+            "a wrong codec re-encodes cleanly — only a corrupt bitstream is a lossy salvage"
+        );
     }
 
     /// MPEG-4 Part 2 (DivX/Xvid era) — 10 files in the live library.
@@ -1375,8 +1460,49 @@ mod opaque_container_tests {
         let _ = std::fs::remove_file(&path);
 
         assert!(
-            verdict.is_some(),
+            matches!(verdict, OpaqueVerdict::Convert { .. }),
             "MPEG-4 Part 2 is not browser-decodable and must be queued"
+        );
+    }
+
+    /// A container that parses but exposes no video stream at all — the live
+    /// library's `VIDEO0063.mp4`. It must be `Unplayable` (the caller retires it
+    /// with a terminal skip), never queued: a re-encode cannot invent a stream,
+    /// so queueing it would fail on every pass forever.
+    #[tokio::test]
+    async fn a_container_with_no_video_stream_is_unplayable() {
+        let path = std::env::temp_dir()
+            .join(format!("sp_probe_{}_audio_only.mp4", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let ok = std::process::Command::new("ffmpeg")
+            .args([
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=1000:duration=1",
+                "-c:a",
+                "aac",
+            ])
+            .arg(&path)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !ok || std::fs::metadata(&path).map(|m| m.len() == 0).unwrap_or(true) {
+            eprintln!("ffmpeg/aac unavailable — skipping");
+            let _ = std::fs::remove_file(&path);
+            return;
+        }
+
+        let verdict = opaque_container_needs_conversion(&path, "VIDEO0063.mp4").await;
+        let _ = std::fs::remove_file(&path);
+
+        assert!(
+            matches!(verdict, OpaqueVerdict::Unplayable),
+            "an audio-only .mp4 has no video stream and must be retired, not queued"
         );
     }
 
@@ -1385,9 +1511,15 @@ mod opaque_container_tests {
     #[tokio::test]
     async fn non_opaque_extensions_are_not_probed() {
         // A path that does not exist: if the probe ran, it would error and log.
-        // Returning `None` purely from the extension check is the correct path.
+        // Returning `Leave` purely from the extension check is the correct path.
         let missing = std::path::Path::new("/nonexistent/clip.mkv");
-        assert!(opaque_container_needs_conversion(missing, "clip.mkv").await.is_none());
-        assert!(opaque_container_needs_conversion(missing, "photo.jpg").await.is_none());
+        assert!(matches!(
+            opaque_container_needs_conversion(missing, "clip.mkv").await,
+            OpaqueVerdict::Leave
+        ));
+        assert!(matches!(
+            opaque_container_needs_conversion(missing, "photo.jpg").await,
+            OpaqueVerdict::Leave
+        ));
     }
 }

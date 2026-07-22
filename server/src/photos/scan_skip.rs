@@ -38,6 +38,13 @@ pub const REASON_GALLERY_HIDDEN: &str = "gallery_hidden";
 /// reason whose verdict depends on `attempt_count`.
 pub const REASON_CONVERSION_FAILED: &str = "conversion_failed";
 
+/// A video container with no decodable video stream at all (#46:
+/// `VIDEO0063.mp4`). A re-encode cannot invent a stream, so re-examining it can
+/// only ever reach the same answer — terminal, like `hash_duplicate`. Recorded
+/// by the conversion walk so an unregistered, unplayable file stops costing an
+/// ffprobe on every pass. Un-retired if the file changes on disk (031's rule).
+pub const REASON_UNPLAYABLE: &str = "unplayable";
+
 /// A `scan_skipped_paths` row, as the walks load it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkipRow {
@@ -132,6 +139,26 @@ mod tests {
         assert_eq!(
             skip_verdict(&row(REASON_GALLERY_HIDDEN, 0), 1_000, MTIME),
             SkipVerdict::Skip
+        );
+    }
+
+    #[test]
+    fn unplayable_skips_at_zero_attempts() {
+        // A container with no decodable video stream (#46) is terminal on sight,
+        // like a hash duplicate: no attempt budget, no retry, examined once.
+        assert_eq!(
+            skip_verdict(&row(REASON_UNPLAYABLE, 0), 1_000, MTIME),
+            SkipVerdict::Skip
+        );
+    }
+
+    #[test]
+    fn an_unplayable_file_that_changed_on_disk_is_re_evaluated() {
+        // The escape hatch still applies: replacing the file (perhaps with a
+        // repaired copy that HAS a video stream) must un-retire it.
+        assert_eq!(
+            skip_verdict(&row(REASON_UNPLAYABLE, 0), 2_000, MTIME),
+            SkipVerdict::Stale
         );
     }
 

@@ -184,6 +184,26 @@ pub fn plan_ladder(width: i64, height: i64, source_offerable: bool) -> Vec<Rendi
     let mut plan = plan_renditions(width, height);
     if !source_offerable {
         plan.retain(|r| !r.is_source);
+
+        // The source cannot be played and nothing else was planned — the source
+        // is at or below the tier, so there is no downscale rung to stand in for
+        // it (#46: the 10 MPEG-4 SD files, the reported 320x240 corrupt clip,
+        // small HEVC). The remedy is a codec re-encode at the source's OWN
+        // resolution, recorded as an ordinary (non-source) rung so the existing
+        // picker/serving path already carries it.
+        //
+        // A 4K non-native source never reaches here: it kept its 1080p rung
+        // above, so `plan` is non-empty and no wasteful full-resolution re-encode
+        // is added — 1080p remains the fix for those. Guarded on real geometry: a
+        // probe that read 0 has nothing to scale.
+        if plan.is_empty() && width > 0 && height > 0 {
+            plan.push(Rendition {
+                short_edge: short_edge(width, height),
+                width,
+                height,
+                is_source: false,
+            });
+        }
     }
     // A lone source rung is not a ladder — there is nothing to pick between,
     // and offering a one-entry picker is noise.
@@ -257,11 +277,69 @@ mod tests {
         assert!(plan_ladder(2288, 1088, true).is_empty());
     }
 
-    /// An unplayable sub-1080p source has nothing to offer — #46's conversion
-    /// is what fixes it, not the ladder.
+    /// An unplayable at-or-below-tier source is fixed by a codec re-encode at its
+    /// OWN resolution, recorded as an ordinary (non-source) rung.
+    ///
+    /// This is the #46 backfill's whole reason to exist. The old design left
+    /// these to a separate "#46 conversion" that never ran for already-registered
+    /// files, so this test previously asserted `is_empty()` — it pinned the gap.
     #[test]
-    fn an_unplayable_small_source_yields_nothing_for_the_ladder_to_do() {
-        assert!(plan_ladder(1280, 720, false).is_empty());
+    fn an_unplayable_small_source_gets_a_source_resolution_native_rung() {
+        for (w, h) in [(1280, 720), (640, 480), (320, 240)] {
+            let plan = plan_ladder(w, h, false);
+            assert_eq!(
+                plan.len(),
+                1,
+                "{w}x{h} must produce exactly one rung — the codec re-encode"
+            );
+            let rung = plan[0];
+            assert!(
+                !rung.is_source,
+                "the unplayable source itself must never be offered"
+            );
+            assert_eq!(
+                (rung.width, rung.height),
+                (w, h),
+                "{w}x{h}: the re-encode keeps the source resolution — codec only"
+            );
+            assert_eq!(rung.short_edge, short_edge(w, h));
+        }
+    }
+
+    /// The at-tier boundary: a non-native `1920x1080` is exactly the tier, so
+    /// there is no downscale rung — it must still get its source-resolution codec
+    /// re-encode rather than falling through to "no picker".
+    #[test]
+    fn an_unplayable_at_tier_source_gets_a_1080_native_rung() {
+        let plan = plan_ladder(1920, 1080, false);
+        assert_eq!(plan.len(), 1);
+        assert!(!plan[0].is_source);
+        assert_eq!((plan[0].width, plan[0].height), (1920, 1080));
+        assert_eq!(plan[0].short_edge, TIER_1080_SHORT_EDGE);
+    }
+
+    /// The fix must NOT spend a full-resolution re-encode on an oversized
+    /// non-native source: it already earns a 1080p rung, and that is the fix. A
+    /// 4K HEVC gets exactly one rung (1080p), never an additional 2160p re-encode.
+    #[test]
+    fn an_unplayable_oversized_source_is_not_given_a_wasteful_full_res_rung() {
+        let plan = plan_ladder(3840, 2160, false);
+        assert_eq!(
+            plan.len(),
+            1,
+            "a 4K non-native source must get ONLY its 1080p rung, not a source-res re-encode too"
+        );
+        assert_eq!(plan[0].short_edge, TIER_1080_SHORT_EDGE);
+        assert_eq!((plan[0].width, plan[0].height), (1920, 1080));
+    }
+
+    /// Zero geometry (a probe that could not read dimensions) must not invent a
+    /// rung to scale to — there is nothing to encode.
+    #[test]
+    fn an_unplayable_source_with_no_geometry_yields_no_rung() {
+        assert!(plan_ladder(0, 0, false).is_empty());
+        assert!(plan_ladder(0, 720, false).is_empty());
+        assert!(plan_ladder(1280, 0, false).is_empty());
     }
 
     /// The reported #46 file: impeccably native by codec, thousands of decode

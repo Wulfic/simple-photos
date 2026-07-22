@@ -48,6 +48,26 @@ use super::ladder::{rung_threshold, TIER_1080_SHORT_EDGE};
 /// genuinely broken file costs bounded work.
 pub const MAX_RUNG_ATTEMPTS: i64 = 3;
 
+/// A photo has been dealt with when it carries any NON-source rendition that is
+/// produced, ruled `not_needed`, or retired at the attempt cap.
+///
+/// Keyed on `is_source = 0` rather than a specific `short_edge` on purpose: both
+/// the 1080p downscale rung *and* the #46 source-resolution codec re-encode
+/// (whose short edge is the source's own, not 1080) must remove the photo from
+/// its queue. Shared verbatim by [`find_rung_candidates`] and
+/// [`find_codec_backfill_candidates`] so the two cannot drift on what "done"
+/// means — the same reason `ELIGIBLE_PREDICATE` is a single const.
+///
+/// Every query that interpolates this MUST bind [`MAX_RUNG_ATTEMPTS`] as `?2`,
+/// and the outer candidate row must be aliased `p`.
+const NO_TERMINAL_NONSOURCE_RENDITION: &str = "NOT EXISTS ( \
+        SELECT 1 FROM video_renditions r \
+        WHERE r.photo_id = p.id AND r.is_source = 0 \
+          AND ( r.blob_id IS NOT NULL \
+                OR r.file_path IS NOT NULL \
+                OR r.not_needed = 1 \
+                OR r.attempt_count >= ?2 ) )";
+
 /// A video that may still owe the ladder its 1080p rung.
 ///
 /// "May" is load-bearing: for the 58 rows with no recorded geometry, candidacy
@@ -109,28 +129,85 @@ pub async fn find_rung_candidates(
            AND {ELIGIBLE_PREDICATE} \
            AND ( (p.width > 0 AND p.height > 0 AND MIN(p.width, p.height) > ?1) \
                  OR p.width <= 0 OR p.height <= 0 ) \
-           AND NOT EXISTS ( \
-                 SELECT 1 FROM video_renditions r \
-                 WHERE r.photo_id = p.id AND r.short_edge = ?2 \
-                   AND ( r.blob_id IS NOT NULL \
-                         OR r.file_path IS NOT NULL \
-                         OR r.not_needed = 1 \
-                         OR r.attempt_count >= ?3 ) ) \
+           AND {NO_TERMINAL_NONSOURCE_RENDITION} \
          ORDER BY CASE WHEN p.width <= 0 OR p.height <= 0 THEN 0 \
                        ELSE MIN(p.width, p.height) END ASC, \
                   p.id ASC \
-         LIMIT ?4"
+         LIMIT ?3"
     );
 
     sqlx::query_as::<_, RungCandidate>(&sql)
         .bind(rung_threshold(TIER_1080_SHORT_EDGE))
-        .bind(TIER_1080_SHORT_EDGE)
         .bind(MAX_RUNG_ATTEMPTS)
         .bind(limit)
         .fetch_all(pool)
         .await
         .map_err(|e| {
             tracing::error!("failed to select video rendition candidates: {e}");
+            AppError::from(e)
+        })
+}
+
+/// The #46 codec backfill: registered `.mp4/.mov/.m4v/.webm` videos that
+/// [`find_rung_candidates`] deliberately never sees, so their codec is never
+/// re-examined.
+///
+/// #46's ingest probe only fires on files NOT yet registered; the conversion
+/// walk skips everything in `photos.file_path` before probing (`ingest.rs`, to
+/// protect the idle disk-thrash fix). So a video registered as "native" by
+/// extension that is actually HEVC / 10-bit / MPEG-4, or a corrupt bitstream
+/// behind an intact container, stays unplayable forever. The live library has
+/// ~38 such files plus the reported corrupt clip.
+///
+/// The *oversized* offenders are already handled — a 4K HEVC is an ordinary
+/// [`find_rung_candidates`] row and earns a playable 1080p rung as a side effect.
+/// This query is the complement: **known-small** videos (`min(w,h) <= tier`),
+/// which the ladder rule excludes. Videos with unknown geometry are not here
+/// either — they are already selected blind by [`find_rung_candidates`], and the
+/// generation pass produces their codec re-encode via `ladder::plan_ladder`. So
+/// the two candidate sets are disjoint by construction.
+///
+/// "Examined" is the same `is_source = 0` verdict the ladder writes
+/// ([`NO_TERMINAL_NONSOURCE_RENDITION`]): a produced source-resolution re-encode,
+/// or a `not_needed` marker for a video that probed as genuinely native. Either
+/// way the row leaves this set forever, so each file is probed exactly once — the
+/// one-shot property `todo.md` requires, without a new completion table.
+///
+/// Cheapest-first and `LIMIT`-bounded, so a first sweep against the whole library
+/// costs a predictable number of one-off probes and drains over subsequent
+/// sweeps rather than in one burst.
+pub async fn find_codec_backfill_candidates(
+    pool: &sqlx::SqlitePool,
+    limit: i64,
+) -> Result<Vec<RungCandidate>, AppError> {
+    // Extension match in SQL: these registered rows carry the ORIGINAL filename,
+    // and the container extension is exactly what #46 stopped trusting — but for
+    // *narrowing* which rows to probe (not for the verdict) it is the only signal
+    // available without a probe, and it mirrors `probe::is_opaque_video_container`.
+    let sql = format!(
+        "SELECT p.id AS photo_id, p.user_id, p.filename, p.mime_type, \
+                p.file_path, p.encrypted_blob_id, p.width, p.height \
+         FROM photos p \
+         WHERE p.media_type = 'video' \
+           AND {ELIGIBLE_PREDICATE} \
+           AND ( lower(p.filename) LIKE '%.mp4' \
+                 OR lower(p.filename) LIKE '%.mov' \
+                 OR lower(p.filename) LIKE '%.m4v' \
+                 OR lower(p.filename) LIKE '%.webm' ) \
+           AND p.width > 0 AND p.height > 0 AND MIN(p.width, p.height) <= ?1 \
+           AND {NO_TERMINAL_NONSOURCE_RENDITION} \
+         ORDER BY MIN(p.width, p.height) ASC, p.id ASC \
+         LIMIT ?3"
+    );
+
+    sqlx::query_as::<_, RungCandidate>(&sql)
+        .bind(rung_threshold(TIER_1080_SHORT_EDGE))
+        .bind(MAX_RUNG_ATTEMPTS)
+        .bind(limit)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| {
+            tracing::error!("failed to select codec-backfill candidates: {e}");
             AppError::from(e)
         })
 }
@@ -685,5 +762,244 @@ mod tests {
         assert!(ids.contains(&"p_port".to_string()));
         assert!(!ids.contains(&"p_land_small".to_string()));
         assert!(!ids.contains(&"p_port_small".to_string()));
+    }
+
+    // ── #46 codec backfill ───────────────────────────────────────────────
+
+    async fn insert_video_named(pool: &sqlx::SqlitePool, id: &str, w: i64, h: i64, filename: &str) {
+        sqlx::query(
+            "INSERT INTO photos (id, user_id, filename, file_path, mime_type, \
+             media_type, size_bytes, width, height, created_at) \
+             VALUES (?, 'u1', ?, ?, 'video/mp4', 'video', 0, ?, ?, '2026-01-01T00:00:00Z')",
+        )
+        .bind(id)
+        .bind(filename)
+        .bind(format!("uploads/{filename}"))
+        .bind(w)
+        .bind(h)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn backfill_ids(pool: &sqlx::SqlitePool) -> Vec<String> {
+        find_codec_backfill_candidates(pool, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|c| c.photo_id)
+            .collect()
+    }
+
+    /// A source-resolution rendition (`short_edge != 1080`, `is_source = 0`).
+    fn produced_at(photo_id: &str, short_edge: i64, blob: &str) -> StoredRendition {
+        StoredRendition {
+            photo_id: photo_id.into(),
+            short_edge,
+            width: short_edge,
+            height: short_edge,
+            is_source: 0,
+            blob_id: Some(blob.into()),
+            file_path: None,
+            codec: Some("h264".into()),
+            bitrate: Some(1_000_000),
+            size_bytes: 512,
+        }
+    }
+
+    /// The generalisation behind #46: the ladder's own source-resolution codec
+    /// re-encode lands at a short edge that is NOT 1080, so a self-limiting
+    /// predicate keyed on `short_edge = 1080` would re-select the photo forever.
+    /// Keyed on `is_source = 0` it leaves the queue. Verified RED against the old
+    /// predicate: the 480 rung does not match `short_edge = 1080`, so the
+    /// unknown-geometry candidate comes back on the next sweep.
+    #[tokio::test]
+    async fn a_produced_source_resolution_rung_self_limits_the_ladder_queue() {
+        let pool = test_pool().await;
+        insert_video(&pool, "p_unknown", 0, 0).await; // selected blind by the ladder
+        insert_blob(&pool, "b1").await;
+        assert_eq!(candidate_ids(&pool).await, vec!["p_unknown"]);
+
+        // The probe found it small + non-native, so the pass produced a codec
+        // re-encode at the source's own short edge (say 480), never at 1080.
+        upsert_rendition(&pool, &produced_at("p_unknown", 480, "b1"))
+            .await
+            .unwrap();
+
+        assert!(
+            candidate_ids(&pool).await.is_empty(),
+            "a produced source-resolution rung must remove the photo from the queue, \
+             not leave it looping because its short edge is not 1080"
+        );
+    }
+
+    /// The gap this query exists to close: a known-small `.mp4` the resolution
+    /// ladder never selects. It is a backfill candidate until it has been
+    /// examined.
+    #[tokio::test]
+    async fn a_known_small_container_is_a_backfill_candidate() {
+        let pool = test_pool().await;
+        insert_video(&pool, "p_sd", 640, 480).await;
+        insert_video(&pool, "p_at_tier", 1920, 1080).await; // exactly the tier — also small enough
+
+        let ids = backfill_ids(&pool).await;
+        assert!(ids.contains(&"p_sd".to_string()));
+        assert!(
+            ids.contains(&"p_at_tier".to_string()),
+            "a 1080p source is at the tier, has no downscale rung, and must still be codec-checked"
+        );
+    }
+
+    /// The two candidate sets are disjoint by construction: oversized/unknown
+    /// belong to the ladder, known-small to the backfill. Neither may claim the
+    /// other's rows, or a video is probed by both and its codec re-encode raced.
+    #[tokio::test]
+    async fn backfill_and_ladder_candidate_sets_are_disjoint() {
+        let pool = test_pool().await;
+        insert_video(&pool, "p_4k", 3840, 2160).await; // ladder
+        insert_video(&pool, "p_unknown", 0, 0).await; // ladder (blind)
+        insert_video(&pool, "p_sd", 640, 480).await; // backfill
+
+        assert_eq!(candidate_ids(&pool).await, vec!["p_unknown", "p_4k"]);
+        assert_eq!(backfill_ids(&pool).await, vec!["p_sd"]);
+
+        let ladder: std::collections::HashSet<_> = candidate_ids(&pool).await.into_iter().collect();
+        let backfill: std::collections::HashSet<_> = backfill_ids(&pool).await.into_iter().collect();
+        assert!(
+            ladder.is_disjoint(&backfill),
+            "a photo must never be a candidate for both passes"
+        );
+    }
+
+    /// Only real video containers browsers might mis-play. A `.mkv` already
+    /// converts on extension alone (it is never assumed native), and stills are
+    /// never video — neither is this query's business.
+    #[tokio::test]
+    async fn only_opaque_video_containers_are_backfill_candidates() {
+        let pool = test_pool().await;
+        insert_video_named(&pool, "p_mp4", 640, 480, "clip.mp4").await;
+        insert_video_named(&pool, "p_mov", 640, 480, "clip.MOV").await; // case-insensitive
+        insert_video_named(&pool, "p_m4v", 640, 480, "clip.m4v").await;
+        insert_video_named(&pool, "p_webm", 640, 480, "clip.webm").await;
+        insert_video_named(&pool, "p_mkv", 640, 480, "clip.mkv").await; // converts by extension already
+        sqlx::query(
+            "INSERT INTO photos (id, user_id, filename, file_path, mime_type, \
+             media_type, size_bytes, width, height, created_at) \
+             VALUES ('p_img', 'u1', 'a.mp4', 'uploads/a.mp4', 'image/jpeg', \
+                     'photo', 0, 640, 480, '2026-01-01T00:00:00Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let ids = backfill_ids(&pool).await;
+        assert_eq!(
+            ids.iter().cloned().collect::<std::collections::HashSet<String>>(),
+            ["p_mp4", "p_mov", "p_m4v", "p_webm"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<std::collections::HashSet<String>>()
+        );
+        assert!(!ids.contains(&"p_mkv".to_string()), "mkv converts by extension");
+        assert!(
+            !ids.contains(&"p_img".to_string()),
+            "a still with a video-looking name is not a video"
+        );
+    }
+
+    /// Each file is examined exactly once. A produced codec re-encode OR a
+    /// `not_needed` verdict (the video probed as genuinely native) OR retirement
+    /// all remove it — the one-shot property, tracked entirely in
+    /// `video_renditions` with no separate completion table.
+    #[tokio::test]
+    async fn an_examined_video_leaves_the_backfill_set() {
+        let pool = test_pool().await;
+        insert_video(&pool, "p_fixed", 640, 480).await;
+        insert_video(&pool, "p_native", 800, 600).await;
+        insert_video(&pool, "p_broken", 720, 540).await;
+        insert_blob(&pool, "b1").await;
+        assert_eq!(backfill_ids(&pool).await.len(), 3);
+
+        // Non-native: produced a source-resolution re-encode.
+        upsert_rendition(&pool, &produced_at("p_fixed", 480, "b1"))
+            .await
+            .unwrap();
+        // Genuinely native: nothing owed. `mark_rung_not_needed` writes the
+        // is_source=0 marker the query reads as "examined".
+        mark_rung_not_needed(&pool, "p_native", TIER_1080_SHORT_EDGE)
+            .await
+            .unwrap();
+        // Broken beyond salvage: retired at the attempt cap.
+        for _ in 0..MAX_RUNG_ATTEMPTS {
+            begin_attempt(&pool, "p_broken", 540).await.unwrap();
+        }
+
+        assert!(
+            backfill_ids(&pool).await.is_empty(),
+            "produced, not_needed, and retired must each retire the file from the backfill"
+        );
+    }
+
+    /// An in-flight attempt below the cap is still owed work — the file must not
+    /// vanish from the set the moment the first attempt is charged, or a crash
+    /// mid-encode would strand it unexamined.
+    #[tokio::test]
+    async fn a_backfill_attempt_below_the_cap_is_still_a_candidate() {
+        let pool = test_pool().await;
+        insert_video(&pool, "p_sd", 640, 480).await;
+
+        begin_attempt(&pool, "p_sd", 480).await.unwrap();
+        assert_eq!(
+            backfill_ids(&pool).await,
+            vec!["p_sd"],
+            "one charged attempt is not a verdict; the file is still owed a re-encode"
+        );
+    }
+
+    /// A secure-gallery video is not in the feed, so a codec re-encode buys
+    /// nothing and would leak a full copy through a rendition blob. Same
+    /// predicate as the ladder and the gallery, by construction.
+    #[tokio::test]
+    async fn secure_gallery_videos_are_not_backfill_candidates() {
+        let pool = test_pool().await;
+        insert_video(&pool, "p_open", 640, 480).await;
+        insert_video(&pool, "p_secure", 640, 480).await;
+        insert_blob(&pool, "p_secure").await;
+        sqlx::query(
+            "INSERT INTO encrypted_galleries (id, user_id, name, password_hash, created_at) \
+             VALUES ('g1', 'u1', 'vault', 'x', '2026-01-01T00:00:00Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO encrypted_gallery_items (id, gallery_id, blob_id, added_at) \
+             VALUES ('i1', 'g1', 'p_secure', '2026-01-01T00:00:00Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(backfill_ids(&pool).await, vec!["p_open"]);
+    }
+
+    /// Cheapest-first, and bounded — the same discipline as the ladder sweep so a
+    /// first pass over the whole library has a predictable cost.
+    #[tokio::test]
+    async fn backfill_candidates_come_back_cheapest_first_and_bounded() {
+        let pool = test_pool().await;
+        insert_video(&pool, "p_big", 1024, 768).await;
+        insert_video(&pool, "p_small", 320, 240).await;
+        insert_video(&pool, "p_mid", 640, 480).await;
+
+        let ordered: Vec<String> = find_codec_backfill_candidates(&pool, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|c| c.photo_id)
+            .collect();
+        assert_eq!(ordered, vec!["p_small", "p_mid", "p_big"]);
+
+        assert_eq!(find_codec_backfill_candidates(&pool, 2).await.unwrap().len(), 2);
     }
 }
