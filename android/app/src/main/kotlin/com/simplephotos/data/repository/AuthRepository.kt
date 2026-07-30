@@ -41,6 +41,7 @@ class AuthRepository @Inject constructor(
     private val dataStore: DataStore<Preferences>,
     private val keyManager: KeyManager,
     private val db: AppDatabase,
+    private val secureGalleryRepository: SecureGalleryRepository,
     @ApplicationContext private val context: Context
 ) {
     suspend fun register(username: String, password: String): RegisterResponse =
@@ -137,7 +138,11 @@ class AuthRepository @Inject constructor(
         // 5. Clear Coil in-memory bitmap cache
         context.imageLoader.memoryCache?.clear()
 
-        // 6. Clear auth tokens and encryption key
+        // 6. Clear auth tokens and encryption key. This also drops the persisted
+        // secure-blob-id fallback (B5), but that repository is a @Singleton whose
+        // in-memory mirror outlives the account within one process, so it has to
+        // be told explicitly — same reasoning as the sync cursor above.
+        secureGalleryRepository.forgetSecureBlobIds()
         dataStore.edit { it.clear() }
         keyManager.clearKey()
         // Drop the secure-album unlock token so a re-login must re-unlock.

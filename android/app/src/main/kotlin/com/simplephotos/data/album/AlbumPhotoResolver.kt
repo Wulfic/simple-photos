@@ -50,6 +50,8 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
+import com.simplephotos.data.SecureBlobIds
+import com.simplephotos.data.SecureFilterUnavailableException
 import com.simplephotos.data.collapseBursts
 import com.simplephotos.data.excludeSecure
 import com.simplephotos.data.local.entities.PhotoEntity
@@ -210,11 +212,18 @@ class AlbumPhotoResolver @Inject constructor(
      *   filename ASC`, secure-excluded, bursts collapsed, no sort control.
      */
     suspend fun resolve(albumId: String?): ResolvedPhotos = withContext(Dispatchers.IO) {
-        // Note: getSecureBlobIds() swallows its own failures and returns an empty
-        // set, so a server hiccup means "nothing is secured" and the filter fails
-        // OPEN for one load. That is pre-existing behaviour shared with every
-        // other caller, not something this resolver introduces — see todo B5.
-        val secureBlobIds = secureGalleryRepository.getSecureBlobIds()
+        // Fails CLOSED (B5). This resolver holds no state of its own, so it has
+        // nothing to "keep" on a failed fetch — the repository supplies the last
+        // set that loaded (persisted across process death, so an offline cold
+        // start still hides what it hid yesterday). Only when no set has EVER
+        // loaded is the answer unknown, and then both surfaces render their
+        // error state rather than an unfiltered list: a grid or a pager that
+        // silently stops hiding secured photos is the defect this whole file
+        // exists to close, and it must not reappear via the error path.
+        val secureBlobIds = when (val read = secureGalleryRepository.secureBlobIds()) {
+            is SecureBlobIds.Known -> read.ids
+            SecureBlobIds.Unavailable -> throw SecureFilterUnavailableException()
+        }
         if (albumId == null) {
             return@withContext resolvePhotos(
                 members = photoRepository.getAllPhotos().first(),

@@ -1169,6 +1169,69 @@ wrong** — the symptom as reported.
 
 ---
 
+### B5 — the secure filter failed OPEN on a server error (Android) — CONFIRMED
+
+**DONE 2026-07-30, commit `TBD`.** Found while writing `AlbumPhotoResolver`;
+deliberately not bundled into E3 because changing the failure semantics of a
+shared call touches every caller. Pre-existing on every surface since #16.
+
+**Root cause.** `SecureGalleryRepository.getSecureBlobIds()` was
+`try { … } catch (_: Exception) { emptySet() }`. Every caller reads the result as
+the complete set of hidden ids, and `excludeSecure` **short-circuits on an empty
+set**, so one failed request un-hid the entire secure gallery across the main
+grid, every album grid, the smart-album counts and (since E3) the viewer's pager.
+
+**Three `catch { keep existing set }` blocks were unreachable.**
+`GalleryViewModel`, `AlbumViewModel` and `AlbumDetailViewModel` each carried one.
+None could ever fire — the repository had already eaten the throw. Three places
+believed they handled this failure; none did. **A recovery path that cannot be
+reached is worse than none: it stops anyone looking.**
+
+- [x] **The failure is now a different value, not a different quantity.** New
+      `data/SecureBlobIds.kt`: `Known(ids, stale)` | `Unavailable`, folded once
+      in `foldSecureBlobIds`. `getSecureBlobIds()` is gone — the fetch is private
+      and the only public read returns the sealed type, so **`?: emptySet()` does
+      not typecheck**. That is the enforcement; the docs are only the reason.
+- [x] **Fails closed in the order the plan sanctioned** — *keep the previous set,
+      or refuse to render*. Surfaces holding a set keep it (their dead `catch`
+      blocks became live code); `AlbumPhotoResolver`, which is stateless by
+      design, throws `SecureFilterUnavailableException` and both its surfaces
+      render an error.
+- [x] **The last known set is persisted** (`stringSetPreferencesKey`). Without
+      it, "fail closed" would blank the gallery whenever the server is
+      unreachable — regressing the offline browsing of #3/#8. With it, an offline
+      cold start hides what it hid yesterday. Cleared by `logout()`'s
+      `dataStore.clear()`, plus an explicit `forgetSecureBlobIds()` because the
+      repository is a `@Singleton` whose in-memory mirror outlives the account.
+- [x] **`secureFilterReady` gates the main grid.** `secureBlobIds` starts empty
+      and empty short-circuits the filter, so *"not fetched yet"* rendered as
+      *"nothing is hidden"* — the whole window between launch and the first
+      successful fetch, and forever if it never succeeded. `gridReady =
+      dataReady && secureFilterReady`; the persisted set clears it from disk.
+- [x] **9 tests in `SecureBlobIdsTest`, 4 of which fail against the old code**
+      (verified by reverting the fold, not by assertion). They carry
+      `swallowedBeforeTheFix()` verbatim — the same device `AlbumPhotoResolverTest`
+      uses — so the leak is measured through the real `excludeSecure`, not
+      described.
+
+> **Two traps found in review, both in the fix rather than the bug.**
+> 1. **A 404 must stay an answer.** A server predating the endpoint secures
+>    nothing; folding its 404 in as a failure would park every client on an older
+>    server behind the loading gate permanently — a worse bug than the one being
+>    fixed. Only 404 is translated; 401/5xx/timeouts stay unknown.
+> 2. **Persisting on every poll is disk thrash.** `GalleryViewModel` polls this
+>    every 3s and the set almost never changes, so an unguarded write would
+>    rewrite the preferences file ~1,200×/hour on an idle device — precisely the
+>    steady-state property migration 031 exists to protect. Guarded on equality
+>    with the in-memory mirror.
+
+> **Also corrected: `PhotoViewerScreen` reported this as "Photo not found".** An
+> empty list has two causes — E3's honest "that id is not on this surface", and a
+> *resolver failure*. Rendering both the same blames the user's photo for a
+> server problem and hides the real cause from any bug report.
+
+---
+
 ## Workstream F â€” Android windowing
 
 ### F1 â€” #41 Cap dual-window at two instances (Low) â€” CONFIRMED

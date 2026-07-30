@@ -7,8 +7,8 @@ right**, and the correction blocks next to them are the only record of why. Read
 the relevant section there before re-planning anything that touches the same
 code.
 
-This file holds **only what is not done**: one live-data cleanup, seven
-follow-ups, and the standing deploy/device verification debt.
+This file holds **only what is not done**: one live-data cleanup, six follow-ups,
+and the standing deploy/device verification debt.
 
 **Ground rules (unchanged, non-negotiable):**
 - One commit per issue, conventional commit, referencing `(#NN)`.
@@ -50,29 +50,6 @@ results, face clusters, memories, trips), so paging them shows the gallery's
       not in the gallery list resolves to `pageIndexOf == -1` and renders "Photo
       not found" with a log line, rather than opening an unrelated photo at
       page 0.
-
----
-
-### B5 — `getSecureBlobIds()` fails OPEN on a server error
-
-[SecureGalleryRepository.kt:74-75](android/app/src/main/kotlin/com/simplephotos/data/repository/SecureGalleryRepository.kt#L74-L75)
-swallows every exception and returns an **empty set**, which every caller reads
-as "nothing is secured". One failed request therefore un-hides the entire secure
-gallery across the main grid, every album grid, the counts and (since E3) the
-viewer's pager, until the next successful load.
-
-Found while writing `AlbumPhotoResolver`; **pre-existing on every surface, not
-introduced by it** — `AlbumDetailViewModel.refreshSecureBlobIds` already carried
-a `catch` commented *"endpoint unavailable — keep existing set"* that could never
-fire, because the repository had already swallowed the throw.
-
-- [ ] Make the failure distinguishable from "nothing secured" — return
-      `Set<String>?`, or throw and let callers decide. A confidentiality filter
-      must fail **closed** (keep the previous set, or refuse to render) rather
-      than open.
-- [ ] Deliberately NOT bundled into the E3 refactor: changing the failure
-      semantics of a shared call touches every caller and deserves its own commit
-      and its own test, not a silent ride-along.
 
 ---
 
@@ -245,6 +222,17 @@ list exists.
       resolver; only a device proves the two screens actually render it.
 - [ ] **E3** — tap a secured photo from Search / People / Pets to confirm it
       renders "Photo not found" instead of opening page 0 (see E3a).
+- [ ] **B5** — the fail-closed gate, which is the one part of B5 a unit test
+      cannot reach. Three states, and the middle one is the whole point:
+      1. **Server up** — the grid renders as before, no new latency.
+      2. **Server unreachable, app already run once** — the grid still renders
+         and still hides the secured photos, from the persisted set. This is the
+         offline-browsing property of #3/#8; if it spins here, B5 traded a leak
+         for a regression.
+      3. **Fresh install, secure endpoint failing (not 404)** — the grid holds
+         its spinner instead of drawing the library unfiltered, and recovers
+         within one 3s poll of the server returning.
+      Also confirm the viewer shows the *filter* message, not "Photo not found".
 
 ### Browser
 

@@ -49,6 +49,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -116,7 +117,19 @@ fun PhotoViewerScreen(
             modifier = Modifier.fillMaxSize().background(Color.Black),
             contentAlignment = Alignment.Center
         ) {
-            Text("Photo not found", color = Color.White)
+            // An empty list has two causes and they are not interchangeable.
+            // "Photo not found" is the E3 answer: the id genuinely is not on
+            // this surface (secured, collapsed away, not synced). A resolver
+            // FAILURE — the secure filter being unknown (B5) — also lands here
+            // with an empty list, and reporting that as "not found" would blame
+            // the user's photo for a server problem, and hide the real cause
+            // from anyone reading a bug report.
+            Text(
+                viewModel.error ?: "Photo not found",
+                color = Color.White,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(horizontal = 32.dp),
+            )
         }
         return
     }

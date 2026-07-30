@@ -12,6 +12,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.simplephotos.data.SecureBlobIds
 import com.simplephotos.data.SecureSmartAlbum
 import com.simplephotos.data.SecureSmartAlbums
 import com.simplephotos.data.local.entities.PhotoEntity
@@ -249,8 +250,17 @@ class SecureGalleryViewModel @Inject constructor(
                 // Photos already in ANY secure gallery must not be offered for
                 // re-adding. This is the same id set the main gallery filters on
                 // (see GalleryScreen) — originals, clones, and encrypted blobs.
-                secureBlobIds = withContext(Dispatchers.IO) {
-                    secureGalleryRepository.getSecureBlobIds()
+                // Fails CLOSED (B5). An unavailable set keeps the previous one
+                // rather than reading as "nothing is secured" — which here would
+                // offer already-secured photos back in the add picker, and let a
+                // user "add" a photo that is already inside the album.
+                when (val read = withContext(Dispatchers.IO) {
+                    secureGalleryRepository.secureBlobIds()
+                }) {
+                    is SecureBlobIds.Known -> secureBlobIds = read.ids
+                    SecureBlobIds.Unavailable -> Log.w(TAG, "secure id set " +
+                        "unavailable — picker dedup falls back to the previous " +
+                        "${secureBlobIds.size} id(s)")
                 }
                 Log.d(TAG, "Loaded ${secureBlobIds.size} secure blob ids for dedup")
 

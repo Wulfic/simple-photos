@@ -6,9 +6,11 @@ package com.simplephotos.ui.screens.gallery
 
 import android.net.Uri
 import android.os.Build
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.simplephotos.data.SecureBlobIds
 import com.simplephotos.ui.components.SelectionState
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
@@ -35,6 +37,8 @@ import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.*
 import javax.inject.Inject
+
+private const val TAG = "GalleryViewModel"
 
 // ── Day grouping helper ─────────────────────────────────────────────────────
 
@@ -122,6 +126,29 @@ class GalleryViewModel @Inject constructor(
     var secureBlobIds by mutableStateOf(emptySet<String>())
         private set
 
+    /**
+     * True once [secureBlobIds] is a real answer rather than its initial empty
+     * placeholder (B5).
+     *
+     * `emptySet()` and "we have not been told yet" render identically —
+     * `excludeSecure` short-circuits on an empty set — so before this flag the
+     * grid drew the whole library unfiltered for the entire window between
+     * launch and the first successful fetch, and forever if that fetch never
+     * succeeded (offline, most obviously). It flips on a stale set too: the last
+     * known ids are a real answer, and the repository persists them so this is
+     * true within one read of a cold start.
+     */
+    var secureFilterReady by mutableStateOf(false)
+        private set
+
+    /**
+     * The grid may render only when the mirror has rows AND it is known what to
+     * hide. Both halves are load-bearing and they fail differently: [dataReady]
+     * guards against flashing a previous user's photos, [secureFilterReady]
+     * against showing this user's hidden ones.
+     */
+    val gridReady: Boolean get() = dataReady && secureFilterReady
+
     // ── Multi-select state (shared machine; see ui.components.SelectionState) ──
     private val selection = SelectionState()
     val selectedIds get() = selection.selectedIds
@@ -165,15 +192,38 @@ class GalleryViewModel @Inject constructor(
                 try {
                     // Refresh secure gallery blob IDs so photos moved to/from
                     // secure galleries on other devices are hidden/shown promptly.
-                    try {
-                        val freshIds = withContext(Dispatchers.IO) { secureGalleryRepository.getSecureBlobIds() }
-                        if (freshIds != secureBlobIds) {
-                            secureBlobIds = freshIds
-                        }
-                    } catch (_: Exception) { /* endpoint unavailable — keep existing set */ }
-                } catch (_: Exception) { /* server unreachable — skip this tick */ }
+                    applySecureBlobIds(
+                        withContext(Dispatchers.IO) { secureGalleryRepository.secureBlobIds() }
+                    )
+                } catch (e: Exception) {
+                    // secureBlobIds() reports a failed fetch as a value rather
+                    // than a throw, so reaching here means something else broke
+                    // (and the loop must not die on it). Silent before B5.
+                    Log.w(TAG, "[secure] poll tick failed", e)
+                }
                 delay(3_000)
             }
+        }
+    }
+
+    /**
+     * Adopt a secure-id read, failing CLOSED (B5).
+     *
+     * [SecureBlobIds.Unavailable] leaves [secureBlobIds] and [secureFilterReady]
+     * exactly as they were — so a grid already rendering keeps hiding the set it
+     * was hiding, and a grid that has never resolved one stays behind its
+     * loading gate instead of drawing the library unfiltered. The polling loop
+     * retries every 3s, so this state is self-healing rather than terminal.
+     */
+    private fun applySecureBlobIds(read: SecureBlobIds) {
+        when (read) {
+            is SecureBlobIds.Known -> {
+                if (read.ids != secureBlobIds) secureBlobIds = read.ids
+                secureFilterReady = true
+            }
+            SecureBlobIds.Unavailable ->
+                Log.w(TAG, "[secure] no id set available; " +
+                    "keeping ${secureBlobIds.size} hidden, ready=$secureFilterReady")
         }
     }
 
@@ -399,9 +449,9 @@ class GalleryViewModel @Inject constructor(
                 // Also sync albums from server (downloads manifests created on web)
                 try { withContext(Dispatchers.IO) { albumRepository.syncAlbumsFromServer() } } catch (_: Exception) {}
                 // Fetch blob IDs in secure galleries so they can be hidden from the main grid
-                try {
-                    secureBlobIds = withContext(Dispatchers.IO) { secureGalleryRepository.getSecureBlobIds() }
-                } catch (_: Exception) {}
+                applySecureBlobIds(
+                    withContext(Dispatchers.IO) { secureGalleryRepository.secureBlobIds() }
+                )
                 lastSyncResult = if (imported > 0) "Synced $imported new items" else "Up to date"
             } catch (e: Exception) { error = "Sync failed: ${e.message}" } finally { isSyncing = false; dataReady = true }
         }

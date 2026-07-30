@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.simplephotos.data.SecureBlobIds
 import com.simplephotos.data.collapseBursts
 import com.simplephotos.data.excludeSecure
 import com.simplephotos.data.local.entities.AlbumEntity
@@ -166,9 +167,19 @@ class AlbumViewModel @Inject constructor(
      */
     fun refresh() {
         viewModelScope.launch {
-            try {
-                secureBlobIds = withContext(Dispatchers.IO) { secureGalleryRepository.getSecureBlobIds() }
-            } catch (_: Exception) { /* endpoint unavailable — keep existing set */ }
+            // Fails CLOSED (B5): an unavailable set keeps the previous one, so a
+            // server hiccup cannot make the smart-album counts start including
+            // secured photos. This `catch` used to be unreachable — the
+            // repository swallowed the throw and handed back an empty set, which
+            // read as "nothing is secured" and silently un-hid everything.
+            when (val read = withContext(Dispatchers.IO) { secureGalleryRepository.secureBlobIds() }) {
+                is SecureBlobIds.Known -> secureBlobIds = read.ids
+                SecureBlobIds.Unavailable -> android.util.Log.w(
+                    "AlbumViewModel",
+                    "secure id set unavailable — counting with the previous " +
+                        "${secureBlobIds.size} id(s) excluded"
+                )
+            }
 
             try {
                 withContext(Dispatchers.IO) { albumRepository.syncAlbumsFromServer() }

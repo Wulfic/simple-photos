@@ -296,7 +296,7 @@ fun GalleryScreen(
                     Text(err, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.bodySmall)
                 }
 
-                if (visiblePhotos.isEmpty() && !viewModel.isSyncing && viewModel.dataReady) {
+                if (visiblePhotos.isEmpty() && !viewModel.isSyncing && viewModel.gridReady) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text("No photos yet", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -304,9 +304,17 @@ fun GalleryScreen(
                             Text("Tap + to add photos or grant permissions for auto-backup", textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(horizontal = 32.dp))
                         }
                     }
-                } else if (!viewModel.dataReady || (visiblePhotos.isEmpty() && viewModel.isSyncing)) {
-                    // Show loading until the first server sync completes.
-                    // This prevents flashing stale photos from a previous user session.
+                } else if (!viewModel.gridReady || (visiblePhotos.isEmpty() && viewModel.isSyncing)) {
+                    // Show loading until the first server sync completes AND the
+                    // secure filter is known (B5).
+                    // The first half prevents flashing stale photos from a previous
+                    // user session; the second prevents drawing THIS user's secured
+                    // photos, which is what an un-answered filter used to do —
+                    // `secureBlobIds` starts empty and `excludeSecure` short-circuits
+                    // on empty, so "not fetched yet" rendered as "nothing is hidden".
+                    // The repository persists the last known set, so this gate is
+                    // cleared from disk on a cold start rather than waiting on the
+                    // network — offline browsing (#3/#8) still works.
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             CircularProgressIndicator()
