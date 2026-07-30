@@ -1097,7 +1097,7 @@ collapseBursts` and nothing else. The tapped photo is located by id, which is
 exactly why **the first frame was always right and every swipe after it was
 wrong** — the symptom as reported.
 
-**DONE** — `___COMMIT___`. Android unit suite 224 green (was 209); 15 new tests in
+**DONE** — `dd9a00c`. Android unit suite 224 green (was 209); 15 new tests in
 `AlbumPhotoResolverTest`.
 
 > **The plan in this file was WRONG about the burst policy, in the direction that
