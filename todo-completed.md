@@ -1171,7 +1171,7 @@ wrong** — the symptom as reported.
 
 ### B5 — the secure filter failed OPEN on a server error (Android) — CONFIRMED
 
-**DONE 2026-07-30, commit `TBD`.** Found while writing `AlbumPhotoResolver`;
+**DONE 2026-07-30, commit `a61cf22`.** Found while writing `AlbumPhotoResolver`;
 deliberately not bundled into E3 because changing the failure semantics of a
 shared call touches every caller. Pre-existing on every surface since #16.
 
