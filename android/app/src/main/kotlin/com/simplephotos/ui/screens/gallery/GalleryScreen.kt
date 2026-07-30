@@ -55,6 +55,7 @@ import com.simplephotos.ui.components.rememberGalleryRowHeight
 import com.simplephotos.ui.components.rememberThumbnailRequest
 import com.simplephotos.ui.components.canCompare
 import com.simplephotos.ui.components.compareTargets
+import com.simplephotos.data.collapseBursts
 import com.simplephotos.data.excludeSecure
 import com.simplephotos.data.local.AppDatabase
 import com.simplephotos.data.local.entities.AlbumEntity
@@ -125,14 +126,12 @@ fun GalleryScreen(
         photos.excludeSecure(viewModel.secureBlobIds)
     }
 
-    // Collapse burst stacks: keep only the first frame of each burstId (matches web)
-    val collapsedPhotos = remember(visiblePhotos) {
-        val seenBursts = HashSet<String>()
-        visiblePhotos.filter { p ->
-            val bid = p.burstId
-            if (bid.isNullOrEmpty()) true else seenBursts.add(bid)
-        }
-    }
+    // Collapse burst stacks: keep only the first frame of each burstId (matches
+    // web). The SHARED helper, not a fourth inline copy of it — the viewer's
+    // pager resolves the gallery list through the same `excludeSecure →
+    // collapseBursts` pair (AlbumPhotoResolver), and an inline re-implementation
+    // here is how the two drift apart again (E3).
+    val collapsedPhotos = remember(visiblePhotos) { visiblePhotos.collapseBursts() }
 
     // Burst frame counts per burstId (used by the badge stack indicator).
     val burstCounts = remember(visiblePhotos) {

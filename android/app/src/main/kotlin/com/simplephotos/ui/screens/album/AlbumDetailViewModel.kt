@@ -3,32 +3,24 @@ package com.simplephotos.ui.screens.album
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.datastore.core.DataStore
-import androidx.datastore.preferences.core.Preferences
-import androidx.datastore.preferences.core.edit
-import androidx.datastore.preferences.core.stringPreferencesKey
 import com.simplephotos.ui.components.SelectionState
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.simplephotos.data.album.AlbumPhotoResolver
 import com.simplephotos.data.album.AlbumSort
 import com.simplephotos.data.album.AlbumSortField
 import com.simplephotos.data.album.DEFAULT_ALBUM_SORT
 import com.simplephotos.data.album.nextSort
-import com.simplephotos.data.album.parseAlbumSort
-import com.simplephotos.data.album.serialize
-import com.simplephotos.data.album.sortAlbumItems
+import com.simplephotos.data.album.sortAlbumPhotos
 import com.simplephotos.data.excludeSecure
 import com.simplephotos.data.local.entities.AlbumEntity
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.repository.AlbumRepository
 import com.simplephotos.data.repository.PhotoRepository
-import com.simplephotos.data.repository.SecureGalleryRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 /**
@@ -40,12 +32,12 @@ class AlbumDetailViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val albumRepository: AlbumRepository,
     private val photoRepository: PhotoRepository,
-    private val secureGalleryRepository: SecureGalleryRepository,
-    private val dataStore: DataStore<Preferences>
+    private val resolver: AlbumPhotoResolver,
 ) : ViewModel() {
 
     /** Blob IDs currently inside a secure gallery — hidden from this album's
-     *  grid + count so securing a photo removes it here too (#16). */
+     *  grid + count so securing a photo removes it here too (#16). Reported by
+     *  the resolver so the picker hides exactly the set the grid did. */
     private var secureBlobIds: Set<String> = emptySet()
 
     val albumId: String = savedStateHandle["albumId"] ?: ""
@@ -83,7 +75,6 @@ class AlbumDetailViewModel @Inject constructor(
     /** Concrete sort for the header control's visual state. */
     val displaySort: AlbumSort get() = sort ?: DEFAULT_ALBUM_SORT
 
-    private val sortPrefKey = stringPreferencesKey("albumSort:$albumId")
     var error by mutableStateOf<String?>(null)
     var showAddPanel by mutableStateOf(false)
     var selectedToAdd by mutableStateOf<Set<String>>(emptySet())
@@ -105,26 +96,14 @@ class AlbumDetailViewModel @Inject constructor(
                 serverBaseUrl = photoRepository.getServerBaseUrl()
             } catch (_: Exception) {}
         }
-        viewModelScope.launch {
-            // Read the persisted choice before the first render's sort applies.
-            // A missing/corrupt value parses to null (intrinsic order).
-            sort = try {
-                parseAlbumSort(dataStore.data.first()[sortPrefKey])
-            } catch (_: Exception) {
-                null
-            }
-            if (isSmartAlbum) loadSmartAlbum() else loadAlbum()
-        }
+        viewModelScope.launch { loadAlbum() }
     }
 
-    /** Re-derive the displayed list from the intrinsic-order base + current sort. */
+    /** Re-derive the displayed list from the intrinsic-order base + current sort.
+     *  The comparator itself lives in [sortAlbumPhotos] so the viewer's pager
+     *  applies the identical one to the identical base (E3). */
     private fun applySort() {
-        val s = sort
-        photos = if (s == null) {
-            basePhotos
-        } else {
-            sortAlbumItems(basePhotos, s, { it.takenAt }, { it.filename }, { it.localId })
-        }
+        photos = sortAlbumPhotos(basePhotos, sort)
     }
 
     /** Header control tapped a field: toggle direction if active, else switch to
@@ -135,58 +114,39 @@ class AlbumDetailViewModel @Inject constructor(
         applySort()
         viewModelScope.launch {
             try {
-                dataStore.edit { it[sortPrefKey] = next.serialize() }
+                resolver.persistSort(albumId, next)
             } catch (e: Exception) {
                 // The sort still applies this session; only persistence is lost.
+                // The viewer reads the persisted value, so a failure here also
+                // means the pager keeps the PREVIOUS order until the next reload.
                 android.util.Log.w("AlbumDetailViewModel", "could not persist sort", e)
             }
         }
     }
 
-    /** Load filtered photos for smart albums */
-    private fun loadSmartAlbum() {
-        viewModelScope.launch {
-            loading = true
-            try {
-                refreshSecureBlobIds()
-                // Shared resolver — same source the viewer pager uses. Secure-
-                // excluded so a secured favorite/photo/video doesn't reappear
-                // inside its smart album after being hidden from the gallery (#16).
-                basePhotos = photoRepository.getAlbumPhotos(albumId).excludeSecure(secureBlobIds)
-                applySort()
-            } catch (e: Exception) {
-                error = e.message
-            } finally {
-                loading = false
-            }
-        }
-    }
-
+    /**
+     * Load the album through [AlbumPhotoResolver] — the same call the viewer's
+     * pager makes, so the grid and the pager are the same list rather than two
+     * derivations of one query (E3). Smart and regular albums take the same
+     * path; the resolver handles the kind, the secure exclusion (#16), the burst
+     * policy and the persisted #52 sort.
+     */
     fun loadAlbum() {
         viewModelScope.launch {
             loading = true
             try {
-                refreshSecureBlobIds()
-                album = albumRepository.getAlbum(albumId)
-                // Shared resolver — same source the viewer pager uses, so the
-                // tapped tile and the viewer's initial page always agree.
-                // Secure-excluded so the grid + count match the main gallery (#16):
-                // securing a photo removes it from its albums too.
-                basePhotos = photoRepository.getAlbumPhotos(albumId).excludeSecure(secureBlobIds)
-                applySort()
+                if (!isSmartAlbum) album = albumRepository.getAlbum(albumId)
+                val resolved = resolver.resolve(albumId)
+                basePhotos = resolved.tiles
+                secureBlobIds = resolved.secureBlobIds
+                sort = resolved.sort
+                photos = resolved.photos
             } catch (e: Exception) {
                 error = e.message
             } finally {
                 loading = false
             }
         }
-    }
-
-    /** Refresh the set of blob IDs inside secure galleries (best-effort). */
-    private suspend fun refreshSecureBlobIds() {
-        try {
-            secureBlobIds = withContext(Dispatchers.IO) { secureGalleryRepository.getSecureBlobIds() }
-        } catch (_: Exception) { /* endpoint unavailable — keep existing set */ }
     }
 
     fun openAddPanel() {
