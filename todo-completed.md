@@ -1172,8 +1172,8 @@ wrong** — the symptom as reported.
 
 ### E3a — #52 follow-up: the non-album viewer entry points — CONFIRMED
 
-**DONE 2026-07-30.** Android unit suite 245 green (was 233); 12 new tests in
-`ViewerHandoffTest`.
+**DONE 2026-07-30, commit `7ca709b`.** Android unit suite 245 green (was 233);
+12 new tests in `ViewerHandoffTest`.
 
 > **This item was recorded as "ordering only; the confidentiality half is fixed".
 > That was wrong, and the way it was wrong is the lesson.** Four of the five
