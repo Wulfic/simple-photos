@@ -12,6 +12,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.simplephotos.data.album.VIEWER_PHOTO_IDS_KEY
 import com.simplephotos.ui.components.HeaderNavigation
 import com.simplephotos.ui.theme.ThemeState
 import androidx.navigation.NavController
@@ -173,7 +174,7 @@ fun NavGraph(startRoute: String? = null) {
         }
         composable(Screen.Search.route) {
             SearchScreen(
-                onPhotoClick = { photoId -> navController.navigate(Screen.PhotoViewer.createRoute(photoId)) },
+                onPhotoClick = { photoId, photoIds -> navController.navigateToViewer(photoId, photoIds) },
                 onGalleryClick = { navController.navigateHome() },
                 onAlbumsClick = { navController.navigateTopLevel(Screen.AlbumList.route) },
                 onTrashClick = { navController.navigateTopLevel(Screen.Trash.route) },
@@ -201,7 +202,27 @@ fun NavGraph(startRoute: String? = null) {
                 navArgument("photoId") { type = NavType.StringType },
                 navArgument("albumId") { type = NavType.StringType; nullable = true; defaultValue = null }
             )
-        ) {
+        ) { backStackEntry ->
+            // Carry the launching grid's resolved order into this entry's saved
+            // state BEFORE PhotoViewerScreen calls hiltViewModel(), so the
+            // ViewModel's own SavedStateHandle already holds it at construction
+            // (#52, E3a). This is a deliberate composition-time side effect:
+            // doing it in a LaunchedEffect would run it *after* the ViewModel is
+            // created, and the ViewModel's `init` has already started the
+            // resolve by then. The `contains` guard makes it one-shot, so
+            // recomposition — and a config change or process death, after which
+            // the key is restored on this entry — cannot repeat it.
+            //
+            // Only the five non-album grids write the key; the gallery and album
+            // detail leave it absent and the ViewModel falls back to the
+            // resolver's own derivation, which for those two already matches
+            // their grid element-for-element (E3).
+            if (!backStackEntry.savedStateHandle.contains(VIEWER_PHOTO_IDS_KEY)) {
+                navController.previousBackStackEntry
+                    ?.savedStateHandle
+                    ?.get<ArrayList<String>>(VIEWER_PHOTO_IDS_KEY)
+                    ?.let { backStackEntry.savedStateHandle[VIEWER_PHOTO_IDS_KEY] = it }
+            }
             PhotoViewerScreen(
                 onBack = { navController.popBackStack() },
                 onSelectPerson = { photoId, detectionId ->
@@ -283,7 +304,7 @@ fun NavGraph(startRoute: String? = null) {
             PersonDetailScreen(
                 clusterId = clusterId,
                 onBack = { navController.popBackStack() },
-                onPhotoClick = { photoId -> navController.navigate(Screen.PhotoViewer.createRoute(photoId)) },
+                onPhotoClick = { photoId, photoIds -> navController.navigateToViewer(photoId, photoIds) },
             )
         }
         composable(
@@ -294,7 +315,7 @@ fun NavGraph(startRoute: String? = null) {
             PetDetailScreen(
                 clusterId = clusterId,
                 onBack = { navController.popBackStack() },
-                onPhotoClick = { photoId -> navController.navigate(Screen.PhotoViewer.createRoute(photoId)) },
+                onPhotoClick = { photoId, photoIds -> navController.navigateToViewer(photoId, photoIds) },
             )
         }
         composable(
@@ -305,7 +326,7 @@ fun NavGraph(startRoute: String? = null) {
             MemoryDetailScreen(
                 memoryId = memoryId,
                 onBack = { navController.popBackStack() },
-                onPhotoClick = { photoId -> navController.navigate(Screen.PhotoViewer.createRoute(photoId)) },
+                onPhotoClick = { photoId, photoIds -> navController.navigateToViewer(photoId, photoIds) },
             )
         }
         composable(
@@ -316,7 +337,7 @@ fun NavGraph(startRoute: String? = null) {
             TripDetailScreen(
                 tripId = tripId,
                 onBack = { navController.popBackStack() },
-                onPhotoClick = { photoId -> navController.navigate(Screen.PhotoViewer.createRoute(photoId)) },
+                onPhotoClick = { photoId, photoIds -> navController.navigateToViewer(photoId, photoIds) },
             )
         }
     }
@@ -342,6 +363,31 @@ fun NavGraph(startRoute: String? = null) {
  */
 private fun NavController.navigateTopLevel(route: String) =
     navigate(route) { launchSingleTop = true }
+
+/**
+ * Open the viewer on [photoId], handing it [photoIds] — the launching grid's own
+ * resolved order (#52, E3a).
+ *
+ * For the five grids that resolve from *server* endpoints (Search, People, Pets,
+ * Memories, Trips). Their order is relevance ranking / cluster order / curation
+ * order, none of which the viewer can rebuild, so before this they paged the
+ * gallery's `takenAt DESC` instead of what the user was looking at.
+ *
+ * The list rides on the *current* entry's `SavedStateHandle` — nav arguments
+ * cannot carry a list, and `currentBackStackEntry` is the launching screen at the
+ * moment of the call, which is exactly the `previousBackStackEntry` the viewer's
+ * `composable` reads it back from. `ArrayList` rather than `List` because saved
+ * state must be `Serializable` to survive process death.
+ *
+ * The gallery and album detail deliberately do NOT use this: [AlbumPhotoResolver]
+ * already rebuilds their grids' lists exactly (E3), and handing one over as well
+ * would give those two surfaces a second path to the same list — the drift this
+ * whole workstream exists to remove.
+ */
+private fun NavController.navigateToViewer(photoId: String, photoIds: List<String>) {
+    currentBackStackEntry?.savedStateHandle?.set(VIEWER_PHOTO_IDS_KEY, ArrayList(photoIds))
+    navigate(Screen.PhotoViewer.createRoute(photoId))
+}
 
 /**
  * Reset to the Gallery home, clearing the back stack. Used by every "go home"

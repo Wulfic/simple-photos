@@ -7,7 +7,7 @@ right**, and the correction blocks next to them are the only record of why. Read
 the relevant section there before re-planning anything that touches the same
 code.
 
-This file holds **only what is not done**: one live-data cleanup, six follow-ups,
+This file holds **only what is not done**: one live-data cleanup, five follow-ups,
 and the standing deploy/device verification debt.
 
 **Ground rules (unchanged, non-negotiable):**
@@ -24,34 +24,6 @@ and the standing deploy/device verification debt.
 ---
 
 ## 1. Code
-
-### E3a — #52 follow-up: non-album viewer entry points still page the gallery list
-
-**E3 itself is DONE** (`AlbumPhotoResolver`, see
-[todo-completed.md](todo-completed.md) Workstream E). This is the remainder its
-audit turned up, recorded rather than half-fixed.
-
-Search, People, Pets, Memories and Trips all navigate with
-`Screen.PhotoViewer.createRoute(photoId)` and **no list**
-([NavGraph.kt:176, 286-319](android/app/src/main/kotlin/com/simplephotos/ui/navigation/NavGraph.kt#L176)),
-so the viewer lands in the resolver's gallery branch. After E3 that branch is
-secure-filtered and element-for-element identical to the main gallery grid — the
-confidentiality half is fixed and the main gallery itself is now correct. What is
-left is **ordering**: those five grids resolve from *server* endpoints (search
-results, face clusters, memories, trips), so paging them shows the gallery's
-`takenAt DESC` order, not the order the grid that launched the viewer displayed.
-
-- [ ] Hand the viewer the launching grid's resolved list, the way web already
-      does via `location.state` ([Viewer.tsx:426-442](web/src/pages/Viewer.tsx#L426-L442)).
-      Android nav args cannot carry a list; the idiomatic route is the previous
-      back-stack entry's `SavedStateHandle`. **Do not** re-derive those lists
-      inside `PhotoViewerViewModel` — that is precisely the defect E3 removed.
-- [ ] Until then the symptom is bounded and honest, not silent: a photo that is
-      not in the gallery list resolves to `pageIndexOf == -1` and renders "Photo
-      not found" with a log line, rather than opening an unrelated photo at
-      page 0.
-
----
 
 ### B3a — Parked (permanently unencrypted) photos — live data, found 2026-07-22
 
@@ -220,8 +192,18 @@ list exists.
 - [ ] **E3** — the pager order against the grid order in a sorted album, with a
       secured member and a burst present. `AlbumPhotoResolverTest` pins the
       resolver; only a device proves the two screens actually render it.
-- [ ] **E3** — tap a secured photo from Search / People / Pets to confirm it
-      renders "Photo not found" instead of opening page 0 (see E3a).
+- [ ] **E3a** — the whole point of the item, and the part no JVM test reaches.
+      Open a photo from **each** of Search, People, Pets, Memories and Trips.
+      Four of the five never worked at all (server ids were handed to a `localId`
+      lookup), so this is a first run, not a regression check:
+      1. The tapped photo opens — not "Photo not found", not a stranger's photo.
+      2. Swiping follows **that grid's** order (relevance / cluster / trip), not
+         the gallery's `takenAt DESC`.
+      3. Rotate mid-pager: the order and the page survive (the handoff rides
+         `SavedStateHandle`, and the `contains` guard is what keeps the copy
+         one-shot).
+      4. A secured member of a face cluster is absent from the pager, and tapping
+         its tile says "Photo not found" rather than opening it.
 - [ ] **B5** — the fail-closed gate, which is the one part of B5 a unit test
       cannot reach. Three states, and the middle one is the whole point:
       1. **Server up** — the grid renders as before, no new latency.
@@ -272,6 +254,14 @@ list exists.
   always the same shape: one function, called twice. **Five instances now — when a
   second surface needs the same list, wire it to the first one's resolver in the
   same commit, not later.**
+- **Verify the *id space*, not just the call shape.** E3a's audit read five call
+  sites, saw they all navigated identically, and filed the difference as
+  "ordering". Four of them were in fact passing **server** photo ids to a lookup
+  keyed on `localId` and had never once opened the right photo. Both are `String`,
+  so nothing failed loudly and the screen still rendered *something*. The repo has
+  three id spaces in constant traffic — `localId`, `serverPhotoId`, `serverBlobId`
+  — and `src-` album ids as a fourth. **When two surfaces exchange an id, name
+  which space it is in, in the signature or the doc.**
 - **The `src-` album id formula lives in three codebases** (memory
   `takeout-album-phases-2-3`). Never tidy one copy alone.
 - **Do not regress the idle disk-thrash fix** (memory

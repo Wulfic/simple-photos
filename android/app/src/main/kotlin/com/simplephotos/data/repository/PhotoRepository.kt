@@ -253,8 +253,25 @@ class PhotoRepository @Inject constructor(
         return photoIds.mapNotNull { id -> getPhoto(id) }
     }
 
+    /**
+     * Batch-resolve server photo ids against the local mirror.
+     *
+     * Chunked: a face cluster or a trip can name far more than SQLite's 999
+     * bound-parameter ceiling, and the un-chunked version threw on exactly the
+     * large clusters this lookup exists to serve. Returns a subset in arbitrary
+     * order — see [com.simplephotos.data.album.gridPhotoIds] for the projection
+     * that restores the caller's order.
+     */
     suspend fun getPhotosByServerPhotoIds(ids: List<String>): List<PhotoEntity> =
-        db.photoDao().getByServerPhotoIds(ids)
+        ids.chunked(SQLITE_VARIABLE_CHUNK).flatMap { db.photoDao().getByServerPhotoIds(it) }
+
+    /**
+     * Batch-resolve photo localIds against the local mirror. Same chunking rule
+     * and same arbitrary ordering as [getPhotosByServerPhotoIds]; the viewer
+     * handoff restores order via [com.simplephotos.data.album.orderPhotosBy].
+     */
+    suspend fun getPhotosByLocalIds(ids: List<String>): List<PhotoEntity> =
+        ids.chunked(SQLITE_VARIABLE_CHUNK).flatMap { db.photoDao().getByIds(it) }
 
     /**
      * Expand a selection of photo localIds so that any burst-stack

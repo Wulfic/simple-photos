@@ -12,6 +12,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.simplephotos.data.album.AlbumPhotoResolver
+import com.simplephotos.data.album.VIEWER_PHOTO_IDS_KEY
 import com.simplephotos.data.album.pageIndexOf
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.local.entities.SyncStatus
@@ -64,6 +65,20 @@ class PhotoViewerViewModel @Inject constructor(
     val albumId: String? = savedStateHandle["albumId"]
 
     /**
+     * The launching grid's own resolved order, when it had one (E3a).
+     *
+     * Set by `NavGraph` from the previous back-stack entry's `SavedStateHandle`
+     * before this ViewModel is constructed — nav arguments cannot carry a list,
+     * and this is Compose Navigation's channel for one. Non-null only for
+     * Search / People / Pets / Memories / Trips, whose grids come from server
+     * endpoints and therefore have an order neither the album branch nor the
+     * gallery branch can reproduce. Null for the gallery and for albums, which
+     * the resolver already resolves identically to their grids (E3).
+     */
+    private val handoffPhotoIds: List<String>? =
+        savedStateHandle.get<ArrayList<String>>(VIEWER_PHOTO_IDS_KEY)?.takeIf { it.isNotEmpty() }
+
+    /**
      * The list the pager swipes through — [ResolvedPhotos.photos], which is
      * *the same list object the launching grid renders*, not a re-derivation of
      * it (E3). Secure-excluded, burst policy applied per album kind, ordered by
@@ -74,7 +89,9 @@ class PhotoViewerViewModel @Inject constructor(
      * individual frames are browsed via the burst filmstrip ([burstFramesFor]).
      * In a regular album it means every frame, because the grid shows every
      * frame there — matching web, whose regular albums stay faithful to the
-     * manifest the user built.
+     * manifest the user built. On a handoff surface ([handoffPhotoIds]) it means
+     * the grid's own order with the secure exclusion applied and nothing else,
+     * because the grid already decided the rest.
      */
     var allPhotos by mutableStateOf<List<PhotoEntity>>(emptyList())
         private set
@@ -147,27 +164,36 @@ class PhotoViewerViewModel @Inject constructor(
             try {
                 serverBaseUrl = withContext(Dispatchers.IO) { photoRepository.getServerBaseUrl() }
 
-                // ONE resolver call, shared with the grid that launched us
-                // ([AlbumDetailViewModel] for an album, `GalleryScreen` for the
-                // gallery). It applies the secure exclusion, the per-kind burst
-                // policy and the album's persisted #52 sort, so the pager pages
-                // the grid's list rather than a second derivation of the same
-                // query. A null albumId is the gallery context, which is also
-                // where search / people / pets / memories / trips land.
-                val resolved = resolver.resolve(albumId)
+                // ONE resolver call, shared with the grid that launched us. Two
+                // shapes, never two derivations:
+                //
+                //  • The grid handed its list over (Search / People / Pets /
+                //    Memories / Trips, E3a) — page exactly that, secure-filtered
+                //    and nothing else. Their order comes from a server endpoint;
+                //    re-deriving it here is impossible, which is why they used
+                //    to page the gallery's order instead of their own.
+                //  • It did not (gallery, albums) — the resolver rebuilds the
+                //    identical list from the identical inputs, applying the
+                //    secure exclusion, the per-kind burst policy and the album's
+                //    persisted #52 sort (E3).
+                val resolved = handoffPhotoIds
+                    ?.let { resolver.resolveExplicit(it) }
+                    ?: resolver.resolve(albumId)
                 allPhotosRaw = resolved.members
                 allPhotos = resolved.photos
                 val page = resolved.pageIndexOf(initialPhotoId)
                 if (page < 0) {
                     // Not on this surface — secured, or not in the local mirror
-                    // yet (search and the people/pets/memories/trips grids all
-                    // resolve from server endpoints, so they can name an id the
-                    // gallery list does not hold). Render "Photo not found"
-                    // rather than opening page 0, which would silently show an
+                    // (the non-album grids resolve from server endpoints and
+                    // draw thumbnails straight from the server, so they can show
+                    // a tile for a photo this device has never mirrored and hand
+                    // over its raw server id). Render "Photo not found" rather
+                    // than opening page 0, which would silently show an
                     // unrelated photo and, for a secured id, would be the exact
                     // leak the secure exclusion above just closed.
                     Log.w(TAG, "[list] photo $initialPhotoId is not in the resolved " +
-                        "list for album=$albumId (${allPhotos.size} items)")
+                        "list for album=$albumId handoff=${handoffPhotoIds?.size} " +
+                        "(${allPhotos.size} items)")
                     allPhotos = emptyList()
                     initialPage = 0
                 } else {

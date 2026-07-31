@@ -40,6 +40,8 @@ import androidx.lifecycle.viewModelScope
 import coil.compose.AsyncImage
 import com.simplephotos.ui.components.rememberThumbnailRequest
 import com.simplephotos.ui.navigation.DetailNavBar
+import com.simplephotos.data.album.GridPhotoIds
+import com.simplephotos.data.album.gridPhotoIds
 import com.simplephotos.data.repository.AiRepository
 import com.simplephotos.data.repository.GeoRepository
 import com.simplephotos.data.repository.PhotoRepository
@@ -236,12 +238,16 @@ private fun PhotoIdsGridScaffold(
     onBack: () -> Unit,
     loading: Boolean,
     error: String?,
-    photoIds: List<String>,
+    grid: GridPhotoIds,
     serverBaseUrl: String,
-    onPhotoClick: (String) -> Unit,
+    onPhotoClick: (photoId: String, photoIds: List<String>) -> Unit,
     emptyHint: String,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
+    // Tiles are drawn from SERVER ids (the thumbnail endpoint is keyed on them),
+    // but the viewer pages LOCAL ids — see [GridPhotoIds]. Conflating the two is
+    // what made every tap here resolve to no page (E3a).
+    val photoIds = grid.serverIds
     Scaffold(
         topBar = {
             Column {
@@ -292,7 +298,7 @@ private fun PhotoIdsGridScaffold(
                                 .aspectRatio(1f)
                                 .clip(RoundedCornerShape(2.dp))
                                 .background(MaterialTheme.colorScheme.surfaceVariant)
-                                .clickable { onPhotoClick(id) },
+                                .clickable { onPhotoClick(grid.viewerIdFor(id), grid.viewerIds) },
                         ) {
                             if (url != null) {
                                 AsyncImage(
@@ -309,6 +315,18 @@ private fun PhotoIdsGridScaffold(
         }
     }
 }
+
+/**
+ * Project a server-side photo id list onto the local mirror (#52, E3a).
+ *
+ * Shared by all four detail ViewModels below because they are identical in this
+ * respect and were identically broken: each mapped a server endpoint's photo ids
+ * straight into `Screen.PhotoViewer.createRoute`, where they were matched against
+ * [com.simplephotos.data.local.entities.PhotoEntity.localId] — a random UUID that
+ * a server id can never equal. See [GridPhotoIds] for the full account.
+ */
+private suspend fun PhotoRepository.gridFor(serverIds: List<String>): GridPhotoIds =
+    gridPhotoIds(serverIds, withContext(Dispatchers.IO) { getPhotosByServerPhotoIds(serverIds) })
 
 // ── People list + detail ─────────────────────────────────────────────────────
 
@@ -398,7 +416,7 @@ class PersonDetailViewModel @Inject constructor(
 ) : ViewModel() {
     var loading by mutableStateOf(true); private set
     var error by mutableStateOf<String?>(null); private set
-    var photoIds by mutableStateOf<List<String>>(emptyList()); private set
+    var grid by mutableStateOf(GridPhotoIds.EMPTY); private set
     var serverBaseUrl by mutableStateOf(""); private set
     var label by mutableStateOf("Person"); private set
 
@@ -409,7 +427,9 @@ class PersonDetailViewModel @Inject constructor(
                 serverBaseUrl = withContext(Dispatchers.IO) { photoRepo.getServerBaseUrl() }
                 val all = repo.listFaceClusters()
                 label = all.firstOrNull { it.id == clusterId }?.label ?: "Person"
-                photoIds = repo.listFaceClusterPhotos(clusterId.toString()).map { it.photoId }
+                grid = photoRepo.gridFor(
+                    repo.listFaceClusterPhotos(clusterId.toString()).map { it.photoId }
+                )
             } catch (e: Exception) { error = e.message }
             loading = false
         }
@@ -439,7 +459,7 @@ class PersonDetailViewModel @Inject constructor(
 fun PersonDetailScreen(
     clusterId: Long,
     onBack: () -> Unit,
-    onPhotoClick: (String) -> Unit,
+    onPhotoClick: (photoId: String, photoIds: List<String>) -> Unit,
     vm: PersonDetailViewModel = hiltViewModel(),
 ) {
     LaunchedEffect(clusterId) { vm.load(clusterId) }
@@ -449,7 +469,7 @@ fun PersonDetailScreen(
         onBack = onBack,
         loading = vm.loading,
         error = vm.error,
-        photoIds = vm.photoIds,
+        grid = vm.grid,
         serverBaseUrl = vm.serverBaseUrl,
         onPhotoClick = onPhotoClick,
         emptyHint = "No photos for this person.",
@@ -561,7 +581,7 @@ class PetDetailViewModel @Inject constructor(
 ) : ViewModel() {
     var loading by mutableStateOf(true); private set
     var error by mutableStateOf<String?>(null); private set
-    var photoIds by mutableStateOf<List<String>>(emptyList()); private set
+    var grid by mutableStateOf(GridPhotoIds.EMPTY); private set
     var serverBaseUrl by mutableStateOf(""); private set
     var label by mutableStateOf("Pet"); private set
 
@@ -573,7 +593,9 @@ class PetDetailViewModel @Inject constructor(
                 val all = repo.listPetClusters()
                 val match = all.firstOrNull { it.id == clusterId }
                 label = match?.label ?: match?.species ?: "Pet"
-                photoIds = repo.listPetClusterPhotos(clusterId.toString()).map { it.photoId }
+                grid = photoRepo.gridFor(
+                    repo.listPetClusterPhotos(clusterId.toString()).map { it.photoId }
+                )
             } catch (e: Exception) { error = e.message }
             loading = false
         }
@@ -605,7 +627,7 @@ class PetDetailViewModel @Inject constructor(
 fun PetDetailScreen(
     clusterId: Long,
     onBack: () -> Unit,
-    onPhotoClick: (String) -> Unit,
+    onPhotoClick: (photoId: String, photoIds: List<String>) -> Unit,
     vm: PetDetailViewModel = hiltViewModel(),
 ) {
     LaunchedEffect(clusterId) { vm.load(clusterId) }
@@ -615,7 +637,7 @@ fun PetDetailScreen(
         onBack = onBack,
         loading = vm.loading,
         error = vm.error,
-        photoIds = vm.photoIds,
+        grid = vm.grid,
         serverBaseUrl = vm.serverBaseUrl,
         onPhotoClick = onPhotoClick,
         emptyHint = "No photos for this pet.",
@@ -690,7 +712,7 @@ class MemoryDetailViewModel @Inject constructor(
 ) : ViewModel() {
     var loading by mutableStateOf(true); private set
     var error by mutableStateOf<String?>(null); private set
-    var photoIds by mutableStateOf<List<String>>(emptyList()); private set
+    var grid by mutableStateOf(GridPhotoIds.EMPTY); private set
     var serverBaseUrl by mutableStateOf(""); private set
     var title by mutableStateOf("Memory"); private set
 
@@ -701,7 +723,7 @@ class MemoryDetailViewModel @Inject constructor(
                 serverBaseUrl = withContext(Dispatchers.IO) { photoRepo.getServerBaseUrl() }
                 val all = repo.listMemories()
                 title = all.firstOrNull { it.id == memoryId }?.name ?: "Memory"
-                photoIds = repo.listMemoryPhotos(memoryId).map { it.id }
+                grid = photoRepo.gridFor(repo.listMemoryPhotos(memoryId).map { it.id })
             } catch (e: Exception) { error = e.message }
             loading = false
         }
@@ -712,7 +734,7 @@ class MemoryDetailViewModel @Inject constructor(
 fun MemoryDetailScreen(
     memoryId: String,
     onBack: () -> Unit,
-    onPhotoClick: (String) -> Unit,
+    onPhotoClick: (photoId: String, photoIds: List<String>) -> Unit,
     vm: MemoryDetailViewModel = hiltViewModel(),
 ) {
     LaunchedEffect(memoryId) { vm.load(memoryId) }
@@ -721,7 +743,7 @@ fun MemoryDetailScreen(
         onBack = onBack,
         loading = vm.loading,
         error = vm.error,
-        photoIds = vm.photoIds,
+        grid = vm.grid,
         serverBaseUrl = vm.serverBaseUrl,
         onPhotoClick = onPhotoClick,
         emptyHint = "No photos for this memory.",
@@ -787,7 +809,7 @@ class TripDetailViewModel @Inject constructor(
 ) : ViewModel() {
     var loading by mutableStateOf(true); private set
     var error by mutableStateOf<String?>(null); private set
-    var photoIds by mutableStateOf<List<String>>(emptyList()); private set
+    var grid by mutableStateOf(GridPhotoIds.EMPTY); private set
     var serverBaseUrl by mutableStateOf(""); private set
     var title by mutableStateOf("Trip"); private set
 
@@ -798,7 +820,7 @@ class TripDetailViewModel @Inject constructor(
                 serverBaseUrl = withContext(Dispatchers.IO) { photoRepo.getServerBaseUrl() }
                 val all = repo.listTrips()
                 title = all.firstOrNull { it.id == tripId }?.name ?: "Trip"
-                photoIds = repo.listTripPhotos(tripId).map { it.id }
+                grid = photoRepo.gridFor(repo.listTripPhotos(tripId).map { it.id })
             } catch (e: Exception) { error = e.message }
             loading = false
         }
@@ -809,7 +831,7 @@ class TripDetailViewModel @Inject constructor(
 fun TripDetailScreen(
     tripId: String,
     onBack: () -> Unit,
-    onPhotoClick: (String) -> Unit,
+    onPhotoClick: (photoId: String, photoIds: List<String>) -> Unit,
     vm: TripDetailViewModel = hiltViewModel(),
 ) {
     LaunchedEffect(tripId) { vm.load(tripId) }
@@ -818,7 +840,7 @@ fun TripDetailScreen(
         onBack = onBack,
         loading = vm.loading,
         error = vm.error,
-        photoIds = vm.photoIds,
+        grid = vm.grid,
         serverBaseUrl = vm.serverBaseUrl,
         onPhotoClick = onPhotoClick,
         emptyHint = "No photos for this trip.",

@@ -1165,7 +1165,77 @@ wrong** — the symptom as reported.
       people, pets, memories and trips all route through
       `Screen.PhotoViewer.createRoute(photoId)` with no list, landing in the
       resolver's gallery branch — now secure-filtered and identical to the
-      gallery grid. Their *ordering* remainder is open → [todo.md](todo.md) E3a.
+      gallery grid. Their remainder was tracked as E3a, below — **and the audit
+      under-called it.**
+
+---
+
+### E3a — #52 follow-up: the non-album viewer entry points — CONFIRMED
+
+**DONE 2026-07-30.** Android unit suite 245 green (was 233); 12 new tests in
+`ViewerHandoffTest`.
+
+> **This item was recorded as "ordering only; the confidentiality half is fixed".
+> That was wrong, and the way it was wrong is the lesson.** Four of the five
+> surfaces were not mis-*ordered*, they were **totally broken**: People, Pets,
+> Memories and Trips list *server* photo ids
+> (`listFaceClusterPhotos(…).map { it.photoId }` and siblings) and passed them
+> straight into `Screen.PhotoViewer.createRoute`, where the viewer matches
+> `PhotoEntity.localId` — a fresh `UUID.randomUUID()` assigned in
+> `buildSyncedEntity`. **A server id can never equal a local id**, so every tap on
+> those four screens resolved to no page at all: silently page 0 before E3 (an
+> unrelated photo), "Photo not found" after it. Search was the only one that
+> mapped (`localPhoto?.localId ?: result.id`), which is exactly why the surface
+> everyone actually tests looked fine.
+>
+> **Two id spaces, both `String`, is why nothing failed loudly.** The compiler
+> cannot help, a debugger shows two plausible-looking ids, and the failure mode is
+> a screen that renders *something*. The E3 audit read the five call sites, saw
+> they all navigated the same way, and concluded the difference was ordering —
+> without checking what the ids on either end of the call *were*. **When two
+> surfaces exchange ids, verify the id space, not just the call shape.**
+>
+> **Handing a list over does not exempt it from the secure filter.** The handoff
+> comes from server endpoints (face clusters, trips, curated memories, relevance
+> ranking) which know nothing about what the user later secured. Paging it as-is
+> would have reopened E3's leak *inside E3's own follow-up*, so it goes through
+> `AlbumPhotoResolver.resolveExplicit`, which shares one `requireSecureBlobIds()`
+> with `resolve` — a second, laxer read of the secure set is the same leak in the
+> other hat.
+
+- [x] **The grid hands over its resolved list.** New
+      `data/album/ViewerHandoff.kt`: `GridPhotoIds` (server ids for the tiles,
+      local ids for the pager, one order) + pure `gridPhotoIds` / `orderPhotosBy`.
+      Mirrors what web has always done via `location.state`.
+- [x] **Transport.** Nav args cannot carry a list, so it rides the launching
+      entry's `SavedStateHandle` (`navigateToViewer`) and is copied into the
+      viewer's entry in `NavGraph` **before** `hiltViewModel()` runs — pushing it
+      in afterwards races `PhotoViewerViewModel.init`. Guarded with `contains` so
+      the composition-time write is one-shot across recomposition, config change
+      and process death.
+- [x] **`resolveExplicit` applies the secure exclusion and nothing else** — no
+      sort, no burst collapse. The handed list *is* the grid's resolved output;
+      re-deriving it is the defect E3 removed.
+- [x] **The two lists are legitimately different lengths.** The grid draws
+      thumbnails from the server, so it can show a photo this device never
+      mirrored; the pager renders a `PhotoEntity` and cannot. Unmirrored ids are
+      dropped from the handoff and a tap on one falls back to the raw server id →
+      `pageIndexOf == -1` → "Photo not found" + a log line. **Bounded and honest,
+      deliberately not coerced to page 0.**
+- [x] `getPhotosByServerPhotoIds` now chunks on `SQLITE_VARIABLE_CHUNK`. It never
+      did — a face cluster or trip over 999 photos threw on exactly the large
+      clusters the lookup exists to serve. New sibling `getPhotosByLocalIds`.
+- [x] `orderPhotosBy` de-duplicates: `HorizontalPager` is keyed on `localId` and a
+      repeated key crashes it. A crash guard, not tidiness.
+- [x] Comments that asserted the old routing (`resolve`'s KDoc: *"the context
+      every non-album viewer entry point lands in"*) updated in the same commit.
+- [x] **Test (JVM, no device):** `ViewerHandoffTest`, 12 cases, including the
+      end-to-end reproduction of the broken path (`the pre-fix navigation id
+      resolved to no page at all`) asserted against the working one in the same
+      test.
+- [ ] **Device verification is still owed** → [todo.md](todo.md). Nothing here has
+      run on the S21+, and the `SavedStateHandle` transport is precisely the part
+      a JVM test cannot reach.
 
 ---
 

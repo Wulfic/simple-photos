@@ -204,26 +204,18 @@ class AlbumPhotoResolver @Inject constructor(
     /**
      * Resolve what a surface shows.
      *
-     * @param albumId the album to resolve, or `null` for the main gallery — the
-     *   context every non-album viewer entry point (gallery, search, people,
-     *   pets, memories, trips) lands in, because they all navigate with
-     *   `Screen.PhotoViewer.createRoute(photoId)` and no list. The gallery branch
-     *   mirrors `GalleryScreen` exactly: the whole mirror in `takenAt DESC,
-     *   filename ASC`, secure-excluded, bursts collapsed, no sort control.
+     * @param albumId the album to resolve, or `null` for the main gallery. The
+     *   gallery branch mirrors `GalleryScreen` exactly: the whole mirror in
+     *   `takenAt DESC, filename ASC`, secure-excluded, bursts collapsed, no sort
+     *   control.
+     *
+     * Since E3a this is the gallery's and an album's path only. Search, People,
+     * Pets, Memories and Trips no longer land here — they hand their own
+     * resolved order to [resolveExplicit], because the gallery's `takenAt DESC`
+     * is not the order any of them displayed.
      */
     suspend fun resolve(albumId: String?): ResolvedPhotos = withContext(Dispatchers.IO) {
-        // Fails CLOSED (B5). This resolver holds no state of its own, so it has
-        // nothing to "keep" on a failed fetch — the repository supplies the last
-        // set that loaded (persisted across process death, so an offline cold
-        // start still hides what it hid yesterday). Only when no set has EVER
-        // loaded is the answer unknown, and then both surfaces render their
-        // error state rather than an unfiltered list: a grid or a pager that
-        // silently stops hiding secured photos is the defect this whole file
-        // exists to close, and it must not reappear via the error path.
-        val secureBlobIds = when (val read = secureGalleryRepository.secureBlobIds()) {
-            is SecureBlobIds.Known -> read.ids
-            SecureBlobIds.Unavailable -> throw SecureFilterUnavailableException()
-        }
+        val secureBlobIds = requireSecureBlobIds()
         if (albumId == null) {
             return@withContext resolvePhotos(
                 members = photoRepository.getAllPhotos().first(),
@@ -239,6 +231,59 @@ class AlbumPhotoResolver @Inject constructor(
             collapseBurstStacks = false,
         )
     }
+
+    /**
+     * Resolve a list the launching grid already resolved (E3a).
+     *
+     * Used by the five non-album viewer entry points — Search, People, Pets,
+     * Memories, Trips — whose grids come from *server* endpoints (relevance
+     * ranking, face clusters, curated memories, trips) and so have an order the
+     * gallery branch cannot reproduce. They hand their order over via
+     * [VIEWER_PHOTO_IDS_KEY]; this turns it into pages.
+     *
+     * **The only thing applied here is the secure exclusion.** No sort, no burst
+     * collapse: [localIds] *is* the resolved list the grid rendered, so
+     * re-ordering or re-grouping it would be a second derivation of one list —
+     * the exact defect E3 removed, reintroduced inside E3's own follow-up. The
+     * secure filter is the one rule the launching grid genuinely cannot apply,
+     * because it draws thumbnails straight from the server and never consults
+     * the secure set at all.
+     *
+     * Fails CLOSED on an unknown secure set, identically to [resolve] — a handed
+     * -over list from a server endpoint is exactly where an unfiltered render
+     * would leak, since nothing upstream of here has filtered it.
+     */
+    suspend fun resolveExplicit(localIds: List<String>): ResolvedPhotos = withContext(Dispatchers.IO) {
+        val secureBlobIds = requireSecureBlobIds()
+        resolvePhotos(
+            members = orderPhotosBy(localIds, photoRepository.getPhotosByLocalIds(localIds)),
+            secureBlobIds = secureBlobIds,
+            sort = null,
+            collapseBurstStacks = false,
+        )
+    }
+
+    /**
+     * The secure set, or a throw.
+     *
+     * Fails CLOSED (B5). This resolver holds no state of its own, so it has
+     * nothing to "keep" on a failed fetch — the repository supplies the last set
+     * that loaded (persisted across process death, so an offline cold start
+     * still hides what it hid yesterday). Only when no set has EVER loaded is
+     * the answer unknown, and then every surface renders its error state rather
+     * than an unfiltered list: a grid or a pager that silently stops hiding
+     * secured photos is the defect this whole file exists to close, and it must
+     * not reappear via the error path.
+     *
+     * Shared by both entry points on purpose — a second, laxer read of the
+     * secure set on the [resolveExplicit] path would be the leak wearing the
+     * other hat.
+     */
+    private suspend fun requireSecureBlobIds(): Set<String> =
+        when (val read = secureGalleryRepository.secureBlobIds()) {
+            is SecureBlobIds.Known -> read.ids
+            SecureBlobIds.Unavailable -> throw SecureFilterUnavailableException()
+        }
 
     /** Persist the user's choice for [albumId]. Throws on a DataStore failure;
      *  the caller decides whether losing persistence is worth surfacing. */

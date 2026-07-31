@@ -39,7 +39,7 @@ import java.io.File
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun SearchScreen(
-    onPhotoClick: (String) -> Unit,
+    onPhotoClick: (photoId: String, photoIds: List<String>) -> Unit,
     onGalleryClick: () -> Unit,
     onAlbumsClick: () -> Unit,
     onTrashClick: () -> Unit,
@@ -169,12 +169,16 @@ fun SearchScreen(
                     gap = 2.dp,
                 ) { result, widthDp, heightDp ->
                     val localPhoto = viewModel.localPhotoMap[result.id]
-                    val clickId = localPhoto?.localId ?: result.id
                     SearchResultTile(
                         result = result,
                         serverBaseUrl = viewModel.serverBaseUrl,
                         localThumbnailPath = localPhoto?.thumbnailPath,
-                        onClick = { onPhotoClick(clickId) },
+                        // Hand the viewer the relevance order (#52, E3a). Without
+                        // it the pager fell back to the gallery's takenAt DESC,
+                        // so the first swipe left the result set.
+                        onClick = {
+                            onPhotoClick(viewModel.grid.viewerIdFor(result.id), viewModel.grid.viewerIds)
+                        },
                         widthDp = widthDp,
                         heightDp = heightDp
                     )
