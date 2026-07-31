@@ -133,6 +133,7 @@ describe("matchesAuditFilters", () => {
       "media_convert_failure",
       "import_failure",
       "encryption_failure",
+      "encryption_parked",
       "thumbnail_failure",
       "conversion_retired",
     ]) {
@@ -149,6 +150,12 @@ describe("matchesAuditFilters", () => {
     // appearing entirely, so it must survive "Failures only" — that filter is
     // exactly where a user goes to ask why.
     expect(FAILURE_EVENTS.has("conversion_retired")).toBe(true);
+    // B3a. The other terminal event, and the one with a confidentiality
+    // consequence: a parked photo's original stays unencrypted on disk and
+    // nothing retries it. It is invisible in the encryption banner by design
+    // (it would wedge the bar), so the logs are the only place it can surface —
+    // dropping it from this set makes it invisible everywhere.
+    expect(FAILURE_EVENTS.has("encryption_parked")).toBe(true);
     expect(FAILURE_EVENTS.has("media_convert")).toBe(false);
   });
 

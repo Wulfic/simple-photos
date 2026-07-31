@@ -396,6 +396,13 @@ fn photo_routes() -> Router<AppState> {
             "/admin/encryption/store-key",
             post(crate::photos::encryption::store_encryption_key),
         )
+        // Re-admit photos abandoned by the encryption attempt cap (B3a). The
+        // counterpart to /admin/conversion/retry-failed above — and the more
+        // urgent of the two, since a parked photo is plaintext at rest.
+        .route(
+            "/admin/encryption/retry-parked",
+            post(crate::photos::encryption::retry_parked_encryption),
+        )
         // Storage stats
         .route(
             "/settings/storage-stats",

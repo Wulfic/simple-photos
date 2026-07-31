@@ -97,6 +97,15 @@ pub enum AuditEvent {
     ImportFailure,
     /// Encryption of a stored file failed.
     EncryptionFailure,
+    /// A photo exhausted its encryption attempts and was parked
+    /// (`encryption_deferred = 1`). **Terminal**, and the same distinction
+    /// `ConversionRetired` draws for #40 — but with a sharper consequence: a
+    /// parked photo keeps its **plaintext original at rest**, and nothing ever
+    /// retries it. On the live library this silently held 2,500 photos (~17%)
+    /// unencrypted for a month, because the only signal was a per-attempt
+    /// `EncryptionFailure` indistinguishable from a transient one. Clearable by
+    /// `POST /api/admin/encryption/retry-parked`.
+    EncryptionParked,
     /// Thumbnail generation failed. Non-fatal — the photo is still registered
     /// and downloadable — but it renders as a placeholder forever, which
     /// otherwise looks like a client bug.
@@ -202,6 +211,7 @@ pub const FAILURE_EVENTS: &[AuditEvent] = &[
     AuditEvent::MediaConvertFailure,
     AuditEvent::ImportFailure,
     AuditEvent::EncryptionFailure,
+    AuditEvent::EncryptionParked,
     AuditEvent::ThumbnailFailure,
     AuditEvent::ConversionRetired,
     AuditEvent::LoginFailure,
@@ -235,6 +245,7 @@ impl AuditEvent {
             AuditEvent::MediaConvertFailure => "media_convert_failure",
             AuditEvent::ImportFailure => "import_failure",
             AuditEvent::EncryptionFailure => "encryption_failure",
+            AuditEvent::EncryptionParked => "encryption_parked",
             AuditEvent::ThumbnailFailure => "thumbnail_failure",
             AuditEvent::ConversionRetired => "conversion_retired",
             // Photos
@@ -491,6 +502,7 @@ mod tests {
         );
         assert_eq!(AuditEvent::ImportFailure.as_str(), "import_failure");
         assert_eq!(AuditEvent::EncryptionFailure.as_str(), "encryption_failure");
+        assert_eq!(AuditEvent::EncryptionParked.as_str(), "encryption_parked");
         assert_eq!(AuditEvent::ThumbnailFailure.as_str(), "thumbnail_failure");
     }
 
@@ -526,6 +538,30 @@ mod tests {
         }
     }
 
+    /// The **terminal** events must be in `FAILURE_EVENTS` too, and no
+    /// name-shaped rule can enforce it.
+    ///
+    /// `failure_filter_covers_every_failure_variant` keys off the `_failure`
+    /// suffix, which is exactly why it does not protect these two: a file the
+    /// server has GIVEN UP on is named for the giving-up, not for the failing.
+    /// Both are the row a user goes to "Failures only" to find — `_retired`
+    /// answers "why did this file never appear", `_parked` answers "why is this
+    /// photo still plaintext on disk" — and both would be silently filtered out
+    /// of the one view built to surface them.
+    #[test]
+    fn failure_filter_covers_the_terminal_events() {
+        let covered: std::collections::HashSet<&str> =
+            FAILURE_EVENTS.iter().map(|e| e.as_str()).collect();
+        for ev in [AuditEvent::ConversionRetired, AuditEvent::EncryptionParked] {
+            assert!(
+                covered.contains(ev.as_str()),
+                "{} is terminal but is missing from FAILURE_EVENTS, so the \
+                 'Failures only' filter will never show it",
+                ev.as_str()
+            );
+        }
+    }
+
     /// The list must not contain duplicates — a duplicate would bind one extra
     /// placeholder for no reason and quietly suggest the list is unreviewed.
     #[test]
@@ -549,6 +585,11 @@ mod tests {
             AuditEvent::MediaConvertFailure.as_str(),
             AuditEvent::ImportFailure.as_str(),
             AuditEvent::EncryptionFailure.as_str(),
+            // The per-attempt failure and the terminal park are the pair most
+            // at risk of a copy-paste collision, and folding them together is
+            // what makes a permanently-plaintext photo look like a transient
+            // hiccup.
+            AuditEvent::EncryptionParked.as_str(),
             AuditEvent::ThumbnailFailure.as_str(),
             AuditEvent::PhotoRegister.as_str(),
         ];

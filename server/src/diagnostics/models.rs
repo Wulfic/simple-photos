@@ -105,7 +105,15 @@ pub struct UserStats {
 #[derive(Debug, Serialize)]
 pub struct PhotoStats {
     pub total_photos: i64,
+    /// Rows holding an encrypted blob. Must be queried with a predicate — see
+    /// `collect_photo_stats`, where this was a copy of `total_photos`.
     pub encrypted_count: i64,
+    /// Rows with no encrypted blob: the plaintext-at-rest set, parked or not.
+    pub unencrypted_count: i64,
+    /// The subset of `unencrypted_count` that the migration has abandoned and
+    /// nothing will retry. Non-zero here is a standing confidentiality gap, not
+    /// a backlog, and is the number B3a exists to stop hiding.
+    pub parked_count: i64,
     pub total_file_bytes: i64,
     pub total_thumb_bytes: i64,
     pub photos_with_thumbs: i64,

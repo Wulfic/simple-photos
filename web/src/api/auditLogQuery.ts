@@ -21,6 +21,10 @@ export const FAILURE_EVENTS: ReadonlySet<string> = new Set([
   "media_convert_failure",
   "import_failure",
   "encryption_failure",
+  // Terminal (B3a). The per-attempt failure above can be transient; this one
+  // means the server stopped trying and the original is still plaintext on
+  // disk. "Failures only" is exactly where an operator goes to ask why.
+  "encryption_parked",
   "thumbnail_failure",
   "conversion_retired",
   "login_failure",

@@ -136,9 +136,20 @@ pub async fn encryption_status(
 ) -> Result<Json<Value>, AppError> {
     // ── Server-visible pending encryption count ──────────────────────────────
     // Mirrors the `encrypted-sync` eligibility filter (excludes secure-gallery
-    // items) and counts rows still lacking an encrypted blob. `encryption_deferred`
-    // rows are intentionally excluded — those are parked (e.g. Windows LocalSystem
-    // import defer) and would otherwise wedge the banner at a non-zero count.
+    // items) and counts rows still lacking an encrypted blob.
+    //
+    // `encryption_deferred` rows stay out of this count because they are not
+    // *pending* — nothing will ever process them — and folding them in would
+    // wedge the progress bar at a non-zero count forever. That exclusion is
+    // correct and stays. What was wrong is that it was the ONLY treatment they
+    // got: excluded from the bar and reported nowhere else, so 2,500 photos
+    // (~17% of the live library) sat as plaintext originals at rest for a month
+    // with every surface reporting "encryption complete". They are reported
+    // separately as `parked` below (B3a).
+    //
+    // The only writer of `encryption_deferred = 1` is `record_encryption_failure`
+    // at the attempt cap — this comment previously claimed a "Windows
+    // LocalSystem import defer" path, which does not exist.
     let server_pending: i64 = sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM photos p \
              WHERE p.user_id = ?1 \
@@ -151,6 +162,18 @@ pub async fn encryption_status(
     .fetch_one(&state.read_pool)
     .await
     .unwrap_or(0);
+
+    // Photos the encryption migration has given up on. Deliberately read
+    // *outside* the batch tracker below and never added to `pending` — this is a
+    // standing condition, not queued work, and the whole reason parked rows were
+    // hidden in the first place is that feeding them to a progress bar wedges it.
+    // Reporting them to the operator is a different question from counting them
+    // as progress, and B3a is the case for answering the first one.
+    let parked = crate::photos::server_migrate::count_parked(
+        &state.read_pool,
+        Some(auth.user_id.as_str()),
+    )
+    .await;
 
     let mut reg = registry().lock().unwrap();
     let entry = reg.entry(auth.user_id.clone()).or_default();
@@ -210,6 +233,12 @@ pub async fn encryption_status(
         "pending": total_pending,
         "server_pending": server_pending,
         "client_pending": client_pending,
+        // Parked photos: encryption failed `MIGRATION_MAX_ATTEMPTS` times and
+        // was abandoned, leaving the original UNENCRYPTED at rest. Not part of
+        // `pending`/`total`/`done` — a client must render this as a standing
+        // warning with its own remedy (`/admin/encryption/retry-parked`), never
+        // as remaining progress.
+        "parked": parked,
         "eta_seconds": eta_seconds,
         // Per-source breakdown for debug UIs only; production banners read the
         // aggregate above.

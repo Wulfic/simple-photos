@@ -25,34 +25,55 @@ and the standing deploy/device verification debt.
 
 ## 1. Code
 
-### B3a — Parked (permanently unencrypted) photos — live data, found 2026-07-22
+### B3a — Parked (permanently unencrypted) photos — CODE DONE 2026-07-30
 
-**2,500 of 15,014 photos (~17% of the live library) are `encryption_deferred = 1`
-with `encryption_attempts = 3`** — parked after three hard encryption failures
-(historically the pre-chunked OOM, ~5x RAM). They never encrypt on their own, so
-they sit as **plaintext originals at rest** indefinitely: a confidentiality gap,
-not a cosmetic one. Found while verifying #46 — the parked set is exactly what
-was re-thrashing the ladder.
+Found 2026-07-22: **2,500 of 15,014 live photos (~17%) were `encryption_deferred
+= 1`** — parked after three hard encryption failures (the pre-chunked OOM, ~5x
+RAM), never retried, sitting as **plaintext originals at rest**.
 
-- [ ] Confirm the failure cause per row. Migration 024's chunked `SPCHNKB2` path
-      may now encrypt cleanly the files that OOM'd the old whole-file path.
-- [ ] One-shot un-park: reset `encryption_deferred = 0` (and
-      `encryption_attempts = 0`) for these rows and let `server_migrate` retry
-      them through the chunked path. The existing 3-attempt cap already re-parks
-      a genuinely un-encryptable file, so this cannot reintroduce the
-      infinite-retry → re-OOM loop.
-- [ ] Surface the parked count in Server Logs / the encryption banner.
-      `status.rs` deliberately hides parked rows so the banner does not wedge —
-      **that hiding is precisely why 17% of the library sat unencrypted
-      unnoticed.** Hiding a stuck item from a progress bar is fine; hiding it
-      from the operator is not.
-- [ ] Verify on the live box before/after: the parked count must fall to ~0,
-      minus any truly corrupt originals — and those must re-park **terminally,
-      not loop**.
+**The live evidence changed the item. CT132 was wiped and reinstalled
+2026-07-22 18:06Z** (DB birth time; all 38 migrations at 18:06:33; first photo
+row 18:14Z) — *after* the 05:51Z verification in memory
+`issue46-rethrash-parked-2026-07-22`, which is why that memory reads as current
+and is not. Live state now: 12,856 photos, **0 unencrypted, 0 parked,
+`encryption_attempts = 0` on every row**, 235 blobs on the chunked v2 path.
 
-> A full wipe-and-reinstall makes the un-park moot (everything re-ingests through
-> the chunked path). It does **not** make the third item moot: the same silent
-> parking will hide the next backlog just as well.
+- [x] Confirm the failure cause per row. Per-row `encryption_error` was
+      destroyed by the wipe — but **superseded by a stronger result**: the same
+      source library re-ingested through the chunked path with zero failures and
+      zero parks, and 235 files cleared the >32 MiB threshold that used to OOM.
+      That is a re-run of the experiment, not a guess. **Hypothesis confirmed.**
+- [x] ~~One-shot un-park migration~~ — **rejected, deliberately.** Nothing is
+      left to un-park on any reachable box, so a blanket
+      `UPDATE … SET encryption_deferred = 0` migration would be a no-op
+      everywhere we can observe, unverifiable by construction, and — being
+      one-shot — useless against the *next* backlog, which is the failure mode
+      this item is actually about. Replaced by the operator action below.
+- [x] Surface the parked count **and** give it a remedy. These were two halves
+      of one feature: a count nobody can act on is half a fix, an un-park nobody
+      can see the need for is the other half. Shipped:
+      `parked` on `/api/status/encryption` (held **outside** `pending`/`total`/
+      `done` — the exclusion that keeps the banner from wedging is correct and
+      stays; being reported *nowhere else* was the bug); `unencrypted_count` +
+      `parked_count` in admin Diagnostics with a red card and a Retry button; a
+      terminal `encryption_parked` audit event mirroring #40's
+      `conversion_retired`; and `POST /api/admin/encryption/retry-parked`,
+      the counterpart to `/admin/conversion/retry-failed`.
+- [ ] **Live verify — blocked on the redeploy below.** On a clean box the
+      expected reading is `parked: 0` everywhere. The real check is the
+      round-trip: flip one row to `encryption_deferred = 1`, confirm Diagnostics
+      turns red and `/status/encryption` reports `parked: 1` **without**
+      `pending`/`total` moving, hit Retry, confirm it drains to 0 and the photo
+      re-encrypts. A genuinely corrupt original must re-park **terminally, not
+      loop** — the 3-attempt cap is untouched, so this is a check, not a hope.
+
+> **Found while fixing it, in a surface the item never named:** the admin
+> Diagnostics "Encrypted" card ran `SELECT COUNT(*) FROM photos` — the *same
+> query as `total_photos`*, no predicate — so it reported 100% coverage
+> unconditionally and read "15,014 of 15,014 encrypted" on the very library that
+> had 2,500 plaintext originals. Fixed here.
+> `encrypted_count_does_not_just_echo_the_total` asserts the two counts *differ*,
+> because a single-row fixture passes against the broken query.
 
 ---
 
@@ -151,7 +172,13 @@ was found 4 commits behind `dev` while we were "testing the deployed backfill".
 Check the box's `git HEAD` **and** a log-format fingerprint — container uptime
 proves nothing about which code is in it.
 
-- [ ] Redeploy `dev` (currently `b339a32`).
+**Box state as of 2026-07-30:** checkout `b339a32` on `dev`, image built
+2026-07-22 18:03Z, container restarted 2026-07-29 18:42Z, **DB wiped and
+re-created 2026-07-22 18:06Z** (12,856 photos, fully encrypted). So the box runs
+`b339a32` and every fix merged after it — E3, E3a, B5, B3a — has never run here.
+
+- [ ] Redeploy `dev`. **Also unblocks B3a's live verification** (above), which is
+      the only part of B3a still open.
 - [ ] **A1/#42** — the 29 photos lost to page boundaries and the badge numbers do
       not change until the box runs the fix.
 - [ ] **A2/#38** — migration `033` backfills on first boot against a ~15k-row

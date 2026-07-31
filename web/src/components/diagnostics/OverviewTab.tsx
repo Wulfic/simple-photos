@@ -7,6 +7,7 @@
  */
 import { useState } from "react";
 import { DiagnosticsResponse } from "../../api/client";
+import { api } from "../../api/client";
 import { Section, StatCard } from "./shared";
 import { formatBytes, formatUptime, formatDate, relativeTime } from "../../utils/formatters";
 
@@ -29,6 +30,14 @@ const EVENT_COLORS: Record<string, string> = {
   // Blobs
   blob_upload: "text-cyan-600 dark:text-cyan-400",
   blob_delete: "text-red-500 dark:text-red-400",
+  media_convert_failure: "text-red-600 dark:text-red-400",
+  import_failure: "text-red-600 dark:text-red-400",
+  encryption_failure: "text-red-600 dark:text-red-400",
+  thumbnail_failure: "text-red-600 dark:text-red-400",
+  conversion_retired: "text-amber-600 dark:text-amber-400",
+  // Terminal, and a confidentiality gap rather than a lost preview (B3a) — see
+  // the same entry in ServerLogsTab.
+  encryption_parked: "text-red-700 dark:text-red-300",
   // Photos
   photo_register: "text-cyan-600 dark:text-cyan-400",
   photo_favorite: "text-pink-500 dark:text-pink-400",
@@ -106,11 +115,46 @@ function TimingBar({ label, ms, maxMs }: { label: string; ms: number; maxMs: num
   );
 }
 
-function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
+function OverviewTab({
+  metrics,
+  onRefresh,
+}: {
+  metrics: DiagnosticsResponse;
+  /** Re-fetches the metrics so the parked count reflects a completed retry. */
+  onRefresh?: () => void;
+}) {
   const { server, database, storage, users, photos, audit, client_logs, backup, performance, timings } =
     metrics;
 
   const [expandedBackupServer, setExpandedBackupServer] = useState<string | null>(null);
+  const [retryingParked, setRetryingParked] = useState(false);
+  const [retryParkedResult, setRetryParkedResult] = useState<string | null>(null);
+
+  async function onRetryParked() {
+    setRetryingParked(true);
+    setRetryParkedResult(null);
+    try {
+      const { cleared } = await api.encryption.retryParked();
+      // Encryption runs in the background, so the count does not drop the
+      // instant this returns — say what actually happened rather than implying
+      // the work is already done.
+      setRetryParkedResult(
+        cleared > 0
+          ? `${cleared.toLocaleString()} photo${cleared === 1 ? "" : "s"} re-queued. ` +
+              "Encryption runs in the background; refresh to watch the count fall."
+          : "Nothing was parked."
+      );
+      onRefresh?.();
+    } catch (e) {
+      // An un-park that silently fails leaves the operator believing the gap is
+      // closed, which is worse than not offering the button.
+      setRetryParkedResult(
+        `Retry failed: ${e instanceof Error ? e.message : String(e)}`
+      );
+    } finally {
+      setRetryingParked(false);
+    }
+  }
 
   return (
     <div className="space-y-4">
@@ -333,13 +377,61 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
       <Section title="Photos">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <StatCard label="Total" value={photos.total_photos.toLocaleString()} />
-          <StatCard label="Encrypted" value={photos.encrypted_count.toLocaleString()} />
+          <StatCard
+            label="Encrypted"
+            value={photos.encrypted_count.toLocaleString()}
+            color={photos.unencrypted_count > 0 ? "yellow" : "green"}
+          />
+          <StatCard
+            label="Unencrypted"
+            value={photos.unencrypted_count.toLocaleString()}
+            subtitle={photos.unencrypted_count > 0 ? "plaintext at rest" : undefined}
+            color={photos.unencrypted_count > 0 ? "yellow" : "green"}
+          />
+          {/* Red, not amber: everything else in this grid is a statistic, but a
+              non-zero parked count is a confidentiality gap that no background
+              task will ever close. It is only visible here because it is
+              excluded from the encryption banner by design (B3a). */}
+          <StatCard
+            label="Parked (never retried)"
+            value={photos.parked_count.toLocaleString()}
+            subtitle={photos.parked_count > 0 ? "encryption gave up" : undefined}
+            color={photos.parked_count > 0 ? "red" : "green"}
+          />
           <StatCard label="With Thumbs" value={photos.photos_with_thumbs.toLocaleString()} />
           <StatCard label="File Data" value={formatBytes(photos.total_file_bytes)} />
           <StatCard label="Thumb Data" value={formatBytes(photos.total_thumb_bytes)} />
           <StatCard label="Favorited" value={photos.favorited_count.toLocaleString()} />
           <StatCard label="Tagged" value={photos.tagged_count.toLocaleString()} />
         </div>
+
+        {/* The count alone is only half the fix — an operator who can see the
+            gap but not close it is no better off. */}
+        {photos.parked_count > 0 && (
+          <div className="mt-3 p-3 rounded-lg border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-900/20">
+            <p className="text-xs text-red-700 dark:text-red-300">
+              <span className="font-semibold">
+                {photos.parked_count.toLocaleString()} photo
+                {photos.parked_count === 1 ? "" : "s"} could not be encrypted
+              </span>{" "}
+              after three attempts and {photos.parked_count === 1 ? "was" : "were"}{" "}
+              abandoned. Their originals remain on disk unencrypted, and nothing
+              retries them automatically. Retrying is safe: the three-attempt cap
+              still applies, so a genuinely unreadable file is parked again rather
+              than looping.
+            </p>
+            <button
+              onClick={onRetryParked}
+              disabled={retryingParked}
+              className="btn btn-secondary btn-sm mt-2 disabled:opacity-50"
+            >
+              {retryingParked ? "Retrying…" : "Retry encryption"}
+            </button>
+            {retryParkedResult && (
+              <p className="mt-2 text-xs text-fg-muted">{retryParkedResult}</p>
+            )}
+          </div>
+        )}
         {/* Media type breakdown */}
         {Object.keys(photos.photos_by_media_type).length > 0 && (
           <div className="mt-3">

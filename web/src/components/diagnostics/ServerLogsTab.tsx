@@ -37,6 +37,10 @@ const EVENT_COLORS: Record<string, string> = {
   // the server has GIVEN UP on is distinguishable at a glance from one that
   // merely failed this pass and will be retried.
   conversion_retired: "text-amber-600 dark:text-amber-400",
+  // Terminal like conversion_retired, but red rather than amber: a retired
+  // conversion costs a file its web preview, a parked photo leaves its original
+  // unencrypted at rest. Only the second one is a confidentiality gap (B3a).
+  encryption_parked: "text-red-700 dark:text-red-300",
   // Photos
   photo_register: "text-cyan-600 dark:text-cyan-400",
   photo_favorite: "text-pink-500 dark:text-pink-400",
