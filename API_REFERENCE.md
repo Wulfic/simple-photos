@@ -200,14 +200,14 @@ Membership and photos are untouched.
 | `GET` | `/api/ai/status` | Bearer | — | `{ enabled, gpu_available, photos_processed, photos_pending, face_detections, face_clusters, object_detections, pet_detections, pet_clusters, face_model_loaded, object_model_loaded, degraded_mode, allow_heuristic_fallback }` |
 | `POST` | `/api/ai/toggle` | Bearer | `{ enabled }` | **200** |
 | `POST` | `/api/ai/reprocess` | Bearer | `{ photo_ids?: [string] }` | `{ cleared, message }` |
-| `GET` | `/api/ai/faces` | Bearer | — | `[{ id, label, photo_count, representative, created_at, updated_at }]` |
+| `GET` | `/api/ai/faces` | Bearer | — | `[{ id, label, photo_count, representative, rep_bbox_x, rep_bbox_y, rep_bbox_w, rep_bbox_h, created_at, updated_at }]` |
 | `POST` | `/api/ai/faces/merge` | Bearer | `{ cluster_ids: [i64] }` | **200** |
 | `POST` | `/api/ai/faces/split` | Bearer | `{ detection_ids: [i64] }` | **200** |
 | `GET` | `/api/ai/faces/{cluster_id}/photos` | Bearer | — | `[{ id, photo_id, cluster_id, bbox_x, bbox_y, bbox_w, bbox_h, confidence, created_at }]` |
 | `PUT` | `/api/ai/faces/{cluster_id}/name` | Bearer | `{ name }` | **200** |
 | `GET` | `/api/ai/objects` | Bearer | — | `[{ class_name, photo_count, avg_confidence }]` |
 | `GET` | `/api/ai/objects/{class_name}/photos` | Bearer | — | `[{ id, photo_id, class_name, confidence, bbox_x, bbox_y, bbox_w, bbox_h, created_at }]` |
-| `GET` | `/api/ai/pets` | Bearer | — | `[{ id, label, species, photo_count, representative, created_at, updated_at }]` |
+| `GET` | `/api/ai/pets` | Bearer | — | `[{ id, label, species, photo_count, representative, rep_bbox_x, rep_bbox_y, rep_bbox_w, rep_bbox_h, created_at, updated_at }]` |
 | `POST` | `/api/ai/pets/merge` | Bearer | `{ cluster_ids: [i64] }` | **200** |
 | `GET` | `/api/ai/pets/{cluster_id}/photos` | Bearer | — | `[{ id, photo_id, cluster_id, species, confidence, created_at }]` |
 | `PUT` | `/api/ai/pets/{cluster_id}/name` | Bearer | `{ name }` | **200** |
@@ -215,6 +215,13 @@ Membership and photos are untouched.
 > List endpoints return **bare JSON arrays**, not wrapper objects. Cluster
 > ids are numeric (`i64`); `representative` is a photo id usable with
 > `/api/photos/{id}/thumb`.
+>
+> On both cluster lists, `representative` is resolved to a photo the caller may
+> actually render — a detection sitting on a secure-album photo is skipped — and
+> is `null` when the whole cluster is ineligible. The four `rep_bbox_*` are that
+> photo's detection box, normalised 0–1 against the whole image, for framing the
+> tile; all four are `null` together whenever no box resolved, so treat a missing
+> width/height as "draw a plain crop" rather than substituting a default.
 
 ---
 

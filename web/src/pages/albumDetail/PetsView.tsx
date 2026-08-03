@@ -9,6 +9,7 @@ import { useAuthStore } from "../../store/auth";
 import SmartClusterList from "./SmartClusterList";
 import SmartAlbumDetail from "./SmartAlbumDetail";
 import { resolvePhotosByServerId } from "./resolveServerPhotos";
+import { clusterFaceCropStyle } from "../../utils/thumbnailCss";
 
 const PetIcon = (
   <svg className="w-10 h-10 text-fg-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -35,6 +36,11 @@ export function PetsView() {
         href: `/albums/smart-pets/${cluster.id}`,
         title: cluster.label || `Unknown ${cluster.species}`,
         alt: cluster.label || cluster.species,
+        // Same framing the People tiles get (#48d). The maths in
+        // `clusterFaceCropStyle` is about a normalised box, not about faces, so
+        // the pet's box goes through the identical path — and returns undefined
+        // when the server has no box, leaving the plain cover crop.
+        imgStyle: clusterFaceCropStyle(cluster),
         meta: (
           <p className="text-xs text-fg-muted text-center">
             {cluster.photo_count} photo{cluster.photo_count !== 1 ? "s" : ""}

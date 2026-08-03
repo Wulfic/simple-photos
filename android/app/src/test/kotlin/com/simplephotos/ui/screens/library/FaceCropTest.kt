@@ -127,4 +127,34 @@ class FaceCropTest {
         assertEquals(1f, r.zx, eps)
         assertEquals(1f, r.zy, eps)
     }
+
+    // ── tileFaceBoxOf — the DTO guard shared by the People and Pets tiles ──
+
+    @Test
+    fun `a cluster with no extent yields no box`() {
+        // Both People and Pets legitimately receive all-null rep_bbox_*: a
+        // secured-out cluster, or a pet processed before migration 039. The
+        // caller must get null and draw a plain crop, not a degenerate window.
+        assertNull(tileFaceBoxOf(null, null, null, null))
+        assertNull(tileFaceBoxOf(0.1, 0.2, null, 0.4))
+        assertNull(tileFaceBoxOf(0.1, 0.2, 0.3, null))
+    }
+
+    @Test
+    fun `a missing origin is a real zero, not a missing box`() {
+        // An animal flush against the top-left corner has x = y = 0, which JSON
+        // may or may not carry. Treating that as "no box" would drop framing on
+        // exactly the photos where it matters most.
+        val b = tileFaceBoxOf(null, null, 0.3, 0.4)!!
+        assertEquals(0f, b.x, eps)
+        assertEquals(0f, b.y, eps)
+        assertEquals(0.3f, b.w, eps)
+        assertEquals(0.4f, b.h, eps)
+    }
+
+    @Test
+    fun `a complete box passes through unchanged`() {
+        val b = tileFaceBoxOf(0.1, 0.2, 0.3, 0.4)!!
+        assertEquals(TileFaceBox(0.1f, 0.2f, 0.3f, 0.4f), b)
+    }
 }

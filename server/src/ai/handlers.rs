@@ -310,19 +310,8 @@ pub(crate) async fn fetch_face_clusters(
     pool: &sqlx::SqlitePool,
     user_id: &str,
 ) -> Result<Vec<FaceClusterSummary>, sqlx::Error> {
-    // The representative photo, resolved to one the client can render: the
-    // stored representative if still eligible, else the highest-confidence
-    // detection whose photo is eligible. `?1` is the user id (bound once, reused
-    // by every occurrence per SQLite numbered-parameter semantics).
-    let rep_photo = format!(
-        "COALESCE(\
-            (SELECT p.id FROM photos p \
-             WHERE p.id = fc.representative AND p.user_id = ?1 AND {ELIGIBLE_PREDICATE}), \
-            (SELECT fd.photo_id FROM face_detections fd \
-             JOIN photos p ON p.id = fd.photo_id \
-             WHERE fd.cluster_id = fc.id AND p.user_id = ?1 AND {ELIGIBLE_PREDICATE} \
-             ORDER BY fd.confidence DESC LIMIT 1))"
-    );
+    let rep_photo = eligible_representative_sql("fc", "face_detections");
+    let bbox_join = representative_bbox_join("fc", "face_detections", &rep_photo);
 
     let sql = format!(
         "SELECT fc.id, fc.label, fc.photo_count, \
@@ -331,16 +320,60 @@ pub(crate) async fn fetch_face_clusters(
                 rep.bbox_w AS rep_bbox_w, rep.bbox_h AS rep_bbox_h, \
                 fc.created_at, fc.updated_at \
          FROM face_clusters fc \
-         LEFT JOIN face_detections rep ON rep.id = (\
-             SELECT fd2.id FROM face_detections fd2 \
-             WHERE fd2.cluster_id = fc.id \
-               AND fd2.photo_id = {rep_photo} \
-             ORDER BY fd2.confidence DESC LIMIT 1) \
+         {bbox_join} \
          WHERE fc.user_id = ?1 AND fc.photo_count >= 2 \
          ORDER BY fc.photo_count DESC"
     );
 
     sqlx::query_as(&sql).bind(user_id).fetch_all(pool).await
+}
+
+/// SQL selecting a cluster's representative photo id, resolved to one the client
+/// can actually render: the stored `representative` if it is still eligible,
+/// else the highest-confidence detection whose photo is eligible.
+///
+/// `?1` is the user id — bound once and reused by every occurrence, per SQLite
+/// numbered-parameter semantics. `cluster_alias` is the clusters table's alias in
+/// the caller's `FROM`; `detections` is the per-photo detection table.
+///
+/// **One derivation, two callers, deliberately.** This started as face-only, and
+/// when the pet path needed the same thing the obvious move was to write a second
+/// copy — which is the exact failure mode recorded five times over in `todo.md`
+/// (#42 counts, #48a crop formula, #51 blob URLs, #52/E3 album lists). The pet
+/// path had in fact already drifted: it resolved its representative with no
+/// eligibility filter at all, so a pet cluster whose best detection sat on a
+/// secure-album photo pointed the tile at a photo the client must not render —
+/// the #48(b) defect the face path had fixed in `9046915`. Adding a bbox on top
+/// of that would have made it worse, not better: an unrenderable id merely
+/// placeholders, but a bbox tells the tile to crop *into* a secured photo.
+fn eligible_representative_sql(cluster_alias: &str, detections: &str) -> String {
+    format!(
+        "COALESCE(\
+            (SELECT p.id FROM photos p \
+             WHERE p.id = {cluster_alias}.representative AND p.user_id = ?1 AND {ELIGIBLE_PREDICATE}), \
+            (SELECT d.photo_id FROM {detections} d \
+             JOIN photos p ON p.id = d.photo_id \
+             WHERE d.cluster_id = {cluster_alias}.id AND p.user_id = ?1 AND {ELIGIBLE_PREDICATE} \
+             ORDER BY d.confidence DESC LIMIT 1))"
+    )
+}
+
+/// `LEFT JOIN` exposing the representative detection's bbox as `rep.bbox_*`.
+///
+/// Joins the highest-confidence detection *on the representative photo* rather
+/// than the cluster's best overall, so the box always belongs to the photo the
+/// tile is actually showing. It is a LEFT join because both inputs legitimately
+/// fail to resolve — a fully-secured cluster has no eligible representative, and
+/// a pet row processed before migration 039 has no stored box — and in both cases
+/// the client must get NULLs and fall back to a plain crop, not lose the row.
+fn representative_bbox_join(cluster_alias: &str, detections: &str, rep_photo: &str) -> String {
+    format!(
+        "LEFT JOIN {detections} rep ON rep.id = (\
+             SELECT d2.id FROM {detections} d2 \
+             WHERE d2.cluster_id = {cluster_alias}.id \
+               AND d2.photo_id = {rep_photo} \
+             ORDER BY d2.confidence DESC LIMIT 1)"
+    )
 }
 
 /// GET /api/ai/faces/:cluster_id/photos — list photos in a face cluster.
@@ -752,26 +785,60 @@ pub async fn list_pet_clusters(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<Vec<PetClusterSummary>>, AppError> {
-    // Smart-album rule: require at least 2 distinct photos before surfacing a
-    // pet card. Same rationale as faces — a single lone detection is noise.
-    let clusters: Vec<PetClusterSummary> = sqlx::query_as(
-        "SELECT pc.id, pc.label, pc.species, pc.photo_count, \
-                COALESCE(\
-                    pc.representative, \
-                    (SELECT pd.photo_id FROM pet_detections pd \
-                     WHERE pd.cluster_id = pc.id \
-                     ORDER BY pd.confidence DESC LIMIT 1) \
-                ) AS representative, \
-                pc.created_at, pc.updated_at \
-         FROM pet_clusters pc \
-         WHERE pc.user_id = ?1 AND pc.photo_count >= 2 \
-         ORDER BY pc.photo_count DESC, pc.species ASC",
-    )
-    .bind(&auth.user_id)
-    .fetch_all(&state.pool)
-    .await?;
+    let clusters = fetch_pet_clusters(&state.pool, &auth.user_id).await?;
+
+    // Same reporting as the face path: a cluster with no renderable
+    // representative gives the client a placeholder tile, and silence about that
+    // is what made #48's "albums with no thumbnail" take so long to explain.
+    for c in &clusters {
+        if c.representative.is_none() {
+            tracing::warn!(
+                cluster_id = c.id,
+                label = c.label.as_deref().unwrap_or("(unnamed)"),
+                species = %c.species,
+                photo_count = c.photo_count,
+                "pet cluster has no thumbnail-resolvable representative — every \
+                 detection is on a secured or ineligible photo; tile will placeholder"
+            );
+        }
+    }
 
     Ok(Json(clusters))
+}
+
+/// Query the pet-cluster summaries for a user, including the representative
+/// animal's bbox so clients can frame the Pets tile the way People tiles are
+/// framed (#48(d)).
+///
+/// Shares [`eligible_representative_sql`] with [`fetch_face_clusters`], which is
+/// what brings the eligibility guarantee of `9046915` to the pet path: this query
+/// previously had no eligibility filter whatsoever, so a cluster whose
+/// highest-confidence detection sat on a secure-album photo resolved the tile to
+/// a photo id the gallery mirror does not contain.
+///
+/// Extracted from the handler so it can be unit-tested against an in-memory DB.
+pub(crate) async fn fetch_pet_clusters(
+    pool: &sqlx::SqlitePool,
+    user_id: &str,
+) -> Result<Vec<PetClusterSummary>, sqlx::Error> {
+    let rep_photo = eligible_representative_sql("pc", "pet_detections");
+    let bbox_join = representative_bbox_join("pc", "pet_detections", &rep_photo);
+
+    // Smart-album rule: require at least 2 distinct photos before surfacing a
+    // pet card. Same rationale as faces — a single lone detection is noise.
+    let sql = format!(
+        "SELECT pc.id, pc.label, pc.species, pc.photo_count, \
+                {rep_photo} AS representative, \
+                rep.bbox_x AS rep_bbox_x, rep.bbox_y AS rep_bbox_y, \
+                rep.bbox_w AS rep_bbox_w, rep.bbox_h AS rep_bbox_h, \
+                pc.created_at, pc.updated_at \
+         FROM pet_clusters pc \
+         {bbox_join} \
+         WHERE pc.user_id = ?1 AND pc.photo_count >= 2 \
+         ORDER BY pc.photo_count DESC, pc.species ASC"
+    );
+
+    sqlx::query_as(&sql).bind(user_id).fetch_all(pool).await
 }
 
 /// GET /api/ai/pets/:cluster_id/photos — list photos in a pet cluster.
@@ -1082,6 +1149,244 @@ mod tests {
 
         let clusters = fetch_face_clusters(&pool, u).await.unwrap();
         assert_eq!(clusters[0].representative.as_deref(), Some("p2"));
+    }
+
+    // ── Pet clusters (#48d) ──────────────────────────────────────────────
+
+    async fn insert_pet_cluster(
+        pool: &sqlx::SqlitePool,
+        id: i64,
+        user: &str,
+        species: &str,
+        photo_count: i64,
+    ) {
+        sqlx::query(
+            "INSERT INTO pet_clusters (id, user_id, label, species, representative, photo_count, created_at, updated_at) \
+             VALUES (?, ?, NULL, ?, NULL, ?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        )
+        .bind(id)
+        .bind(user)
+        .bind(species)
+        .bind(photo_count)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn insert_pet_detection(
+        pool: &sqlx::SqlitePool,
+        user: &str,
+        photo: &str,
+        cluster: i64,
+        species: &str,
+        bbox: Option<(f64, f64, f64, f64)>,
+        confidence: f64,
+    ) {
+        sqlx::query(
+            "INSERT INTO pet_detections (photo_id, user_id, cluster_id, species, confidence, bbox_x, bbox_y, bbox_w, bbox_h, created_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '2026-01-01T00:00:00Z')",
+        )
+        .bind(photo)
+        .bind(user)
+        .bind(cluster)
+        .bind(species)
+        .bind(confidence)
+        .bind(bbox.map(|b| b.0))
+        .bind(bbox.map(|b| b.1))
+        .bind(bbox.map(|b| b.2))
+        .bind(bbox.map(|b| b.3))
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn insert_object_detection(
+        pool: &sqlx::SqlitePool,
+        user: &str,
+        photo: &str,
+        class_name: &str,
+        bbox: (f64, f64, f64, f64),
+        confidence: f64,
+    ) {
+        sqlx::query(
+            "INSERT INTO object_detections (photo_id, user_id, class_name, confidence, bbox_x, bbox_y, bbox_w, bbox_h) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(photo)
+        .bind(user)
+        .bind(class_name)
+        .bind(confidence)
+        .bind(bbox.0)
+        .bind(bbox.1)
+        .bind(bbox.2)
+        .bind(bbox.3)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    /// The headline of #48(d): Pet tiles get a box to frame, exactly as People
+    /// tiles do. RED before this change — `PetClusterSummary` had no
+    /// `rep_bbox_*` and `pet_detections` had no columns to read them from.
+    #[tokio::test]
+    async fn pet_clusters_carry_representative_bbox() {
+        let pool = memory_pool().await;
+        let u = "user-1";
+        insert_pet_cluster(&pool, 1, u, "dog", 2).await;
+        insert_photo(&pool, "p1", u).await;
+        insert_photo(&pool, "p2", u).await;
+        insert_pet_detection(&pool, u, "p1", 1, "dog", Some((0.1, 0.2, 0.3, 0.4)), 0.9).await;
+        insert_pet_detection(&pool, u, "p2", 1, "dog", Some((0.5, 0.5, 0.1, 0.1)), 0.5).await;
+
+        let clusters = fetch_pet_clusters(&pool, u).await.unwrap();
+        assert_eq!(clusters.len(), 1);
+        let c = &clusters[0];
+        assert_eq!(c.representative.as_deref(), Some("p1"));
+        assert_eq!(c.rep_bbox_x, Some(0.1));
+        assert_eq!(c.rep_bbox_y, Some(0.2));
+        assert_eq!(c.rep_bbox_w, Some(0.3));
+        assert_eq!(c.rep_bbox_h, Some(0.4));
+    }
+
+    /// The defect the todo only half-named. The pet query had **no eligibility
+    /// filter at all**, so this returned the secured "p1" — the #48(b) bug the
+    /// face path fixed in `9046915`, still live on the pet path. Verified RED
+    /// against the old query.
+    ///
+    /// Shipping the bbox without this would have made it worse rather than
+    /// better: an unrenderable id merely placeholders, but a bbox instructs the
+    /// tile to crop *into* the secured photo.
+    #[tokio::test]
+    async fn pet_representative_falls_through_a_secured_photo() {
+        let pool = memory_pool().await;
+        let u = "user-1";
+        insert_pet_cluster(&pool, 1, u, "cat", 2).await;
+        insert_photo(&pool, "p1", u).await;
+        insert_photo(&pool, "p2", u).await;
+        insert_pet_detection(&pool, u, "p1", 1, "cat", Some((0.1, 0.2, 0.3, 0.4)), 0.9).await;
+        insert_pet_detection(&pool, u, "p2", 1, "cat", Some((0.5, 0.6, 0.1, 0.1)), 0.5).await;
+        secure_photo(&pool, "p1").await;
+
+        let clusters = fetch_pet_clusters(&pool, u).await.unwrap();
+        assert_eq!(clusters.len(), 1);
+        let c = &clusters[0];
+        assert_eq!(
+            c.representative.as_deref(),
+            Some("p2"),
+            "must skip the secured photo"
+        );
+        assert_eq!(c.rep_bbox_x, Some(0.5), "bbox must be p2's pet, not p1's");
+        assert_eq!(c.rep_bbox_y, Some(0.6));
+    }
+
+    /// A stored `pc.representative` that is no longer eligible must not win.
+    /// The old query used a bare `COALESCE(pc.representative, …)`, so a pet
+    /// later moved into a secure album stayed the tile forever.
+    #[tokio::test]
+    async fn pet_stored_representative_is_ignored_when_secured() {
+        let pool = memory_pool().await;
+        let u = "user-1";
+        sqlx::query(
+            "INSERT INTO pet_clusters (id, user_id, label, species, representative, photo_count, created_at, updated_at) \
+             VALUES (1, ?, NULL, 'dog', 'p1', 2, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        )
+        .bind(u)
+        .execute(&pool)
+        .await
+        .unwrap();
+        insert_photo(&pool, "p1", u).await;
+        insert_photo(&pool, "p2", u).await;
+        insert_pet_detection(&pool, u, "p1", 1, "dog", Some((0.1, 0.2, 0.3, 0.4)), 0.9).await;
+        insert_pet_detection(&pool, u, "p2", 1, "dog", Some((0.5, 0.6, 0.1, 0.1)), 0.5).await;
+        secure_photo(&pool, "p1").await;
+
+        let clusters = fetch_pet_clusters(&pool, u).await.unwrap();
+        assert_eq!(clusters[0].representative.as_deref(), Some("p2"));
+    }
+
+    /// A pet row processed before migration 039, whose bbox the backfill could
+    /// not recover, must still list — with NULL boxes, so the client draws a
+    /// plain crop. This is why the bbox join is a LEFT join; an inner join would
+    /// drop every pre-039 cluster out of the Pets grid entirely.
+    #[tokio::test]
+    async fn pet_cluster_without_bbox_still_lists() {
+        let pool = memory_pool().await;
+        let u = "user-1";
+        insert_pet_cluster(&pool, 1, u, "bird", 2).await;
+        insert_photo(&pool, "p1", u).await;
+        insert_pet_detection(&pool, u, "p1", 1, "bird", None, 0.9).await;
+
+        let clusters = fetch_pet_clusters(&pool, u).await.unwrap();
+        assert_eq!(clusters.len(), 1, "the cluster still lists");
+        assert_eq!(clusters[0].representative.as_deref(), Some("p1"));
+        assert_eq!(clusters[0].rep_bbox_x, None);
+        assert_eq!(clusters[0].rep_bbox_w, None);
+    }
+
+    /// Migration 039's backfill, which is the only reason this feature works on
+    /// a library that is already processed. The pet row is written the way the
+    /// pre-039 processor wrote it (no bbox) and must come back carrying the box
+    /// of the object detection it was derived from.
+    ///
+    /// Also pins the many-to-one arm of the species map: 'big cat' folds into
+    /// species 'cat', so comparing `class_name` to `species` directly — the
+    /// obvious shortcut — silently backfills nothing here.
+    #[tokio::test]
+    async fn migration_039_backfills_bbox_from_the_originating_object_detection() {
+        let pool = memory_pool().await;
+        let u = "user-1";
+        insert_pet_cluster(&pool, 1, u, "cat", 2).await;
+        insert_photo(&pool, "p1", u).await;
+        insert_photo(&pool, "p2", u).await;
+
+        // Two 'cat'-species detections on p1 with different boxes. The pet row
+        // copied `confidence` from the 'big cat' one, so that is the box owed.
+        insert_object_detection(&pool, u, "p1", "cat", (0.9, 0.9, 0.05, 0.05), 0.42).await;
+        insert_object_detection(&pool, u, "p1", "big cat", (0.2, 0.3, 0.4, 0.5), 0.77).await;
+        insert_object_detection(&pool, u, "p2", "cat", (0.6, 0.6, 0.2, 0.2), 0.60).await;
+        // A non-pet class on the same photo must never be picked up.
+        insert_object_detection(&pool, u, "p1", "landscape", (0.0, 0.0, 1.0, 1.0), 0.99).await;
+
+        // Pet rows exactly as the pre-039 processor left them: bbox NULL.
+        insert_pet_detection(&pool, u, "p1", 1, "cat", None, 0.77).await;
+        insert_pet_detection(&pool, u, "p2", 1, "cat", None, 0.60).await;
+
+        // Replay the migration's backfill over the rows just inserted; the
+        // migration itself ran against an empty table when the pool was built.
+        // Read from the file rather than restating the SQL here, so this test
+        // fails if the shipped backfill regresses — a copy would only ever prove
+        // the copy works. Both passes are replayed; running only the first would
+        // pass whether or not pass 2 exists.
+        let backfill = std::fs::read_to_string("migrations/039_pet_detection_bbox.sql").unwrap();
+        // Strip `--` comments before splitting on `;`. SQLite's own parser knows
+        // a semicolon inside a comment does not end a statement; a naive split
+        // does not, and the prose in that file legitimately contains one.
+        let sql: String = backfill
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("--"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let updates: Vec<&str> = sql
+            .split(';')
+            .map(str::trim)
+            .filter(|s| s.starts_with("UPDATE pet_detections"))
+            .collect();
+        assert_eq!(updates.len(), 2, "expected both backfill passes");
+        for stmt in updates {
+            sqlx::query(stmt).execute(&pool).await.unwrap();
+        }
+
+        let clusters = fetch_pet_clusters(&pool, u).await.unwrap();
+        let c = &clusters[0];
+        assert_eq!(c.representative.as_deref(), Some("p1"));
+        assert_eq!(
+            c.rep_bbox_x,
+            Some(0.2),
+            "must take the 'big cat' box matched by confidence, not the 'cat' one"
+        );
+        assert_eq!(c.rep_bbox_y, Some(0.3));
+        assert_eq!(c.rep_bbox_w, Some(0.4));
+        assert_eq!(c.rep_bbox_h, Some(0.5));
     }
 
     /// When every detection is on an ineligible photo, representative and bbox

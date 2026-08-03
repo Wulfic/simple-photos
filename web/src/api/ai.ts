@@ -82,6 +82,13 @@ export interface PetCluster {
   species: string;
   photo_count: number;
   representative: string | null;
+  /** Representative animal bbox (normalised 0–1) for framing the Pets tile.
+   *  Same contract as FaceCluster's — null when the photo predates the box
+   *  being stored (migration 039) or no detection resolved. */
+  rep_bbox_x: number | null;
+  rep_bbox_y: number | null;
+  rep_bbox_w: number | null;
+  rep_bbox_h: number | null;
   created_at: string;
   updated_at: string;
 }

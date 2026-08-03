@@ -721,12 +721,20 @@ export default function Albums() {
                 onClick={() => navigate(`/albums/smart-pets/${cluster.id}`)}
                 className="card card-interactive p-3 cursor-pointer"
               >
-                <div className="aspect-square bg-surface-raised rounded-full mb-2 mx-auto w-20 h-20 flex items-center justify-center overflow-hidden">
+                {/* `relative` is load-bearing, not tidying: clusterFaceCropStyle
+                    positions the image absolutely, so without a positioned
+                    ancestor here the blown-up thumb escapes the tile entirely. */}
+                <div className="relative aspect-square bg-surface-raised rounded-full mb-2 mx-auto w-20 h-20 flex items-center justify-center overflow-hidden">
                   {petThumbUrls[cluster.id] ? (
                     <img
                       src={petThumbUrls[cluster.id]}
                       alt={cluster.label || cluster.species}
-                      className="w-full h-full object-cover rounded-full"
+                      // Same pet framing as the full Pets page (#48d) — the
+                      // mistake #48(d) already caught on the People row.
+                      style={clusterFaceCropStyle(cluster)}
+                      // Parent clips; rounding the image itself would round the
+                      // zoomed window instead of the tile.
+                      className="w-full h-full object-cover"
                     />
                   ) : (
                     <svg className="w-10 h-10 text-fg-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>

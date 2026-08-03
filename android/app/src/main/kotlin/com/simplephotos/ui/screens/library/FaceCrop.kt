@@ -21,6 +21,25 @@ package com.simplephotos.ui.screens.library
 /** Face bounding box, normalised 0–1 against the whole photo. */
 data class TileFaceBox(val x: Float, val y: Float, val w: Float, val h: Float)
 
+/**
+ * Build a [TileFaceBox] from a cluster DTO's four independently-nullable
+ * `rep_bbox_*` doubles, or null when the server resolved no box.
+ *
+ * Width and height are the load-bearing pair — a box with no extent cannot be
+ * framed — while a missing origin is a legitimate zero. That asymmetry is the
+ * whole reason this is a function: it is the Kotlin twin of web's
+ * `clusterFaceCropStyle`, whose doc records that inlining the guard per call
+ * site is exactly how the Albums-page row ended up with no framing at all
+ * (#48d). Two cluster screens need it here — People and Pets — so it is written
+ * once and called twice.
+ */
+fun tileFaceBoxOf(x: Double?, y: Double?, w: Double?, h: Double?): TileFaceBox? =
+    if (w != null && h != null) {
+        TileFaceBox((x ?: 0.0).toFloat(), (y ?: 0.0).toFloat(), w.toFloat(), h.toFloat())
+    } else {
+        null
+    }
+
 /** Fraction of the tile the face should roughly occupy after zooming. */
 const val FACE_TARGET_FRACTION = 0.6f
 

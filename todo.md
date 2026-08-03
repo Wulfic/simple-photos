@@ -77,19 +77,57 @@ and is not. Live state now: 12,856 photos, **0 unencrypted, 0 parked,
 
 ---
 
-### C1(d) — Pet cluster tiles have no representative bbox (#48 remainder) — server task
+### C1(d) — Pet cluster tiles have no representative bbox (#48 remainder) — DONE 2026-08-03
 
-`PetCluster` carries no `rep_bbox_*` anywhere — not on the server, not in
-[web/src/api/ai.ts](web/src/api/ai.ts), not in Android's `AiDto.kt`. Only
-`FaceCluster` does. Pet tiles are circular (shipped in `5c4d776`) but
-centre-cropped, and no client-side framing can fix that.
+`PetCluster` carried no `rep_bbox_*` anywhere. Pet tiles were circular (shipped
+in `5c4d776`) but centre-cropped, and no client-side framing could fix that.
 
-- [ ] Server: resolve and emit a representative pet detection bbox, mirroring
-      `fetch_face_clusters`. **Include the eligibility join from `9046915`** —
-      the pet path will otherwise ship the exact secured-representative defect
-      the face path just had fixed.
-- [ ] Then wire the existing shared `clusterFaceCropStyle` / `FaceCrop.kt` (both
-      already parameterised) to pet tiles on both clients.
+**The plan said "mirroring `fetch_face_clusters`", which understated it by a
+table.** `face_detections` has had `bbox_x/y/w/h` since migration 017;
+**`pet_detections` had no bbox columns at all** (migration 020 never defined
+them) and the processor threw the box away at insert. So this was never a query
+change — it was migration + processor + query.
+
+- [x] Server: resolve and emit a representative pet detection bbox. Migration
+      `039` adds the four columns; the processor now stores the originating
+      object detection's box.
+- [x] **Backfill, and it is exact rather than a guess.** `pet_detections` rows
+      are *derived* from `object_detections` rows — the processor maps
+      `class_name` to a species, dedups by species per photo, and copies that
+      detection's `confidence` **verbatim**. `object_detections` stored the box
+      all along, so migration 039 recovers it by joining back on
+      (photo, user, mapped species) with confidence as an exact-match preference.
+      An existing library gets framed pet tiles with **no AI re-run** — hours of
+      GPU on a 15k library. Two passes, not one: SQLite resolves the UPDATE
+      target's columns inside a subquery's `WHERE` but **not inside its
+      `ORDER BY`**, so the one-statement `ORDER BY (od.confidence =
+      pet_detections.confidence)` form fails to prepare.
+- [x] **The eligibility join — and the item named it as a risk when it was
+      already a live defect.** `list_pet_clusters` had *no eligibility filter of
+      any kind*: a bare `COALESCE(pc.representative, highest-confidence
+      detection)`. A pet cluster whose best detection sat on a secure-album photo
+      pointed its tile at a photo the client must not render — the #48(b) bug the
+      face path fixed in `9046915`, still live here. Shipping the bbox on top of
+      that would have made it **worse**, not merely unfixed: an unrenderable id
+      only placeholders, but a bbox tells the tile to crop *into* the secured
+      photo. `fetch_pet_clusters` is now extracted and unit-tested like its face
+      twin, and both share one `eligible_representative_sql` /
+      `representative_bbox_join` — a sixth copy of one derivation was the
+      alternative.
+- [x] Wired `clusterFaceCropStyle` (web: PetsView **and** the Albums-page row,
+      which also needed `relative` on the tile — the crop style positions
+      absolutely) and `FaceCrop.kt` (Android) to pet tiles. The nullable-DTO
+      guard is now `tileFaceBoxOf`, shared by the People and Pets screens for
+      the reason web's doc already records: inlining it per call site is exactly
+      how the Albums row lost its framing in #48(d).
+- [x] `API_REFERENCE.md` — **the faces row was stale too**, having never gained
+      `rep_bbox_*` when `5c4d776` shipped them. Both rows fixed, plus the null
+      contract.
+- [ ] **Device/browser check, deferred to the verification session below.** Every
+      test here is JVM/unit; that a pet tile *visually* frames the animal has
+      only ever run in a compiler. Needs a library with a clustered pet — and the
+      pre-039 case matters as much as the backfilled one, since a null box must
+      draw the old plain crop rather than a degenerate window.
 
 ---
 

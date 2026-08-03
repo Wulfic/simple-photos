@@ -138,6 +138,13 @@ data class PetCluster(
     @SerializedName("photo_count") val photoCount: Int,
     /** Representative photo id used as the cluster thumbnail. */
     val representative: String? = null,
+    /** Representative animal bbox (normalised 0–1) — frames the Pets tile the
+     *  way [FaceCluster]'s does the People tile. Null when the server has no
+     *  box for that photo (processed before migration 039). */
+    @SerializedName("rep_bbox_x") val repBboxX: Double? = null,
+    @SerializedName("rep_bbox_y") val repBboxY: Double? = null,
+    @SerializedName("rep_bbox_w") val repBboxW: Double? = null,
+    @SerializedName("rep_bbox_h") val repBboxH: Double? = null,
     @SerializedName("created_at") val createdAt: String? = null,
     @SerializedName("updated_at") val updatedAt: String? = null,
 )

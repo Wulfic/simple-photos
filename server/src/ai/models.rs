@@ -109,6 +109,12 @@ pub struct PhotoFaceRecord {
 }
 
 /// Pet cluster summary for the pet clusters list endpoint.
+///
+/// `rep_bbox_*` mirror [`FaceClusterSummary`] exactly — the representative
+/// animal's box, normalised 0.0–1.0 against the whole photo — so the Pets grid
+/// can frame its tile instead of centre-cropping it. `None` until the photo has
+/// been processed by a build that stores the box, or when migration 039 could
+/// not recover one (additive — old clients ignore them).
 #[derive(Debug, Serialize, FromRow)]
 pub struct PetClusterSummary {
     pub id: i64,
@@ -116,6 +122,10 @@ pub struct PetClusterSummary {
     pub species: String,
     pub photo_count: i64,
     pub representative: Option<String>,
+    pub rep_bbox_x: Option<f64>,
+    pub rep_bbox_y: Option<f64>,
+    pub rep_bbox_w: Option<f64>,
+    pub rep_bbox_h: Option<f64>,
     pub created_at: String,
     pub updated_at: String,
 }

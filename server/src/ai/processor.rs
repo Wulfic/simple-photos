@@ -727,16 +727,27 @@ async fn process_single_photo(
                 Some(embedding) => {
                     let emb_bytes: Vec<u8> =
                         embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
+                    // The originating object detection's box is stored with the
+                    // pet row so Pet tiles can crop to the animal the way People
+                    // tiles crop to the face (#48). Migration 039 recovers it for
+                    // rows written before this line existed by joining back to
+                    // `object_detections`; that recovery only works while the pet
+                    // row keeps `det.confidence` verbatim, as it does here.
                     sqlx::query(
                         "INSERT INTO pet_detections \
-                         (photo_id, user_id, species, confidence, embedding) \
-                         VALUES (?1, ?2, ?3, ?4, ?5)",
+                         (photo_id, user_id, species, confidence, embedding, \
+                          bbox_x, bbox_y, bbox_w, bbox_h) \
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                     )
                     .bind(photo_id)
                     .bind(user_id)
                     .bind(species)
                     .bind(det.confidence)
                     .bind(&emb_bytes)
+                    .bind(det.bbox.x)
+                    .bind(det.bbox.y)
+                    .bind(det.bbox.w)
+                    .bind(det.bbox.h)
                     .execute(pool)
                     .await?;
 

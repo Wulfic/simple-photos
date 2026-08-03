@@ -389,13 +389,7 @@ fun PeopleScreen(
                 if (vm.serverBaseUrl.isNotEmpty()) "${vm.serverBaseUrl}/api/photos/$id/thumb" else null
             }
         },
-        faceBox = { c ->
-            val w = c.repBboxW
-            val h = c.repBboxH
-            if (w != null && h != null) {
-                TileFaceBox((c.repBboxX ?: 0.0).toFloat(), (c.repBboxY ?: 0.0).toFloat(), w.toFloat(), h.toFloat())
-            } else null
-        },
+        faceBox = { c -> tileFaceBoxOf(c.repBboxX, c.repBboxY, c.repBboxW, c.repBboxH) },
         onItemClick = { cluster ->
             if (assignDetectionId != null) {
                 vm.assignFace(assignDetectionId, cluster.id, onAssigned)
@@ -566,10 +560,15 @@ fun PetsScreen(
                 if (vm.serverBaseUrl.isNotEmpty()) "${vm.serverBaseUrl}/api/photos/$id/thumb" else null
             }
         },
+        // #48(d): the server now resolves a representative pet box, so the tile
+        // frames the animal instead of centre-cropping it. Same call as People's
+        // — `faceCropRect` is normalised-box arithmetic and knows nothing about
+        // faces. Returns null for pets processed before migration 039, which
+        // draws the plain crop this screen used to draw for everything.
+        faceBox = { c -> tileFaceBoxOf(c.repBboxX, c.repBboxY, c.repBboxW, c.repBboxH) },
         onItemClick = { cluster -> onPetClick(cluster.id) },
         emptyHint = "No pet clusters yet.",
-        // Circular to match web, but no `faceBox`: the server's PetCluster
-        // carries no rep_bbox_* columns, so there is nothing to frame yet.
+        // Circular to match web.
         circular = true,
     )
 }
