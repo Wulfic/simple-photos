@@ -131,7 +131,7 @@ change — it was migration + processor + query.
 
 ---
 
-### B3 — `needs_web_preview` still guesses by file extension (#46 remainder)
+### B3 — `needs_web_preview` still guesses by file extension (#46 remainder) -- DONE 2026-08-03
 
 [server/src/photos/web_preview.rs](server/src/photos/web_preview.rs) has the same
 extension-only blind spot the codec probe fixed in `conversion_target`.
@@ -141,8 +141,77 @@ probe touching every caller in `server_migrate_encrypt.rs` — a separable refac
 with its own risk, for a path that only handles on-the-fly web previews. A fresh
 install re-ingests everything through the already-fixed probe.
 
-- [ ] Do it as its own commit, or delete the item and record the decision. Do not
-      leave it half-deferred forever.
+**Both halves of that deferral note were wrong, and the second one inverted the
+stakes.** This is not "on-the-fly web previews": its only consumer is
+`server_migrate_encrypt`, so whatever it picks is the payload that gets
+*encrypted at rest* and handed to every client for the life of the photo. And
+"a fresh install re-ingests everything through the already-fixed probe" does not
+rescue the already-registered offenders: the #46 backfill (`6663a4c`) adds a
+*rendition* and deliberately leaves the original blob alone, so those rows are
+still `.mp4`-named HEVC. The ladder hides that in the main gallery; a secure
+gallery item carries no renditions at all (`list_gallery_items` never joins
+them -- B4 below records the same fact from the other side), so there the
+unplayable payload is all there is.
+
+The cost estimate was the load-bearing argument for deferring, and it did not
+survive contact either: all three callers are in **one file**, already `async`,
+and already holding the absolute path.
+
+- [x] Probe video containers instead of trusting the extension.
+      `resolve_web_preview(filename, stream_is_native)` is pure and holds the
+      whole matrix; `plan_web_preview` spawns the one ffprobe, for
+      `.mp4`/`.mov`/`.m4v` only. It reuses `transcode::probe` -- the same probe
+      `ingest::opaque_container_needs_conversion` runs at scan time. A second
+      derivation of "is this browser-native" was the alternative, and the
+      cross-cutting risks below already count five instances of that mistake.
+- [x] **There were two blind spots, opposite signs, and the item named only
+      one.** False negative: HEVC / MPEG-4 Part 2 / 10-bit H.264 inside a `.mp4`
+      was stored verbatim, unplayable. False positive: `.mov`/`.m4v` was
+      *always* transcoded, so ordinary phone H.264 got a full re-encode baked
+      permanently into the stored payload. Native streams in those containers
+      are now **remuxed** (`-c:v copy`) -- lossless, and seconds instead of
+      minutes. Audio is re-encoded to AAC rather than copied: a QuickTime
+      container can legally carry PCM/ALAC, an MP4 wrapper will accept it, and
+      no browser plays the result. A refused stream copy falls back to the full
+      transcode rather than leaving the payload unplayable.
+- [x] `.webm` is deliberately **excluded** from the probe. `is_browser_native`
+      is an H.264-only allowlist, so a VP9 WebM -- which every target browser
+      plays -- would come back "not native" and be re-encoded for nothing. WebM
+      has never been previewed here and still is not.
+- [x] An unprobeable file (ffprobe missing, timeout, no video stream) falls back
+      to the extension verdict, so a broken environment degrades to the *old*
+      behaviour rather than to an unplayable payload or a library-wide
+      re-encode. An audio-only `.mp4` lands here and is correctly stored as-is.
+      Both pinned by tests.
+- [x] Tests: 12 new, 478 green (was 466). Four of them -- including both real
+      FFmpeg fixtures -- verified RED by forcing `preview_needs_probe` to
+      `false`, which reproduces the old extension-only path exactly; the eight
+      preserved-behaviour tests stayed green in that same run.
+
+---
+
+### B3b -- `is_opaque_video_container` and its test assert something false
+
+Found while fixing B3, in a surface that item never named.
+`probe::is_opaque_video_container` documents itself as "exactly the extensions
+`conversion_target` treats as already-native", and its test
+`opaque_containers_are_the_ones_conversion_target_skips` asserts that for
+`.mov`/`.m4v`. But `conversion_target` returns `Some(mp4)` for both, so at
+[server/src/ingest.rs:1084](server/src/ingest.rs#L1084) the probe branch
+(`None => opaque_container_needs_conversion`) is **unreachable** for them.
+
+Harmless in outcome today -- the extension path converts those files anyway,
+just without ever looking inside -- but the doc and the test are lying about
+why, which is exactly the "a comment that asserts the old intent is a defect"
+risk at the bottom of this file, for the third time.
+
+- [ ] Either narrow `is_opaque_video_container` to `mp4`/`webm`, or drop
+      `mov`/`m4v` from `conversion_target` and let the probe decide. The second
+      is the better behaviour (a native `.mov` would then be remuxed at ingest
+      instead of re-encoded, matching what B3 now does at encryption time) and
+      the larger blast radius -- `conversion_target` is load-bearing in sync
+      contexts, MIME selection and upload gating. Decide, do not just retitle
+      the test.
 
 ---
 
