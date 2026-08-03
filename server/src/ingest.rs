@@ -738,6 +738,7 @@ async fn process_candidate(
 }
 
 /// The codec probe's decision about an "already native" container.
+#[derive(Debug)]
 enum OpaqueVerdict {
     /// Re-encode to browser-native MP4. `salvage` carries the decode health when
     /// the reason is a *corrupt bitstream* rather than a wrong codec, so the
@@ -1521,5 +1522,68 @@ mod opaque_container_tests {
             opaque_container_needs_conversion(missing, "photo.jpg").await,
             OpaqueVerdict::Leave
         ));
+        // B3b: `.mov`/`.m4v` never reach here at all — `conversion_target` claims
+        // them at the call site, so the probe branch is unreachable for them.
+        for name in ["clip.mov", "clip.m4v"] {
+            assert!(
+                crate::conversion::conversion_target(name).is_some(),
+                "precondition: {name} is claimed before the probe branch"
+            );
+            assert!(matches!(
+                opaque_container_needs_conversion(missing, name).await,
+                OpaqueVerdict::Leave
+            ));
+        }
+    }
+
+    /// B3b: the live false positive. `.webm` is skipped by `conversion_target`,
+    /// so it DID reach the probe — where `is_browser_native` is an H.264-only
+    /// allowlist and could only ever answer "not native" for VP9/AV1. Every newly
+    /// scanned WebM was therefore queued for a full re-encode into H.264 MP4,
+    /// replacing a file every target browser plays.
+    ///
+    /// The inconsistency is the proof it was a bug rather than a policy: an
+    /// *already-registered* `.webm` is skipped by `existing_set` and served
+    /// untouched, so the same file was treated two different ways depending only
+    /// on when it arrived.
+    ///
+    /// This asserts `Leave` and fails on the pre-fix tree, which returns
+    /// `Convert`. A pure test cannot show it — the whole defect is what the probe
+    /// finds inside the file.
+    #[tokio::test]
+    async fn a_vp9_webm_is_left_alone_rather_than_re_encoded() {
+        let Some(path) = make_fixture(
+            "vp9.webm",
+            "libvpx-vp9",
+            &["-pix_fmt", "yuv420p", "-b:v", "200k", "-deadline", "realtime", "-cpu-used", "8"],
+        ) else {
+            eprintln!("ffmpeg/libvpx-vp9 unavailable — skipping");
+            return;
+        };
+
+        // Precondition: this file really does reach the probe branch.
+        assert!(
+            crate::conversion::conversion_target("vp9.webm").is_none(),
+            "precondition: .webm is not claimed by extension, so it reaches the probe"
+        );
+        // Precondition: the allowlist genuinely cannot judge it — this is *why*
+        // probing it was wrong, not merely that the answer happened to be wrong.
+        let info = crate::transcode::probe::probe_video_stream(&path)
+            .await
+            .expect("the fixture must probe as a video");
+        assert!(
+            !crate::transcode::probe::is_browser_native(&info),
+            "precondition: the H.264-only allowlist rejects VP9 ({info:?}) — a probe here \
+             can only ever return the wrong answer"
+        );
+
+        let verdict = opaque_container_needs_conversion(&path, "vp9.webm").await;
+        let _ = std::fs::remove_file(&path);
+
+        assert!(
+            matches!(verdict, OpaqueVerdict::Leave),
+            "a VP9 WebM must be left alone — the pre-fix tree queued it for a full \
+             re-encode of a file every target browser already plays, got {verdict:?}"
+        );
     }
 }

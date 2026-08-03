@@ -192,7 +192,24 @@ pub async fn find_codec_backfill_candidates(
     // Extension match in SQL: these registered rows carry the ORIGINAL filename,
     // and the container extension is exactly what #46 stopped trusting — but for
     // *narrowing* which rows to probe (not for the verdict) it is the only signal
-    // available without a probe, and it mirrors `probe::is_opaque_video_container`.
+    // available without a probe.
+    //
+    // **Deliberately not the same set as `probe::is_opaque_video_container`, and
+    // not a copy of it.** That function guards the ingest *walk*, where
+    // `conversion_target` claims `.mov`/`.m4v` before the probe is ever reached;
+    // this query runs over rows that are already *registered*, where a `.mov`
+    // filename legitimately survives from older imports and is worth probing. The
+    // two lists answer different questions and must be allowed to differ — the
+    // previous comment here claimed this one "mirrors" that one, which invited
+    // exactly the tidy-up that would re-merge them.
+    //
+    // `.webm` is excluded from *both*, for one shared reason: the verdict this
+    // narrowing feeds is `ladder::source_rung_is_offerable`, i.e.
+    // `probe::is_browser_native`, an H.264-only allowlist. A VP9/AV1 WebM can
+    // only come back "not offerable", so every WebM row selected here bought a
+    // source-resolution H.264 re-encode for a file every target browser already
+    // plays. Additive rather than destructive (it is a rendition, not a
+    // replacement), which is why it went unnoticed longer than the ingest half.
     //
     // `encryption_deferred = 0`, as in `find_rung_candidates`: a parked row can
     // never gain an encrypted blob, so the backfill could only defer it forever.
@@ -205,8 +222,7 @@ pub async fn find_codec_backfill_candidates(
            AND p.encryption_deferred = 0 \
            AND ( lower(p.filename) LIKE '%.mp4' \
                  OR lower(p.filename) LIKE '%.mov' \
-                 OR lower(p.filename) LIKE '%.m4v' \
-                 OR lower(p.filename) LIKE '%.webm' ) \
+                 OR lower(p.filename) LIKE '%.m4v' ) \
            AND p.width > 0 AND p.height > 0 AND MIN(p.width, p.height) <= ?1 \
            AND {NO_TERMINAL_NONSOURCE_RENDITION} \
          ORDER BY MIN(p.width, p.height) ASC, p.id ASC \
@@ -930,6 +946,11 @@ mod tests {
     /// Only real video containers browsers might mis-play. A `.mkv` already
     /// converts on extension alone (it is never assumed native), and stills are
     /// never video — neither is this query's business.
+    ///
+    /// **`.webm` is excluded, and this test asserted the opposite until B3b.**
+    /// The verdict downstream of this narrowing is `is_browser_native`, an
+    /// H.264-only allowlist, so a VP9/AV1 WebM could only ever be judged
+    /// unplayable and charged a source-resolution re-encode it never needed.
     #[tokio::test]
     async fn only_opaque_video_containers_are_backfill_candidates() {
         let pool = test_pool().await;
@@ -951,12 +972,16 @@ mod tests {
         let ids = backfill_ids(&pool).await;
         assert_eq!(
             ids.iter().cloned().collect::<std::collections::HashSet<String>>(),
-            ["p_mp4", "p_mov", "p_m4v", "p_webm"]
+            ["p_mp4", "p_mov", "p_m4v"]
                 .iter()
                 .map(|s| s.to_string())
                 .collect::<std::collections::HashSet<String>>()
         );
         assert!(!ids.contains(&"p_mkv".to_string()), "mkv converts by extension");
+        assert!(
+            !ids.contains(&"p_webm".to_string()),
+            "a VP9/AV1 WebM plays natively — selecting it only buys a needless re-encode"
+        );
         assert!(
             !ids.contains(&"p_img".to_string()),
             "a still with a video-looking name is not a video"

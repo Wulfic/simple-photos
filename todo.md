@@ -190,7 +190,7 @@ and already holding the absolute path.
 
 ---
 
-### B3b -- `is_opaque_video_container` and its test assert something false
+### B3b -- `is_opaque_video_container` and its test assert something false -- DONE 2026-08-03
 
 Found while fixing B3, in a surface that item never named.
 `probe::is_opaque_video_container` documents itself as "exactly the extensions
@@ -200,18 +200,54 @@ Found while fixing B3, in a surface that item never named.
 [server/src/ingest.rs:1084](server/src/ingest.rs#L1084) the probe branch
 (`None => opaque_container_needs_conversion`) is **unreachable** for them.
 
-Harmless in outcome today -- the extension path converts those files anyway,
-just without ever looking inside -- but the doc and the test are lying about
-why, which is exactly the "a comment that asserts the old intent is a defect"
-risk at the bottom of this file, for the third time.
+**The item named the harmless half and missed the harmful one.** The set was
+`{mp4, mov, m4v, webm}`; `conversion_target` skips `{mp4, webm}`. So `.webm`'s
+probe branch was **reachable**, and behind it sits `is_browser_native` -- an
+**H.264-only allowlist**. Every newly scanned VP9/AV1 WebM was therefore judged
+"not native" and queued for a **full re-encode into H.264 MP4**, replacing a file
+every target browser plays. That is the identical false positive B3 had just
+fixed one file over in `web_preview`, and B3's own doc even named the hazard
+("a VP9 WebM would be reported not native and re-encoded") while deferring "the
+blast radius at ingest" -- without stating that ingest was *already paying it*.
 
-- [ ] Either narrow `is_opaque_video_container` to `mp4`/`webm`, or drop
-      `mov`/`m4v` from `conversion_target` and let the probe decide. The second
-      is the better behaviour (a native `.mov` would then be remuxed at ingest
-      instead of re-encoded, matching what B3 now does at encryption time) and
-      the larger blast radius -- `conversion_target` is load-bearing in sync
-      contexts, MIME selection and upload gating. Decide, do not just retitle
-      the test.
+The proof it was a bug and not a policy is an internal contradiction:
+`media::MEDIA_EXTENSIONS` already lists `.webm` as universally playable, and an
+**already-registered** `.webm` is skipped by `existing_set` and served untouched.
+The same file was treated two different ways depending only on when it arrived.
+
+- [x] Narrowed `is_opaque_video_container` to **`mp4` only**, and rewrote the doc
+      to state the real rule, which is **two** conditions the old one collapsed
+      into one: `conversion_target` must skip it (else the probe never runs) *and*
+      `is_browser_native` must be able to adjudicate it (else the probe can only
+      return the wrong answer). `.mov`/`.m4v` fail the first, `.webm` the second.
+- [x] **Rejected dropping `mov`/`m4v` from `conversion_target`**, which this item
+      called "the better behaviour". It is not, as stated: the ingest path has no
+      remux verdict (`OpaqueVerdict` is convert / leave / unplayable), so a native
+      `.mov` would be **left** as `video/quicktime` -- which Chrome and Firefox
+      refuse to play. The item's parenthetical ("would then be remuxed at ingest")
+      assumed a code path that does not exist there. It would also relocate `.mov`
+      playability onto the encryption stage, which **B3a just proved is not a
+      guarantee** (2,500 rows parked as plaintext originals). Doing it properly
+      means adding an `OpaqueVerdict::Remux` and wiring the upload path -- a real
+      feature, not a list edit. Recorded here so it is not re-proposed.
+- [x] **Third copy of the list, found while fixing this one.**
+      `rung_queue::find_codec_backfill_candidates`' SQL filtered
+      `%.mp4/%.mov/%.m4v/%.webm` under a comment claiming it "mirrors
+      `is_opaque_video_container`". Its verdict is `source_rung_is_offerable` ->
+      the same H.264-only allowlist, so every WebM row bought a source-resolution
+      re-encode it never needed -- additive (a rendition, not a replacement),
+      which is why it hid longer. `.webm` dropped there too; `mov`/`m4v` **kept**,
+      because that query reads *registered filenames* where a `.mov` legitimately
+      survives, unlike the ingest walk. The two lists answer different questions;
+      the "mirrors" comment was rewritten to say so, since it was an open
+      invitation to re-merge them.
+- [x] Tests: 481 green (was 478). Four verified RED on the pre-fix tree -- the
+      ingest one prints the defect verbatim
+      (`got Convert { target: ... "mp4" ... }` for a real VP9 fixture). The
+      rung_queue test **asserted the bug** (`p_webm` in the expected set), the
+      same shape as the #48 face-centering suite. The probe test now cross-checks
+      against `conversion_target` itself rather than a copied list, which is how
+      it drifted in the first place.
 
 ---
 
@@ -384,10 +420,18 @@ list exists.
 - **Two derivations of one list will drift.** #42 (three definitions of "count"),
   #48(a) (two copies of one crop formula), #51 (two owners of one blob URL), and
   E3 (two derivations of one album list), and E3's own `setRawPhotos`
-  (`allPhotos` re-derived from `allPhotosRaw` on every in-viewer edit). The fix is
-  always the same shape: one function, called twice. **Five instances now — when a
-  second surface needs the same list, wire it to the first one's resolver in the
-  same commit, not later.**
+  (`allPhotos` re-derived from `allPhotosRaw` on every in-viewer edit), and B3b
+  (**three** copies of "which video containers are opaque" — ingest's
+  `is_opaque_video_container`, the ladder backfill's SQL `LIKE` list, and
+  `web_preview`'s `preview_needs_probe`; B3 fixed exactly one and left the other
+  two disagreeing with it). The fix is usually the same shape: one function,
+  called twice. **Six instances now — when a second surface needs the same list,
+  wire it to the first one's resolver in the same commit, not later.**
+  B3b is the exception that proves the rule's limit: those three lists
+  *legitimately* differ, because they answer different questions (unregistered
+  walk vs. registered rows vs. encryption-time filename). When they must differ,
+  the comment has to say **why**, or the next tidy-up re-merges them — B3b's
+  "mirrors `is_opaque_video_container`" comment was exactly that invitation.
 - **Verify the *id space*, not just the call shape.** E3a's audit read five call
   sites, saw they all navigated identically, and filed the difference as
   "ordering". Four of them were in fact passing **server** photo ids to a lookup

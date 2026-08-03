@@ -22,8 +22,10 @@
 //!
 //! Extensions cannot answer either question for video: an `.mp4` container
 //! happily carries HEVC or 10-bit H.264, and a `.mov` usually carries perfectly
-//! ordinary H.264. So video containers are **probed**, exactly as
-//! `ingest::opaque_container_needs_conversion` probes them at scan time.
+//! ordinary H.264. So video containers are **probed**, using the same
+//! `transcode::probe` that `ingest::opaque_container_needs_conversion` runs at
+//! scan time — over a deliberately wider set of extensions, for the reason
+//! [`preview_needs_probe`] records.
 
 use std::path::Path;
 
@@ -69,14 +71,20 @@ pub fn needs_web_preview(filename: &str) -> Option<&'static str> {
 
 /// Whether this filename's extension is too vague to decide on its own.
 ///
-/// Deliberately **not** the same set as
-/// [`crate::transcode::probe::is_opaque_video_container`], which also includes
-/// `.webm`. That set feeds an H.264-only allowlist ([`probe::is_browser_native`]
-/// (crate::transcode::probe::is_browser_native)), so a VP9 WebM — which every
-/// target browser plays — would be reported "not native" and re-encoded into
-/// the stored payload for nothing. `.webm` has never been previewed here and is
-/// left alone; correcting the allowlist to cover VP8/VP9/AV1 is a separate
-/// change with its own blast radius at ingest.
+/// `.webm` is excluded: it feeds an H.264-only allowlist
+/// ([`probe::is_browser_native`](crate::transcode::probe::is_browser_native)), so
+/// a VP9 / AV1 WebM — which every target browser plays — would be reported "not
+/// native" and re-encoded into the stored payload for nothing. Widening that
+/// allowlist to VP8/VP9/AV1 remains a separate change.
+///
+/// This set is a **superset** of
+/// [`crate::transcode::probe::is_opaque_video_container`] (`.mp4` only), and the
+/// extra `.mov`/`.m4v` are deliberate rather than drift. That function guards the
+/// ingest *walk*, where [`crate::conversion::conversion_target`] claims those two
+/// extensions before the probe is ever reached; this one runs at encryption time
+/// over a registered filename, where a `.mov` legitimately survives and is worth
+/// probing so it can be remuxed instead of re-encoded. Two questions, two
+/// answers — do not "tidy" them into one list.
 fn preview_needs_probe(filename: &str) -> bool {
     let ext = match filename.rsplit('.').next() {
         Some(e) => e.to_ascii_lowercase(),

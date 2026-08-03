@@ -131,14 +131,36 @@ struct FfprobeStream {
 /// Whether a filename's extension is a container that tells us nothing about
 /// its contents, and therefore must be probed rather than trusted.
 ///
-/// These are exactly the extensions that [`crate::conversion::conversion_target`]
-/// treats as "already native" and skips.
+/// The rule is **two** conditions, not one, and collapsing them to the first is
+/// what this set previously got wrong:
+///
+/// 1. [`crate::conversion::conversion_target`] must skip it — otherwise the
+///    extension already decided and the probe never runs.
+/// 2. [`is_browser_native`] must be able to *adjudicate* it — otherwise the
+///    probe can only ever return the wrong answer.
+///
+/// `conversion_target` skips exactly `.mp4` and `.webm`, so condition 1 alone
+/// would admit both. Condition 2 removes `.webm`: `is_browser_native` is an
+/// **H.264-only allowlist**, so a VP9 / AV1 WebM — which `crate::media`'s own
+/// `MEDIA_EXTENSIONS` already lists as universally playable in `<video>` — comes
+/// back "not native" and is re-encoded for nothing. That is the same false
+/// positive `photos::web_preview::preview_needs_probe` excludes `.webm` for;
+/// this is the ingest side of it. Widening the allowlist to VP8/VP9/AV1 is the
+/// other way to satisfy condition 2, and remains a separate change.
+///
+/// `.mov` / `.m4v` are absent because they fail condition 1: `conversion_target`
+/// returns `Some(mp4)` for both, so the caller's probe branch was **unreachable**
+/// for them. Moving them here by dropping them from `conversion_target` was
+/// considered and rejected — the ingest path has no remux verdict
+/// ([`crate::ingest::OpaqueVerdict`] is convert / leave / unplayable), so a
+/// native `.mov` would be *left* as `video/quicktime`, which Chrome and Firefox
+/// refuse to play. That is worse than today's wasteful-but-correct re-encode.
 pub fn is_opaque_video_container(filename: &str) -> bool {
     let ext = match filename.rsplit('.').next() {
         Some(e) => e.to_ascii_lowercase(),
         None => return false,
     };
-    matches!(ext.as_str(), "mp4" | "mov" | "m4v" | "webm")
+    matches!(ext.as_str(), "mp4")
 }
 
 /// Whether a browser can decode this video stream natively.
@@ -330,14 +352,64 @@ mod tests {
         assert!(!is_browser_native(&VideoStreamInfo::default()));
     }
 
-    /// Exactly the extensions `conversion_target` treats as already-native.
+    /// Condition 1: an extension `conversion_target` already claims can never
+    /// reach the probe, so listing it here is a lie about why the file converts.
+    ///
+    /// Asserted against `conversion_target` itself rather than against a copied
+    /// list, because a copied list is exactly how this drifted: the old version
+    /// of this test hard-coded `.mov`/`.m4v` as "must be probed" while
+    /// `conversion_target` returned `Some(mp4)` for both, making the caller's
+    /// probe branch unreachable and this assertion decorative.
     #[test]
-    fn opaque_containers_are_the_ones_conversion_target_skips() {
-        for name in ["a.mp4", "a.MP4", "a.mov", "a.m4v", "a.webm"] {
+    fn nothing_conversion_target_already_claims_is_routed_through_the_probe() {
+        for name in ["a.mov", "a.m4v", "a.mkv", "a.avi", "a.wmv", "a.3gp"] {
+            assert!(
+                crate::conversion::conversion_target(name).is_some(),
+                "precondition: {name} converts on its extension alone"
+            );
+            assert!(
+                !is_opaque_video_container(name),
+                "{name} is claimed by conversion_target — its probe branch is unreachable, \
+                 so listing it here documents a path that does not exist"
+            );
+        }
+    }
+
+    /// Condition 2, and the live defect this set had: `.webm` *is* skipped by
+    /// `conversion_target`, so it reached the probe — where an H.264-only
+    /// allowlist can only ever call VP9/AV1 "not native" and queue a pointless
+    /// full re-encode of a file every target browser plays.
+    ///
+    /// `media::MEDIA_EXTENSIONS` already calls `.webm` universally playable, and
+    /// an *already-registered* `.webm` is served untouched, so the pre-fix tree
+    /// treated the same file two different ways depending only on when it
+    /// arrived. This assertion fails on that tree.
+    #[test]
+    fn webm_is_not_probed_because_the_allowlist_cannot_judge_it() {
+        assert!(
+            crate::conversion::conversion_target("a.webm").is_none(),
+            "precondition: .webm is skipped by conversion_target, so it does reach the probe"
+        );
+        assert!(
+            crate::media::MEDIA_EXTENSIONS.contains(&"webm"),
+            "precondition: the rest of the server already treats .webm as browser-native"
+        );
+        for name in ["a.webm", "a.WEBM"] {
+            assert!(
+                !is_opaque_video_container(name),
+                "{name} must not be probed — is_browser_native is H.264-only and would \
+                 re-encode a VP9/AV1 stream that plays fine"
+            );
+        }
+    }
+
+    /// The one container that satisfies both conditions.
+    #[test]
+    fn mp4_is_the_only_opaque_container() {
+        for name in ["a.mp4", "a.MP4"] {
             assert!(is_opaque_video_container(name), "{name} must be probed");
         }
-        // These already convert on extension alone — probing them is wasted work.
-        for name in ["a.mkv", "a.avi", "a.wmv", "a.jpg", "noextension"] {
+        for name in ["a.jpg", "a.mp3", "noextension", ""] {
             assert!(
                 !is_opaque_video_container(name),
                 "{name} must not be routed through the probe"
