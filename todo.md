@@ -131,7 +131,7 @@ change — it was migration + processor + query.
 
 ---
 
-### B3 — `needs_web_preview` still guesses by file extension (#46 remainder) -- DONE 2026-08-03
+### B3 — `needs_web_preview` still guesses by file extension (#46 remainder) -- DONE 2026-08-03 `fa12624`
 
 [server/src/photos/web_preview.rs](server/src/photos/web_preview.rs) has the same
 extension-only blind spot the codec probe fixed in `conversion_target`.
