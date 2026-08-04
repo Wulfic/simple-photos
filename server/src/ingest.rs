@@ -1282,6 +1282,14 @@ async fn run_conversion_pass_inner(
 
     let registered = registered.load(std::sync::atomic::Ordering::Relaxed);
 
+    // Bank what this pass learned about the machine before the ledger's batch
+    // state goes away (#40). The ETA's seed rates are meant to govern a box that
+    // has never converted anything; without this every boot is that box, and the
+    // video seed is deliberately conservative. Read before `finish()` purely for
+    // legibility — `reset` keeps the calibration by design, so the ordering is
+    // not load-bearing.
+    conversion::save_throughput_calibration(&pool).await;
+
     batch_guard.finish();
 
     tracing::info!(

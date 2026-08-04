@@ -25,6 +25,16 @@
 //! `ConversionEta` fixes all three: it measures **weight**, keeps a separate
 //! throughput estimate **per category**, and uses a sliding (EWMA) rate rather
 //! than the batch-lifetime mean.
+//!
+//! ## Calibration — the seeds are a cold start, not a policy (#40)
+//!
+//! The compiled-in seed rates below only ever govern a category that has no
+//! sample *yet*. That is meant to be the first pass on a new machine; without
+//! persistence it is **every** pass, because the ledger is reset at both ends of
+//! every batch. [`ConversionEta::calibrate`] installs a previously measured rate
+//! as this machine's seed, and [`ConversionEta::measured_rate`] exports one to
+//! be stored. The DB half lives in [`crate::conversion`] — this module stays
+//! pure.
 
 use crate::conversion::MediaCategory;
 
@@ -80,6 +90,39 @@ const VIDEO_SEED_BYTES_PER_SEC: f64 = 2.0 * MB;
 /// a slow filter would still be reporting the seed when the queue drained.
 const EWMA_ALPHA: f64 = 0.35;
 
+/// The band a *persisted* throughput has to land in to be believed.
+///
+/// A compiled-in seed cannot be wrong in these ways; a stored one can — it
+/// survives crashes, hand edits, and whatever a future bug writes — and it feeds
+/// a **division**. `NaN` is the nastiest of them: `rate <= 0.0` is `false` for
+/// `NaN`, so it would sail straight through [`ConversionEta::eta_seconds`]'s
+/// guard and produce a `NaN` ETA. The band also rules out the two silent
+/// failures: an absurdly high rate pins the ETA at zero forever, an absurdly low
+/// one quotes centuries.
+///
+/// 1 KiB/s is slower than any machine that can run ffmpeg at all; 10 GiB/s is
+/// faster than the disk the input is read from. Anything outside is a corrupt
+/// value wearing a plausible type, and the honest response is to fall back to
+/// the seed.
+const MIN_PLAUSIBLE_RATE: f64 = 1024.0;
+const MAX_PLAUSIBLE_RATE: f64 = 10.0 * 1024.0 * MB;
+
+/// Gatekeeper for every rate that crosses the process boundary — applied on the
+/// way **out** to storage as well as on the way in, so a value that would be
+/// refused on load is never written in the first place.
+pub(crate) fn plausible_rate(bytes_per_sec: f64) -> Option<f64> {
+    // `is_finite` first and separately: it is the guard that matters (a `NaN`
+    // makes every comparison below false anyway, but saying so explicitly is
+    // the point) and folding it into a range check would hide it.
+    if bytes_per_sec.is_finite()
+        && (MIN_PLAUSIBLE_RATE..=MAX_PLAUSIBLE_RATE).contains(&bytes_per_sec)
+    {
+        Some(bytes_per_sec)
+    } else {
+        None
+    }
+}
+
 fn seed_rate(cat: MediaCategory) -> f64 {
     match cat {
         MediaCategory::Image => IMAGE_SEED_BYTES_PER_SEC,
@@ -96,7 +139,7 @@ fn index(cat: MediaCategory) -> usize {
     }
 }
 
-const CATEGORIES: [MediaCategory; 3] = [
+pub(crate) const CATEGORIES: [MediaCategory; 3] = [
     MediaCategory::Image,
     MediaCategory::Audio,
     MediaCategory::Video,
@@ -116,6 +159,19 @@ struct CategoryProgress {
     /// EWMAs rather than an EWMA of ratios.
     ewma_weight: f64,
     ewma_secs: f64,
+    /// Unsmoothed running totals over **exactly** the samples folded into the
+    /// EWMAs above. Their ratio is this batch's true average throughput, which
+    /// is what gets persisted as the next boot's seed — see
+    /// [`CategoryProgress::cumulative_rate`] for why the EWMA is the wrong thing
+    /// to store.
+    ///
+    /// Deliberately not derived from `done_weight`: that is charged on paths
+    /// that produce no measurement (a completion with no start, a non-positive
+    /// delta), so deriving it would give the calibration and the EWMA two
+    /// different definitions of "a sample" — the one-list-two-derivations trap
+    /// this repo has six recorded instances of.
+    sampled_weight: f64,
+    sampled_secs: f64,
     samples: u32,
     /// When the first file of this category began converting. Seeds the delta
     /// for the first sample, which otherwise has no predecessor to measure from.
@@ -132,12 +188,48 @@ impl CategoryProgress {
     /// is biased high by short deltas — and short deltas are exactly what a
     /// wide lane produces, because N concurrent encodes finish in a burst. The
     /// ratio-of-EWMAs form converges to `Σweight / Σtime`, i.e. real throughput.
-    fn rate(&self, cat: MediaCategory) -> f64 {
+    ///
+    /// `calibrated` is the rate this machine measured on an earlier pass, if one
+    /// was ever stored. It stands in for the compiled-in seed and nothing else:
+    /// once this batch has a sample of its own, that sample wins outright, so
+    /// in-batch behaviour is unchanged by calibration being present.
+    fn rate(&self, cat: MediaCategory, calibrated: Option<f64>) -> f64 {
         if self.samples > 0 && self.ewma_secs > 0.0 && self.ewma_weight > 0.0 {
             self.ewma_weight / self.ewma_secs
         } else {
-            seed_rate(cat)
+            calibrated.unwrap_or_else(|| seed_rate(cat))
         }
+    }
+
+    /// This batch's **average** throughput, `Σweight / Σsecs`, or `None` when
+    /// nothing was measured. This — not [`CategoryProgress::rate`] — is what
+    /// gets persisted, for two reasons:
+    ///
+    /// 1. The EWMA is deliberately recency-biased, which is right for tracking a
+    ///    machine that is throttling *now* and wrong for describing what that
+    ///    machine generally does.
+    /// 2. It is immune to the burst artefact a wide lane produces, and that
+    ///    artefact is not small. A video lane of width N starts N encodes
+    ///    together, so sample 1 charges one file's weight against the whole
+    ///    phase and samples 2..N arrive with near-zero deltas. Each of those
+    ///    decays `ewma_secs` by a further 0.65 while `ewma_weight` does not
+    ///    move, so what the EWMA reports at the end of a burst is a function of
+    ///    the lane width and **not** of the machine: it under-reads a narrow
+    ///    lane and over-reads a wide one (8 wide ⇒ ~2.5× *fast*, measured in
+    ///    `the_persisted_rate_is_the_batch_average_not_the_ewma`). Over-reading
+    ///    is the dangerous direction to store, because the resulting ETA starts
+    ///    short and grows.
+    ///
+    ///    None of that is a defect in the EWMA — mid-burst the *recent* rate
+    ///    genuinely is high, which is what in-batch tracking wants. It is a
+    ///    reason not to persist it. `Σweight / Σsecs` reads
+    ///    `N·weight / phase` — the true throughput — from the moment the burst
+    ///    lands, whatever N is.
+    fn cumulative_rate(&self) -> Option<f64> {
+        if self.samples == 0 || self.sampled_secs <= 0.0 || self.sampled_weight <= 0.0 {
+            return None;
+        }
+        plausible_rate(self.sampled_weight / self.sampled_secs)
     }
 
     fn remaining_weight(&self) -> f64 {
@@ -167,6 +259,10 @@ impl CategoryProgress {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ConversionEta {
     cats: [CategoryProgress; 3],
+    /// Per-category throughput measured by an **earlier** batch, installed by
+    /// [`ConversionEta::calibrate`]. Machine calibration, not batch state — see
+    /// [`ConversionEta::reset`].
+    calibration: [Option<f64>; 3],
 }
 
 impl ConversionEta {
@@ -176,12 +272,47 @@ impl ConversionEta {
 
     /// Forget the current batch. Called when a batch starts or ends so a stale
     /// ledger cannot leak its weights into the next pass's estimate.
+    ///
+    /// **Keeps the calibration on purpose — do not "simplify" this back to
+    /// `*self = Self::new()`.** This runs at both ends of every batch, so
+    /// wiping the calibration here would put every pass after the first back on
+    /// the compiled-in seeds within a single boot, which is the entire defect
+    /// this half of #40 exists to remove. What is per-batch is the queue;
+    /// what the machine can do is not.
     pub(crate) fn reset(&mut self) {
-        *self = Self::new();
+        self.cats = Default::default();
+    }
+
+    /// Install a previously measured throughput as this machine's seed for
+    /// `cat`. Returns `false` — and changes nothing — when the value is not a
+    /// plausible rate, so a corrupt stored value degrades to the compiled-in
+    /// seed rather than poisoning the estimate.
+    pub(crate) fn calibrate(&mut self, cat: MediaCategory, bytes_per_sec: f64) -> bool {
+        match plausible_rate(bytes_per_sec) {
+            Some(rate) => {
+                self.calibration[index(cat)] = Some(rate);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// This batch's measured average throughput for `cat`, ready to persist.
+    /// `None` when the category was never sampled — which is the common case
+    /// (an image-only pass measures no video) and is why the caller must write
+    /// per category rather than writing all three: overwriting a good video rate
+    /// with "nothing" would undo the calibration on every images-only scan.
+    pub(crate) fn measured_rate(&self, cat: MediaCategory) -> Option<f64> {
+        self.cats[index(cat)].cumulative_rate()
     }
 
     /// True when no work has been enqueued — the signal callers use to fall back
     /// to the count-based estimator.
+    ///
+    /// Keyed on enqueued weight alone, and it must stay that way: a calibrated
+    /// ledger with an empty queue is still empty. The client-declared upload
+    /// batch enqueues nothing here, and if calibration made this read non-empty
+    /// that path would lose its count-based ETA entirely.
     pub(crate) fn is_empty(&self) -> bool {
         self.cats.iter().all(|c| c.total_weight <= 0.0)
     }
@@ -240,6 +371,11 @@ impl ConversionEta {
             c.ewma_weight = EWMA_ALPHA * weight + (1.0 - EWMA_ALPHA) * c.ewma_weight;
             c.ewma_secs = EWMA_ALPHA * delta + (1.0 - EWMA_ALPHA) * c.ewma_secs;
         }
+        // Same event, unsmoothed — the calibration figure that outlives the
+        // batch. Accumulated here rather than anywhere else so it can only ever
+        // count what the EWMA counted.
+        c.sampled_weight += weight;
+        c.sampled_secs += delta;
         c.samples += 1;
     }
 
@@ -268,7 +404,7 @@ impl ConversionEta {
                 continue;
             }
             any_remaining = true;
-            let rate = c.rate(cat);
+            let rate = c.rate(cat, self.calibration[index(cat)]);
             if rate <= 0.0 {
                 // Cannot happen with the seeds above, but a zero rate would be
                 // an infinite ETA — refuse rather than emit one.
@@ -571,6 +707,199 @@ mod tests {
         assert!(
             (total - 52.5).abs() < 1.0,
             "expected the per-category remainders to sum, got {total:.1}s"
+        );
+    }
+
+    // ── Cross-pass calibration (#40 remainder) ──────────────────────────────
+
+    /// The headline of this half: a machine that has converted video once must
+    /// not go back to the compiled-in seed on the next pass.
+    ///
+    /// Verified RED by making `rate` ignore its `calibrated` argument: the
+    /// estimate returns to the 2 MB/s seed and reads ~500s.
+    #[test]
+    fn a_calibrated_rate_replaces_the_seed() {
+        let mb = 1024 * 1024;
+        let mut eta = ConversionEta::new();
+        assert!(eta.calibrate(MediaCategory::Video, 20.0 * MB));
+        eta.enqueue(MediaCategory::Video, 1000 * mb);
+
+        // 1000 MB at the calibrated 20 MB/s ⇒ ~50s. The seed would say ~500s.
+        let remaining = eta.eta_seconds().expect("1000 MB outstanding");
+        assert!(
+            (remaining - 50.0).abs() < 2.0,
+            "expected the calibrated rate to govern, got {remaining:.1}s \
+             (the 2 MB/s seed lands near 500s)"
+        );
+    }
+
+    /// Calibration is a better *seed*, not a competing estimator. The instant
+    /// this batch has evidence of its own, that evidence wins — the same
+    /// "measurement replaces the seed, never blends with it" rule the seeds
+    /// already follow.
+    #[test]
+    fn this_batch_s_own_measurement_outranks_the_calibration() {
+        let mb = 1024 * 1024;
+        let mut eta = ConversionEta::new();
+        // A stale calibration claiming this box is very fast.
+        assert!(eta.calibrate(MediaCategory::Video, 100.0 * MB));
+        eta.enqueue(MediaCategory::Video, 1010 * mb);
+        eta.start(MediaCategory::Video, 0.0);
+        // Reality today: 10 MB in 10s ⇒ 1 MB/s.
+        eta.complete(MediaCategory::Video, 10 * mb, 10.0);
+
+        let remaining = eta.eta_seconds().expect("1000 MB outstanding");
+        assert!(
+            remaining > 500.0,
+            "a live sample must displace the stored calibration, got \
+             {remaining:.1}s (the stale 100 MB/s reads ~10s)"
+        );
+    }
+
+    /// **The sharp edge.** `reset` runs at both ends of every batch. If it wiped
+    /// the calibration, this feature would do nothing even within one boot.
+    ///
+    /// Verified RED by restoring `*self = Self::new()`: the second estimate
+    /// falls back to the seed and reads ~500s.
+    #[test]
+    fn a_reset_drops_the_queue_and_keeps_the_calibration() {
+        let mb = 1024 * 1024;
+        let mut eta = ConversionEta::new();
+        assert!(eta.calibrate(MediaCategory::Video, 20.0 * MB));
+        eta.enqueue(MediaCategory::Video, 4000 * mb);
+
+        eta.reset();
+        assert!(eta.is_empty(), "the queue must not survive a reset");
+        assert!(
+            eta.eta_seconds().is_none(),
+            "the previous batch's 4 GB tail leaked past the reset"
+        );
+
+        eta.enqueue(MediaCategory::Video, 1000 * mb);
+        let remaining = eta.eta_seconds().expect("1000 MB outstanding");
+        assert!(
+            (remaining - 50.0).abs() < 2.0,
+            "the calibration must survive the reset, got {remaining:.1}s \
+             (the seed lands near 500s)"
+        );
+    }
+
+    /// A calibrated ledger with nothing queued is still *empty*. The
+    /// client-declared upload batch enqueues no weight and depends on this to
+    /// fall through to the count-based estimator.
+    #[test]
+    fn calibration_alone_does_not_make_the_ledger_look_busy() {
+        let mut eta = ConversionEta::new();
+        assert!(eta.calibrate(MediaCategory::Video, 20.0 * MB));
+        assert!(eta.is_empty());
+        assert!(eta.eta_seconds().is_none());
+    }
+
+    /// **What gets persisted is the batch average, not the EWMA**, and this is
+    /// the trace that separates them.
+    ///
+    /// A video lane eight wide: all eight encodes start together and finish in
+    /// a burst at ~100s, so true throughput is 800 MB / 100s = 8 MB/s. Each of
+    /// the seven near-zero deltas decays `ewma_secs` by 0.65 while
+    /// `ewma_weight` stays at one file's weight, so the EWMA ends the burst at
+    /// ~20 MB/s — a figure derived from the lane width rather than from the
+    /// machine. The running totals read 8 MB/s.
+    ///
+    /// Verified RED by exporting `rate()` instead: the stored figure comes back
+    /// at **20.4 MB/s, 2.5× optimistic**, which is the bad direction — every
+    /// later boot would open with an ETA that is too short and then grows.
+    #[test]
+    fn the_persisted_rate_is_the_batch_average_not_the_ewma() {
+        let mb = 1024 * 1024;
+        let mut eta = ConversionEta::new();
+        eta.enqueue(MediaCategory::Video, 800 * mb);
+        eta.start(MediaCategory::Video, 0.0);
+
+        // One long delta, then the rest of the lane landing together.
+        eta.complete(MediaCategory::Video, 100 * mb, 100.0);
+        for i in 1..8 {
+            eta.complete(MediaCategory::Video, 100 * mb, 100.0 + f64::from(i) * 0.01);
+        }
+
+        let stored = eta
+            .measured_rate(MediaCategory::Video)
+            .expect("eight samples were taken");
+        let true_rate = 800.0 * MB / 100.07;
+        assert!(
+            (stored / true_rate - 1.0).abs() < 0.05,
+            "expected ~{:.2} MB/s (800 MB in 100s), got {:.2} MB/s",
+            true_rate / MB,
+            stored / MB
+        );
+    }
+
+    /// An unsampled category exports nothing, so an images-only pass cannot
+    /// clobber the video rate a mixed pass measured last week.
+    #[test]
+    fn an_unsampled_category_has_nothing_to_persist() {
+        let mb = 1024 * 1024;
+        let mut eta = ConversionEta::new();
+        eta.enqueue(MediaCategory::Image, 100 * mb);
+        eta.enqueue(MediaCategory::Video, 100 * mb);
+        eta.start(MediaCategory::Image, 0.0);
+        eta.complete(MediaCategory::Image, 50 * mb, 1.0);
+
+        assert!(eta.measured_rate(MediaCategory::Image).is_some());
+        assert!(
+            eta.measured_rate(MediaCategory::Video).is_none(),
+            "no video finished, so there is no video rate to write"
+        );
+        assert!(
+            eta.measured_rate(MediaCategory::Audio).is_none(),
+            "no audio was even queued"
+        );
+    }
+
+    /// A stored rate crosses a process boundary, so it can be corrupt in ways a
+    /// constant cannot. `NaN` is the one that matters: `rate <= 0.0` is `false`
+    /// for `NaN`, so an unguarded one reaches the division and yields a `NaN`
+    /// ETA.
+    #[test]
+    fn an_implausible_calibration_is_refused_and_the_seed_stands() {
+        let mb = 1024 * 1024;
+        for bad in [
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            0.0,
+            -1.0,
+            0.5,  // half a byte per second ⇒ centuries
+            1e15, // faster than any disk ⇒ ETA pinned at 0
+        ] {
+            let mut eta = ConversionEta::new();
+            assert!(
+                !eta.calibrate(MediaCategory::Video, bad),
+                "{bad} was accepted as a throughput"
+            );
+            eta.enqueue(MediaCategory::Video, 1000 * mb);
+            let remaining = eta.eta_seconds().expect("1000 MB outstanding");
+            assert!(
+                remaining.is_finite() && (remaining - 500.0).abs() < 5.0,
+                "a refused calibration must leave the 2 MB/s seed in place; \
+                 {bad} produced {remaining}"
+            );
+        }
+    }
+
+    /// The same gate applies on the way out — a measurement that could not be
+    /// read back is not worth writing. The reachable case is a lone sample
+    /// landing inside the clock's resolution: `complete` only discards a
+    /// *non-positive* delta, so a 1 ms one survives and reads as ~100 GB/s.
+    #[test]
+    fn an_implausible_measurement_is_not_exported() {
+        let mb = 1024 * 1024;
+        let mut eta = ConversionEta::new();
+        eta.enqueue(MediaCategory::Image, 200 * mb);
+        eta.start(MediaCategory::Image, 0.0);
+        eta.complete(MediaCategory::Image, 100 * mb, 0.001);
+        assert!(
+            eta.measured_rate(MediaCategory::Image).is_none(),
+            "a 100 GB/s clock artefact must not be persisted as this box's rate"
         );
     }
 

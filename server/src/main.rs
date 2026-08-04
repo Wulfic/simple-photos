@@ -189,6 +189,14 @@ async fn main() -> anyhow::Result<()> {
     // Lets handlers (settings toggle, upload) and the auto-scan task wake the
     // geo processor on demand rather than waiting for its next 5-min poll tick.
     let geo_trigger = Arc::new(tokio::sync::Notify::new());
+
+    // Restore the conversion throughput this box measured on an earlier run, so
+    // the ETA's conservative compiled-in seeds only ever govern a genuinely
+    // fresh install (#40). Awaited rather than spawned: the auto-scan task
+    // started just below can begin a conversion pass immediately, and a seed
+    // that arrives after the pass has started is a seed that did nothing.
+    conversion::load_throughput_calibration(&pool).await;
+
     tasks::spawn_all(
         &pool,
         &config,

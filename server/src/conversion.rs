@@ -235,8 +235,169 @@ pub fn eta_complete(cat: MediaCategory, size_bytes: i64) {
 
 /// Drop the ledger so one batch's weights cannot leak into the next batch's
 /// estimate. Paired with the count reset in [`raw_start`] / [`clear_start_clock`].
+///
+/// Keeps the throughput calibration — see [`crate::progress::ConversionEta::reset`].
 fn eta_reset() {
     eta_ledger().lock().unwrap().reset();
+}
+
+// ── Throughput calibration, persisted across boots (#40 remainder) ───────────
+//
+// The seed rates in `crate::progress` are supposed to govern only a machine
+// that has never converted anything. Without this, *every* boot is that
+// machine: the ledger is process-local and reset at both ends of every batch,
+// so a box that has drained a 15k-photo library still quotes the conservative
+// compiled-in video rate the next time it starts up.
+//
+// Stored in `server_settings`, one key per category rather than one JSON blob,
+// so a bad value in one category cannot take the other two down with it — and
+// so a pass that only converted images can write the image rate without saying
+// anything about video.
+
+/// `server_settings` key holding the last measured throughput for `cat`.
+fn calibration_key(cat: MediaCategory) -> &'static str {
+    match cat {
+        MediaCategory::Image => "conversion_rate_image_bytes_per_sec",
+        MediaCategory::Audio => "conversion_rate_audio_bytes_per_sec",
+        MediaCategory::Video => "conversion_rate_video_bytes_per_sec",
+    }
+}
+
+/// Read the stored throughputs, keeping only the ones that survive validation.
+///
+/// Every failure here is **soft**: a missing, unreadable, unparseable or
+/// implausible value is dropped from the result and that category stays on its
+/// compiled-in seed. That is deliberately the opposite of
+/// [`crate::gallery::retention::pruned_through_seq`], which fails *closed* —
+/// the cost of ignoring a corrupt retention floor is silent data loss, while the
+/// cost of ignoring a corrupt rate is a worse progress bar for one pass.
+///
+/// Split out from [`load_throughput_calibration`] so it can be tested against a
+/// real database without touching the process-wide ledger.
+async fn read_calibration(pool: &sqlx::SqlitePool) -> Vec<(MediaCategory, f64)> {
+    let mut out = Vec::new();
+    for cat in crate::progress::CATEGORIES {
+        let key = calibration_key(cat);
+        let raw: Option<String> =
+            match sqlx::query_scalar("SELECT value FROM server_settings WHERE key = ?")
+                .bind(key)
+                .fetch_optional(pool)
+                .await
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e, key,
+                        "[CONVERT] Could not read stored conversion throughput; \
+                         this category falls back to the compiled-in seed"
+                    );
+                    continue;
+                }
+            };
+        let Some(raw) = raw else { continue };
+
+        let Ok(parsed) = raw.trim().parse::<f64>() else {
+            tracing::warn!(
+                key, value = %raw,
+                "[CONVERT] Stored conversion throughput is not a number; ignoring it"
+            );
+            continue;
+        };
+
+        // Validated here as well as in `calibrate`, so a bad row is reported
+        // with the key that holds it — `calibrate` only sees a float.
+        match crate::progress::plausible_rate(parsed) {
+            Some(rate) => out.push((cat, rate)),
+            None => tracing::warn!(
+                key,
+                value = parsed,
+                "[CONVERT] Stored conversion throughput is not a plausible rate; \
+                 ignoring it and using the compiled-in seed"
+            ),
+        }
+    }
+    out
+}
+
+/// Upsert one row per category. Categories absent from `rates` are left alone —
+/// see [`take_measured_rates`] for why that matters.
+async fn write_calibration(pool: &sqlx::SqlitePool, rates: &[(MediaCategory, f64)]) {
+    for (cat, rate) in rates {
+        let key = calibration_key(*cat);
+        if let Err(e) = sqlx::query(
+            "INSERT INTO server_settings (key, value) VALUES (?, ?) \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        )
+        .bind(key)
+        .bind(rate.to_string())
+        .execute(pool)
+        .await
+        {
+            tracing::warn!(
+                error = %e, key,
+                "[CONVERT] Could not persist measured conversion throughput; \
+                 the next boot falls back to the seed"
+            );
+        } else {
+            tracing::info!(
+                key,
+                mb_per_sec = rate / (1024.0 * 1024.0),
+                "[CONVERT] Stored measured conversion throughput"
+            );
+        }
+    }
+}
+
+/// Install stored rates into the ledger as this machine's seeds.
+fn apply_calibration(rates: &[(MediaCategory, f64)]) {
+    let mut ledger = eta_ledger().lock().unwrap();
+    for (cat, rate) in rates {
+        if ledger.calibrate(*cat, *rate) {
+            tracing::info!(
+                key = calibration_key(*cat),
+                mb_per_sec = rate / (1024.0 * 1024.0),
+                "[CONVERT] Restored measured conversion throughput; the ETA seed \
+                 for this category is retired"
+            );
+        }
+    }
+}
+
+/// Snapshot what the current batch measured **and** install it as the
+/// in-process seed, under one lock so the two can never disagree.
+///
+/// Updating the in-process copy is not an optimisation: without it the second
+/// pass of a boot would be back on the compiled-in seed until a restart re-read
+/// the row, because [`eta_reset`] runs at both ends of every batch.
+///
+/// Categories with no sample are omitted rather than reported as zero — an
+/// images-only pass must not overwrite the video rate a mixed pass measured
+/// last week.
+fn take_measured_rates() -> Vec<(MediaCategory, f64)> {
+    let mut ledger = eta_ledger().lock().unwrap();
+    let measured: Vec<(MediaCategory, f64)> = crate::progress::CATEGORIES
+        .into_iter()
+        .filter_map(|cat| ledger.measured_rate(cat).map(|rate| (cat, rate)))
+        .collect();
+    for (cat, rate) in &measured {
+        ledger.calibrate(*cat, *rate);
+    }
+    measured
+}
+
+/// Load previously measured throughputs into the ledger. Called once at boot,
+/// before any conversion pass can run.
+pub async fn load_throughput_calibration(pool: &sqlx::SqlitePool) {
+    let rates = read_calibration(pool).await;
+    apply_calibration(&rates);
+}
+
+/// Persist what this pass measured. Called once per conversion pass rather than
+/// once per file: the value only matters at the *start* of a pass, and a DB
+/// write per transcode would put an I/O round trip in the hot loop for nothing.
+pub async fn save_throughput_calibration(pool: &sqlx::SqlitePool) {
+    let rates = take_measured_rates();
+    write_calibration(pool, &rates).await;
 }
 
 fn now_ms() -> i64 {
@@ -1300,6 +1461,229 @@ mod tests {
              ETA: {eta:?}"
         );
         batch_end();
+    }
+
+    // ── Cross-pass throughput calibration (#40 remainder) ───────────────────
+
+    /// Wipe the process-wide ledger *including* its calibration. `eta_reset`
+    /// deliberately keeps the calibration, which is exactly what these tests
+    /// are about, so they need a way back to a virgin machine.
+    fn reset_ledger_completely() {
+        *eta_ledger().lock().unwrap() = crate::progress::ConversionEta::new();
+    }
+
+    /// The whole point of this half of #40. `raw_start` resets the ledger at the
+    /// top of every pass; if that also dropped the calibration, a box would be
+    /// back on the conservative compiled-in video seed for its second pass —
+    /// and for every pass after a restart.
+    ///
+    /// Verified RED by restoring `ConversionEta::reset` to `*self =
+    /// Self::new()`: the estimate returns to the seed and reads ~500s.
+    #[test]
+    fn a_new_batch_keeps_the_measured_throughput() {
+        let _lock = global_state_lock();
+        batch_end();
+        reset_ledger_completely();
+
+        // Stand in for a pass that measured ~20 MB/s on video. The arithmetic
+        // that produces this figure is pinned in `crate::progress`; what is
+        // under test here is that the batch lifecycle does not throw it away.
+        assert!(eta_ledger()
+            .lock()
+            .unwrap()
+            .calibrate(MediaCategory::Video, 20.0 * 1024.0 * 1024.0));
+
+        let _guard = ConversionBatchGuard::start(1);
+        eta_enqueue(MediaCategory::Video, 1000 * 1024 * 1024);
+
+        let eta = conversion_eta_seconds().expect("1000 MB outstanding");
+        assert!(
+            (eta - 50.0).abs() < 5.0,
+            "the calibrated 20 MB/s must survive the batch reset; got {eta:.1}s \
+             (the 2 MB/s compiled-in seed lands near 500s)"
+        );
+
+        batch_end();
+        reset_ledger_completely();
+    }
+
+    /// A pass that converted only images must publish only an image rate.
+    /// Reporting a zero (or a seed) for video would overwrite a good stored
+    /// value on every images-only scan, which is most of them.
+    #[test]
+    fn an_images_only_pass_publishes_nothing_about_video() {
+        let _lock = global_state_lock();
+        batch_end();
+        reset_ledger_completely();
+
+        let _guard = ConversionBatchGuard::start(2);
+        eta_enqueue(MediaCategory::Image, 20 * 1024 * 1024);
+        eta_enqueue(MediaCategory::Video, 500 * 1024 * 1024);
+        eta_start(MediaCategory::Image);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        eta_complete(MediaCategory::Image, 10 * 1024 * 1024);
+
+        let measured = take_measured_rates();
+        assert_eq!(
+            measured.len(),
+            1,
+            "only the sampled category may be published, got {measured:?}"
+        );
+        assert_eq!(measured[0].0, MediaCategory::Image);
+
+        batch_end();
+        reset_ledger_completely();
+    }
+
+    /// `take_measured_rates` installs what it returns, so the *next* pass in
+    /// this same boot is calibrated without waiting for a restart to re-read
+    /// the row.
+    #[test]
+    fn taking_the_measurement_also_seeds_the_next_pass() {
+        let _lock = global_state_lock();
+        batch_end();
+        reset_ledger_completely();
+
+        {
+            let _guard = ConversionBatchGuard::start(1);
+            eta_enqueue(MediaCategory::Video, 100 * 1024 * 1024);
+            eta_start(MediaCategory::Video);
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            // ~50 MB over ~20 ms is far above the 2 MB/s seed, and comfortably
+            // inside the plausible band however the sleep actually lands.
+            eta_complete(MediaCategory::Video, 50 * 1024 * 1024);
+            assert_eq!(take_measured_rates().len(), 1, "video was sampled");
+        }
+
+        // A fresh pass, no samples of its own: it must quote the measurement,
+        // not the seed.
+        let _guard = ConversionBatchGuard::start(1);
+        eta_enqueue(MediaCategory::Video, 1000 * 1024 * 1024);
+        let eta = conversion_eta_seconds().expect("1000 MB outstanding");
+        assert!(
+            eta < 100.0,
+            "the previous pass's measurement must seed this one; got {eta:.1}s \
+             (the compiled-in seed lands near 500s)"
+        );
+
+        batch_end();
+        reset_ledger_completely();
+    }
+
+    // ── Calibration persistence (DB half) ───────────────────────────────────
+    //
+    // These deliberately drive `read_calibration` / `write_calibration` rather
+    // than the two public wrappers: the wrappers hold the ledger's std `Mutex`,
+    // and a test that awaited while holding it would both trip
+    // `clippy::await_holding_lock` and serialise nothing useful.
+
+    async fn calibration_pool() -> sqlx::SqlitePool {
+        use std::str::FromStr;
+        let opts = sqlx::sqlite::SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .foreign_keys(false);
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        pool
+    }
+
+    async fn stored(pool: &sqlx::SqlitePool, cat: MediaCategory) -> Option<String> {
+        sqlx::query_scalar("SELECT value FROM server_settings WHERE key = ?")
+            .bind(calibration_key(cat))
+            .fetch_optional(pool)
+            .await
+            .unwrap()
+    }
+
+    /// The round trip that makes the feature real: what one boot measured, the
+    /// next boot reads back.
+    #[tokio::test]
+    async fn a_measured_rate_survives_a_restart() {
+        let pool = calibration_pool().await;
+        let image = 45.0 * 1024.0 * 1024.0;
+        let video = 3.75 * 1024.0 * 1024.0;
+
+        write_calibration(
+            &pool,
+            &[(MediaCategory::Image, image), (MediaCategory::Video, video)],
+        )
+        .await;
+
+        let read = read_calibration(&pool).await;
+        assert_eq!(
+            read,
+            vec![(MediaCategory::Image, image), (MediaCategory::Video, video)],
+            "a stored rate must come back exactly, in category order"
+        );
+    }
+
+    /// A later pass supersedes an earlier one rather than accumulating rows.
+    #[tokio::test]
+    async fn a_later_pass_overwrites_the_stored_rate() {
+        let pool = calibration_pool().await;
+        write_calibration(&pool, &[(MediaCategory::Video, 2.0 * 1024.0 * 1024.0)]).await;
+        write_calibration(&pool, &[(MediaCategory::Video, 8.0 * 1024.0 * 1024.0)]).await;
+
+        assert_eq!(
+            read_calibration(&pool).await,
+            vec![(MediaCategory::Video, 8.0 * 1024.0 * 1024.0)]
+        );
+    }
+
+    /// An images-only pass writes nothing about video, so a video rate measured
+    /// earlier is still there afterwards. This is the DB-side counterpart to
+    /// `an_images_only_pass_publishes_nothing_about_video`.
+    #[tokio::test]
+    async fn a_pass_that_measured_nothing_leaves_the_stored_rates_alone() {
+        let pool = calibration_pool().await;
+        let video = 6.0 * 1024.0 * 1024.0;
+        write_calibration(&pool, &[(MediaCategory::Video, video)]).await;
+
+        // The shape `save_throughput_calibration` produces after a pass with no
+        // samples at all.
+        write_calibration(&pool, &[]).await;
+
+        assert_eq!(
+            read_calibration(&pool).await,
+            vec![(MediaCategory::Video, video)],
+            "an empty measurement must not erase a good stored rate"
+        );
+    }
+
+    /// A corrupt row degrades that one category to its seed and leaves the
+    /// others working — the reason each category gets its own key instead of
+    /// one JSON blob.
+    #[tokio::test]
+    async fn a_corrupt_row_does_not_take_the_other_categories_down() {
+        let pool = calibration_pool().await;
+        let image = 40.0 * 1024.0 * 1024.0;
+        write_calibration(&pool, &[(MediaCategory::Image, image)]).await;
+
+        for junk in ["not-a-number", "NaN", "inf", "0", "-5", "1e15", ""] {
+            sqlx::query(
+                "INSERT INTO server_settings (key, value) VALUES (?, ?) \
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            )
+            .bind(calibration_key(MediaCategory::Video))
+            .bind(junk)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+            assert_eq!(
+                read_calibration(&pool).await,
+                vec![(MediaCategory::Image, image)],
+                "video value {junk:?} must be dropped without disturbing image"
+            );
+        }
+
+        // And the junk is still sitting in the table — reads are non-destructive,
+        // so an operator can see what was rejected.
+        assert!(stored(&pool, MediaCategory::Video).await.is_some());
     }
 
     #[test]

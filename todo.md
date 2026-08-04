@@ -330,14 +330,88 @@ have made", which is why this was correctly filed as not urgent.
 
 ---
 
-### B2 — Persist measured per-category conversion rates (#40 remainder)
+### B2 — Persist measured per-category conversion rates (#40 remainder) — DONE 2026-08-04
 
 The ETA's seed rates only govern a machine that has never converted anything —
 but today **every server boot is that machine**.
 
-- [ ] Persist the last measured rate per category so the seeds retire on any box
-      that has run one pass. The seeds are conservative and decay on the first
-      sample, so this is an accuracy win, not a correctness fix.
+**The item understated the scope by one word: it is not just every *boot*, it is
+every *pass*.** `eta_reset` runs at both ends of every batch (`raw_start` and
+`clear_start_clock`), and `ConversionEta::reset` was `*self = Self::new()` — so
+the second conversion pass of a single uptime was already back on the
+compiled-in seeds. Persisting to the DB without fixing that would have shipped a
+feature that only worked once per restart. The split the fix rests on: **the
+queue is batch state, what the machine can do is not.** `reset` now clears
+`cats` and keeps `calibration`, with the reason written next to it, because
+"simplify this back to `*self = Self::new()`" is exactly the tidy-up that would
+silently undo it.
+
+- [x] Persist the last measured rate per category so the seeds retire on any box
+      that has run one pass. One `server_settings` key per category rather than
+      a JSON blob, so a corrupt value in one cannot take the other two down.
+      Written once per pass (`save_throughput_calibration` in `ingest.rs`, not
+      per file), read once at boot (`main.rs`, **awaited** rather than spawned —
+      a seed that lands after the auto-scan has already started a pass is a seed
+      that did nothing).
+- [x] **What gets persisted is the batch average `Σweight / Σsecs`, NOT the
+      EWMA the live estimate uses**, and the difference is not cosmetic. A video
+      lane of width N starts N encodes together and they finish in a burst: each
+      near-zero delta decays `ewma_secs` by a further 0.65 while `ewma_weight`
+      does not move, so the EWMA's end-of-burst answer is a function of **the
+      lane width, not the machine** — under-reading a narrow lane and
+      over-reading a wide one. Measured on the 8-wide trace in the test:
+      **20.4 MB/s against a true 8.0 MB/s, 2.5× optimistic**, which is the bad
+      direction to bake in (an ETA that opens short and grows). The running
+      totals read the truth from the moment the burst lands. This also retires
+      #40's documented "first video sample underestimates by the lane width"
+      wart for the persisted figure — Σ/Σ never had it.
+      That is not a defect in the EWMA: mid-burst the *recent* rate genuinely is
+      high, which is what in-batch tracking wants. It is a reason not to store it.
+- [x] The stored rate is a **better seed**, not a competing estimator. Precedence
+      is `this batch's own sample > stored calibration > compiled-in seed`, so
+      once a category has evidence of its own nothing about in-batch behaviour
+      changes — the same "a measurement replaces a seed, never blends with it"
+      rule #40 already follows. `is_empty()` is still keyed on enqueued weight
+      alone: a calibrated ledger with an empty queue is empty, or the
+      client-declared upload batch loses its count-based fallback.
+- [x] **A persisted rate is dangerous in a way a constant is not** — it crosses a
+      process boundary and it feeds a division. `plausible_rate` gates it in
+      **both** directions (a value that would be refused on load is never
+      written), at 1 KiB/s .. 10 GiB/s. `NaN` is the one that actually bites:
+      `rate <= 0.0` is **false** for `NaN`, so it sails straight through
+      `eta_seconds`' existing guard. Failure is **soft** here — unlike
+      `retention.rs`'s deliberately fail-closed floor — because ignoring a
+      corrupt rate costs one worse progress bar, not silent data loss. The
+      asymmetry is stated in both modules so neither reads as an oversight.
+- [x] A category with no sample publishes **nothing**, rather than a zero or a
+      seed. Most passes are images-only; reporting all three would erase the
+      video rate a mixed pass measured last week on every one of them.
+- [x] Tests: 15 new, 508 green (was 493). Verified RED four ways —
+      `reset` restored to `*self = Self::new()` (3 fail), `rate` ignoring its
+      calibration argument (4 fail), exporting the EWMA instead of the batch
+      average (1 fail, printing `expected ~7.99 MB/s … got 20.36 MB/s`), and
+      `plausible_rate` made a no-op (3 fail, `NaN` first).
+      The DB half is tested through `read_calibration`/`write_calibration`
+      rather than the public wrappers: those hold the ledger's std `Mutex`, and
+      an async test awaiting while holding it would trip
+      `clippy::await_holding_lock` and serialise nothing useful anyway.
+
+> **Correction made mid-flight, recorded because the doc was wrong before it was
+> right:** the first version of the EWMA-vs-average test used a 4-wide burst and
+> the comment beside it claimed "~1.3 MB/s, a 3× pessimism". The RED check
+> reported 3.64 MB/s against 4.00 — a real 9% failure, but the *sign and
+> magnitude in the comment were both wrong*, and the margin was thin enough that
+> a later tweak could have made the test vacuous. Widened to 8 and the claim
+> rewritten from the measurement. **A test that fails for a smaller reason than
+> its comment claims is a test that has not been read.**
+
+> **Not a code change, but it cost real time and will again:** `cargo fmt` on
+> this machine (rustfmt 1.9.0 / Rust 1.96) reformatted **20 files nobody
+> touched**. CI pins `RUST_TOOLCHAIN: "1.88"` and gates on
+> `cargo fmt --all -- --check`, so local rustfmt output is not the thing CI
+> checks. Every hunk was 1.96 splitting a line 1.88 left joined. **Do not run
+> `cargo fmt` on this repo from a 1.96 toolchain** — revert the churn by hand,
+> or install 1.88.
 
 ---
 
@@ -399,7 +473,13 @@ re-created 2026-07-22 18:06Z** (12,856 photos, fully encrypted). So the box runs
       pure wasted CPU today.
 - [ ] **B2/#40 ETA** — watch a real mixed pass and compare the reported ETA with
       the actual drain time. Whether the seeded video rate is within ~2× of this
-      hardware has never been measured.
+      hardware has never been measured. **Now also the readout for the
+      calibration above**, and it is cheap: after one pass,
+      `SELECT * FROM server_settings WHERE key LIKE 'conversion_rate_%'` shows
+      what CT132 actually measured, so the seeds can be re-based on evidence
+      instead of the order-of-magnitude guesses in `progress.rs`. The *second*
+      pass is the one that proves it — its ETA must open near the first pass's
+      measured rate rather than at the 2 MB/s video seed.
 - [ ] **B3/#46** — re-verify the codec backfill actually **drains to zero**. It
       has never run on the live box, and "never settles to zero" is how the
       re-thrash was caught last time.
