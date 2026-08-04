@@ -39,6 +39,22 @@ fn conversion_lock() -> &'static Mutex<()> {
 /// next autoscan tick.
 static CONVERSION_RERUN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Is a conversion pass holding the pass lock right now?
+///
+/// The ladder sweep (#49) asks this so it can yield: both it and this pass open
+/// a video lane `plan.video_lane` wide, and two of them at once is exactly the
+/// over-subscription `GPU_VIDEO_SESSIONS` (and the CPU core reserve) exist to
+/// prevent.
+///
+/// Deliberately keyed on the pass **lock**, not on
+/// `conversion::progress_snapshot()`'s `active` flag: a client upload batch
+/// pins that flag via `batch_start` with no pass running at all, so keying on
+/// it would defer the sweep for the whole of an upload that never converts
+/// anything.
+pub fn conversion_pass_running() -> bool {
+    conversion_lock().try_lock().is_err()
+}
+
 /// Pure decision for [`ingest_pipeline_busy`], split out so the phase-ordering
 /// invariant can be unit-tested without a live database or running migration.
 ///
@@ -283,15 +299,17 @@ async fn process_candidate(
                 "size_bytes": candidate.size,
                 "elapsed_ms": file_start.elapsed().as_millis() as u64,
             });
-            if let (Some(health), Some(obj)) =
-                (&candidate.salvage, convert_details.as_object_mut())
+            if let (Some(health), Some(obj)) = (&candidate.salvage, convert_details.as_object_mut())
             {
                 // #46: this was a corrupt-bitstream salvage. ffmpeg keeps the
                 // frames it can read and drops the rest, so the output is SHORTER
                 // than the source — record the loss instead of presenting a
                 // silently-truncated video as a clean conversion.
                 obj.insert("salvage".into(), serde_json::Value::Bool(true));
-                obj.insert("decode_errors".into(), serde_json::json!(health.error_count));
+                obj.insert(
+                    "decode_errors".into(),
+                    serde_json::json!(health.error_count),
+                );
                 obj.insert("first_error".into(), serde_json::json!(health.first_error));
                 obj.insert(
                     "note".into(),
@@ -774,7 +792,10 @@ enum OpaqueVerdict {
 ///   are strict: 51s of corrupt input yields 28s of clean, playable output.
 /// * **No video stream at all** (`VIDEO0063.mp4`). A re-encode cannot help, so
 ///   it is retired rather than retried — see [`OpaqueVerdict::Unplayable`].
-async fn opaque_container_needs_conversion(abs_path: &std::path::Path, name: &str) -> OpaqueVerdict {
+async fn opaque_container_needs_conversion(
+    abs_path: &std::path::Path,
+    name: &str,
+) -> OpaqueVerdict {
     use crate::transcode::probe;
 
     if !probe::is_opaque_video_container(name) {
@@ -1060,11 +1081,8 @@ async fn run_conversion_pass_inner(
                     // 031's invalidation, which doubles as this cap's escape
                     // hatch).
                     if let Some(row) = skip_map.get(&rel_path) {
-                        match crate::photos::scan_skip::skip_verdict(
-                            row,
-                            size,
-                            modified.as_deref(),
-                        ) {
+                        match crate::photos::scan_skip::skip_verdict(row, size, modified.as_deref())
+                        {
                             crate::photos::scan_skip::SkipVerdict::Skip => {
                                 retired_skipped += 1;
                                 continue;
@@ -1393,7 +1411,11 @@ mod opaque_container_tests {
             .map(|s| s.success())
             .unwrap_or(false);
 
-        if ok && std::fs::metadata(&path).map(|m| m.len() > 0).unwrap_or(false) {
+        if ok
+            && std::fs::metadata(&path)
+                .map(|m| m.len() > 0)
+                .unwrap_or(false)
+        {
             Some(path)
         } else {
             let _ = std::fs::remove_file(&path);
@@ -1431,7 +1453,14 @@ mod opaque_container_tests {
         let Some(path) = make_fixture(
             "hevc.mp4",
             "libx265",
-            &["-x265-params", "log-level=none", "-pix_fmt", "yuv420p", "-tag:v", "hvc1"],
+            &[
+                "-x265-params",
+                "log-level=none",
+                "-pix_fmt",
+                "yuv420p",
+                "-tag:v",
+                "hvc1",
+            ],
         ) else {
             eprintln!("ffmpeg/libx265 unavailable — skipping");
             return;
@@ -1480,8 +1509,8 @@ mod opaque_container_tests {
     /// so queueing it would fail on every pass forever.
     #[tokio::test]
     async fn a_container_with_no_video_stream_is_unplayable() {
-        let path = std::env::temp_dir()
-            .join(format!("sp_probe_{}_audio_only.mp4", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("sp_probe_{}_audio_only.mp4", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let ok = std::process::Command::new("ffmpeg")
             .args([
@@ -1500,7 +1529,11 @@ mod opaque_container_tests {
             .status()
             .map(|s| s.success())
             .unwrap_or(false);
-        if !ok || std::fs::metadata(&path).map(|m| m.len() == 0).unwrap_or(true) {
+        if !ok
+            || std::fs::metadata(&path)
+                .map(|m| m.len() == 0)
+                .unwrap_or(true)
+        {
             eprintln!("ffmpeg/aac unavailable — skipping");
             let _ = std::fs::remove_file(&path);
             return;
@@ -1563,7 +1596,16 @@ mod opaque_container_tests {
         let Some(path) = make_fixture(
             "vp9.webm",
             "libvpx-vp9",
-            &["-pix_fmt", "yuv420p", "-b:v", "200k", "-deadline", "realtime", "-cpu-used", "8"],
+            &[
+                "-pix_fmt",
+                "yuv420p",
+                "-b:v",
+                "200k",
+                "-deadline",
+                "realtime",
+                "-cpu-used",
+                "8",
+            ],
         ) else {
             eprintln!("ffmpeg/libvpx-vp9 unavailable — skipping");
             return;

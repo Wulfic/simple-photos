@@ -21,6 +21,24 @@ and the standing deploy/device verification debt.
   `test_18` audio 403s (6 — `audio_backup_enabled` defaults false). Do not blame
   your diff for those; do not let them grow.
 
+> **⚠ GitHub Actions has not run on `dev` since 2026-05-11** (last run
+> `3315990`, ~50 commits ago). Found 2026-08-04 while checking the fmt gate.
+> Consequences, all verified locally against CI's own pinned toolchain
+> (`RUST_TOOLCHAIN: "1.88"`, now installed here — `cargo +1.88 …`):
+> - `cargo fmt --all -- --check` reports **112 diffs on clean `dev`**, across
+>   ~30 files. Not line endings (identical under LF and CRLF) and **not a
+>   toolchain mismatch** — 1.88 and 1.96 produce the *same* list, byte for byte.
+>   Memory `issue40-b2-rate-calibration-2026-08-04`'s "local 1.96 vs CI's 1.88
+>   churned 20 untouched files" diagnosis is **wrong**: the repo has simply
+>   drifted out of format since CI stopped checking. Corrected in that memory.
+> - `cargo clippy --all-targets -- -D warnings` fails on a pre-existing
+>   `items after a test module` in
+>   [server/src/photos/serve.rs:586](server/src/photos/serve.rs#L586).
+> So "never commit red" has been **unverified by CI for ~50 commits**; only the
+> local test suite has been holding the line. Two separate cleanups are owed
+> (a repo-wide `cargo +1.88 fmt`, and that one clippy lint), plus finding out
+> *why* Actions stopped — neither is in scope for the item that found it.
+
 ---
 
 ## 1. Code
@@ -417,11 +435,49 @@ silently undo it.
 
 ### B4 — Ladder loose ends (#49 remainder)
 
-- [ ] **Cost control.** The sweep is **serial** — sequencing, the wall-clock
-      budget and the shared thread budget all landed in `60d555d`, but a
-      114-file backlog of mostly-4K sources still drains slowly. Decide
-      deliberately: give it a lane of the existing two-lane parallelism
-      (`SIMPLE_PHOTOS_CONVERSION_JOBS`) or keep it serial **and write down why**.
+- [x] **Cost control — DONE 2026-08-04. Decided: give it the video lane.**
+      **The serial sweep was already budgeting itself for a parallel one**, and
+      that is what settled it rather than any throughput guess. Each encode is
+      capped at `video_threads` = `usable / video_lane` — a *share* sized for
+      `video_lane` concurrent encodes — while exactly one ran. On a 128-thread
+      host that is 8 threads of 112 usable, measured by the new test: lane 14,
+      GPU lane 3. There is no serial fix, because handing the one encode all 112
+      threads is precisely what `CPU_VIDEO_THREADS_TARGET` exists to refuse.
+      `video_lane` is **1** below ~24 threads, so this is a provable no-op on
+      ordinary hardware — pinned by `the_sweep_stays_serial_on_an_ordinary_host`.
+- [x] **Two defects found on the way, neither named by this item.**
+      1. `transcode_to_rung` planned its own threads from
+         `plan_parallelism(num_cpus::get(), ..)`, which **never reads
+         `SIMPLE_PHOTOS_CONVERSION_JOBS`** — so the one knob this item proposed
+         handing the ladder did not reach the ladder at all. It now takes the
+         budget as a parameter; the sweep plans once with `detect_parallelism`
+         and both halves travel together. Sixth-instance material for the
+         "two derivations of one list" risk below, in its budget form.
+      2. **Nothing stopped the sweep running beside a conversion pass.** The
+         ordering was arranged only by the three autoscan sites awaiting
+         `run_conversion_pass` first; `upload.rs` and `scan.rs` kick that pass
+         with no such sequencing, so an upload landing mid-sweep put two
+         `video_lane`-wide video lanes on one box — on the GPU path, literally
+         double the hardware session cap. Now a policy (`should_defer_sweep`),
+         checked at sweep start **and** before each file, keyed on the pass
+         **lock** rather than on `CONV_ACTIVE` (a client `batch_start` pins that
+         flag with no pass running). `transcode_to_rung`'s comment claiming a
+         ladder encode "runs alongside first-pass conversions" was the tell.
+- [x] Tests: 7 new, 515 green (was 508). Verified RED three ways — the serial
+      driver restored (`peak_concurrency` comes back 1, and *only* that test
+      fails, which is the point: the tallies cannot tell a parallel driver from
+      a serial one, so `peak_concurrency` is carried in `SweepOutcome` and
+      logged); the conversion arm dropped from `should_defer_sweep`; and the
+      lane pinned back to 1 (`left: 1, right: 14`).
+- [ ] **Not fixed, and stated here so the next slow-drain investigation looks in
+      the right place.** The sweep is also bounded by `SWEEP_CANDIDATE_LIMIT`
+      (16 files) and by autoscan's ~hourly idle cadence. Against the live
+      114-file backlog **those two dominate**, and on a box where
+      `video_lane == 1` the lane width changes nothing whatsoever — so this
+      item's premise ("a 114-file backlog still drains slowly") is only
+      *partly* addressed. Widening either bound is a disk-I/O decision
+      (memory `idle-disk-thrash-investigation`), not a lane-width one. Measure
+      on CT132 first: the redeploy below is what produces the evidence.
 - [ ] **Securing a video removes its picker.** The sync feed is the only delivery
       path and secure photos are not in it, so the secure viewer shows a
       single-quality video where the main gallery showed a choice. Not a
