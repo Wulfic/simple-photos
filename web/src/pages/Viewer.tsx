@@ -37,6 +37,7 @@ import { castMedia, getCastState, subscribeCastState } from "../utils/cast";
 import { useAuthStore } from "../store/auth";
 import { appendGalleryTokenParam } from "../utils/galleryToken";
 import type { PhotoInfoData } from "../hooks/useViewerMedia";
+import type { Rendition } from "../gallery/renditionChoice";
 
 // ── Navigation context passed via location.state ─────────────────────────────
 interface ViewerLocationState {
@@ -81,6 +82,17 @@ interface SecureGalleryItemMeta {
   motion_video_blob_id?: string | null;
   /** Non-destructive crop/edit JSON stored on the secure item (#31). */
   crop_metadata?: string | null;
+  /**
+   * The #49 resolution ladder of the video this item hides, or absent/empty when
+   * it has none. Carried here for the same reason `photo_subtype` is: secured
+   * photos never enter `db.photos`, so the IDB row the main viewer reads its
+   * ladder from always misses for them.
+   *
+   * Only videos secured *after* their rungs were generated have one — rung
+   * generation is gated on gallery eligibility, so securing first means no
+   * picker, ever. That asymmetry is the server's, and it is deliberate.
+   */
+  renditions?: Rendition[] | null;
 }
 
 // ── Viewer ────────────────────────────────────────────────────────────────────
@@ -245,11 +257,23 @@ export default function Viewer() {
   // video is open should make the gear icon appear, and the sync feed writes
   // the ladder into this row when the server's change log nominates the photo.
   const cachedPhotoRow = useLiveQuery(() => (id ? db.photos.get(id) : undefined), [id]);
+  // Secured photos are excluded from main-gallery sync, so `db.photos` NEVER
+  // holds them — the live query above is a guaranteed miss here and the ladder
+  // has to come off the secure item, exactly like `photo_subtype` and
+  // `crop_metadata` already do below. Reading the item list rather than IDB is
+  // the whole reason securing a video used to remove its quality picker.
+  const ladder = useMemo(
+    () =>
+      secureGallery
+        ? (currentSecureItem?.renditions ?? undefined)
+        : cachedPhotoRow?.renditions,
+    [secureGallery, currentSecureItem, cachedPhotoRow],
+  );
   // `enabled: !editMode` is a correctness gate, not a UI one — a crop or trim
   // saved while a 1080p rung is on screen would re-encode the downscale over
   // the user's original. It reverts the selection, not just the control.
   const rendition = useVideoRendition({
-    renditions: cachedPhotoRow?.renditions,
+    renditions: ladder,
     photoId: id,
     videoRef,
     enabled: !editMode,

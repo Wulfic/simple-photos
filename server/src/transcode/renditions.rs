@@ -22,6 +22,41 @@ use crate::error::AppError;
 const RENDITION_COLUMNS: &str = "photo_id, short_edge, width, height, is_source, blob_id, \
      file_path, codec, bitrate, size_bytes";
 
+/// The same projection, qualified with a table alias for queries that join.
+///
+/// Derived rather than written out a second time: an unqualified copy and a
+/// `r.`-prefixed copy of one column list is the drift this module's header
+/// already argues against, and here the drift would not even fail loudly — a
+/// missing column is a compile error, but a *stale* one silently changes what a
+/// picker is offered.
+fn qualified_rendition_columns(alias: &str) -> String {
+    RENDITION_COLUMNS
+        .split(',')
+        .map(|c| format!("{alias}.{}", c.trim()))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// How a `video_renditions` row is correlated to the secure-gallery item that
+/// hides its photo. Requires the aliases `r` (`video_renditions`) and `gi`
+/// (`encrypted_gallery_items`).
+///
+/// **Shared with [`crate::gallery::access::is_secure_item`]'s rendition arm, and
+/// that sharing is the point.** That arm decides which rung blobs the serve path
+/// gates behind the unlock token; this one decides which rung blobs the secure
+/// listing offers. If the two ever disagreed in the direction "listed but not
+/// gated", the picker would hand every authenticated session a full-quality copy
+/// of a video the secure album exists to hide — the exact exposure the arm was
+/// added to close.
+///
+/// Both arms are needed because a secure item names its photo two different
+/// ways: `blob_id` alone when a photo was hidden in place, and
+/// `original_blob_id` when `add_gallery_item` cloned it (there `blob_id` is the
+/// *clone*, which the ladder never runs on because it is ineligible by
+/// construction).
+pub const SECURE_ITEM_RENDITION_MATCH: &str =
+    "(r.photo_id = gi.blob_id OR r.photo_id = gi.original_blob_id)";
+
 /// One stored rendition of a video.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, sqlx::FromRow)]
 pub struct StoredRendition {
@@ -218,6 +253,100 @@ pub async fn list_renditions_for_photos(
         out.entry(row.photo_id.clone())
             .or_default()
             .push(row.into());
+    }
+    Ok(out)
+}
+
+/// Renditions for secure-gallery items, keyed by **`encrypted_gallery_items.id`**
+/// — the item id, not a photo id, because that is the only identifier the secure
+/// listing hands its clients.
+///
+/// Pass `Some(gallery_id)` for the per-gallery endpoint and `None` for the
+/// aggregate one. `user_id` scopes both; the caller's own ownership check on the
+/// gallery is still required and still runs first.
+///
+/// # Why a secured video has a ladder at all
+///
+/// Securing a photo inserts an `encrypted_gallery_items` row and touches nothing
+/// else — the `photos` row survives (that is what
+/// [`ELIGIBLE_PREDICATE`](crate::gallery::eligibility::ELIGIBLE_PREDICATE) hides
+/// it with) and so do its `video_renditions` rows and their blobs, which
+/// `orphan_sweep` deliberately still counts as referenced. So the rungs of a
+/// video secured *after* its ladder was generated are sitting on disk, paid for,
+/// and reachable with the unlock token the caller already presented. Not
+/// offering them meant the secure viewer forced a full-quality download of a
+/// video the main gallery let the user downgrade.
+///
+/// # The asymmetry this does NOT fix, deliberately
+///
+/// Rung *generation* is gated on `ELIGIBLE_PREDICATE`, so a video secured
+/// **before** its rung was produced never gets one and never will. The picker
+/// therefore appears for some secure videos and not others, keyed on the order
+/// of two operations the user does not think about. Widening generation to
+/// secured photos is a different decision — it would run ffmpeg over hidden
+/// content on a schedule and mint new derived blobs from it — and is not made
+/// here. What this function must not do is *hide* the asymmetry: a video with no
+/// rungs is simply absent from the map, which draws no picker, which is honest.
+pub async fn list_renditions_for_secure_items(
+    pool: &sqlx::SqlitePool,
+    user_id: &str,
+    gallery_id: Option<&str>,
+) -> Result<HashMap<String, Vec<RenditionDto>>, AppError> {
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        item_id: String,
+        #[sqlx(flatten)]
+        rendition: StoredRendition,
+    }
+
+    let cols = qualified_rendition_columns("r");
+    let scope = if gallery_id.is_some() {
+        "AND gi.gallery_id = ?2"
+    } else {
+        ""
+    };
+    // `blob_id` breaks the ORDER BY tie so the dedupe below is deterministic.
+    // Two rows can share a rung only if the *clone* photo row also acquired one,
+    // which requires the ladder to have sampled it inside the few statements
+    // between `add_gallery_item` inserting it and inserting the item row that
+    // makes it ineligible. Vanishingly rare, not impossible, and a picker that
+    // reorders itself between two identical requests is worse than a picker that
+    // picks arbitrarily but always the same way.
+    let sql = format!(
+        "SELECT gi.id AS item_id, {cols} \
+         FROM encrypted_gallery_items gi \
+         JOIN encrypted_galleries g ON g.id = gi.gallery_id \
+         JOIN video_renditions r ON {SECURE_ITEM_RENDITION_MATCH} \
+         WHERE g.user_id = ?1 {scope} \
+         ORDER BY gi.id ASC, r.short_edge DESC, r.blob_id ASC"
+    );
+
+    let mut q = sqlx::query_as::<_, Row>(&sql).bind(user_id);
+    if let Some(gid) = gallery_id {
+        q = q.bind(gid);
+    }
+    let rows = q.fetch_all(pool).await.map_err(|e| {
+        tracing::error!(
+            user_id = %user_id,
+            gallery_id = gallery_id.unwrap_or("*"),
+            "failed to list secure-gallery video renditions: {e}"
+        );
+        AppError::from(e)
+    })?;
+
+    let mut out: HashMap<String, Vec<RenditionDto>> = HashMap::new();
+    for row in rows {
+        if !row.rendition.is_playable() {
+            continue;
+        }
+        let bucket = out.entry(row.item_id).or_default();
+        if bucket
+            .iter()
+            .any(|r| r.short_edge == row.rendition.short_edge)
+        {
+            continue;
+        }
+        bucket.push(row.rendition.into());
     }
     Ok(out)
 }
@@ -618,6 +747,279 @@ mod tests {
             .unwrap();
 
         assert!(head_seq(&pool).await > before);
+    }
+
+    // ── Secure-gallery ladder (#49 remainder) ────────────────────────────────
+
+    /// Hide `photo_id` in gallery `g1` exactly as an in-place secure does: one
+    /// `encrypted_gallery_items` row naming the photo by `blob_id`, `photos`
+    /// untouched. Returns the item id.
+    async fn secure_in_place(pool: &sqlx::SqlitePool, photo_id: &str, item_id: &str) -> String {
+        sqlx::query(
+            "INSERT OR IGNORE INTO encrypted_galleries (id, user_id, name, password_hash, \
+             created_at) VALUES ('g1', 'u1', 'vault', 'x', '2026-01-01T00:00:00Z')",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        // `encrypted_gallery_items.blob_id` carries an FK to `blobs`, so a
+        // secured photo's id is also a blob id.
+        insert_blob(pool, photo_id).await;
+        sqlx::query(
+            "INSERT INTO encrypted_gallery_items (id, gallery_id, blob_id, added_at) \
+             VALUES (?, 'g1', ?, '2026-01-01T00:00:00Z')",
+        )
+        .bind(item_id)
+        .bind(photo_id)
+        .execute(pool)
+        .await
+        .unwrap();
+        item_id.to_string()
+    }
+
+    /// The clone shape `add_gallery_item` produces for a server-side secure:
+    /// `blob_id` is a fresh clone photo, `original_blob_id` is the real photo the
+    /// ladder actually ran on.
+    async fn secure_as_clone(
+        pool: &sqlx::SqlitePool,
+        original_photo: &str,
+        clone_id: &str,
+        item_id: &str,
+    ) -> String {
+        sqlx::query(
+            "INSERT OR IGNORE INTO encrypted_galleries (id, user_id, name, password_hash, \
+             created_at) VALUES ('g1', 'u1', 'vault', 'x', '2026-01-01T00:00:00Z')",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        insert_blob(pool, clone_id).await;
+        sqlx::query(
+            "INSERT INTO encrypted_gallery_items (id, gallery_id, blob_id, added_at, \
+             original_blob_id) VALUES (?, 'g1', ?, '2026-01-01T00:00:00Z', ?)",
+        )
+        .bind(item_id)
+        .bind(clone_id)
+        .bind(original_photo)
+        .execute(pool)
+        .await
+        .unwrap();
+        item_id.to_string()
+    }
+
+    /// The whole point of the item: a video secured **after** its rung was
+    /// produced keeps that rung, so the secure viewer can offer the same choice
+    /// the main gallery did.
+    ///
+    /// Verified RED before `list_renditions_for_secure_items` existed — the
+    /// secure listing returned no ladder at all, so securing a 4K video silently
+    /// removed the quality picker and forced a full-resolution download.
+    #[tokio::test]
+    async fn a_video_secured_in_place_keeps_its_ladder() {
+        let pool = test_pool().await;
+        insert_photo(&pool, "p1").await;
+        insert_blob(&pool, "b1").await;
+        upsert_rendition(&pool, &rendition("p1", 1080, Some("b1")))
+            .await
+            .unwrap();
+        let item = secure_in_place(&pool, "p1", "i1").await;
+
+        let got = list_renditions_for_secure_items(&pool, "u1", Some("g1"))
+            .await
+            .unwrap();
+        assert_eq!(
+            got[&item].iter().map(|r| r.short_edge).collect::<Vec<_>>(),
+            vec![1080],
+            "securing a video must not remove its quality picker"
+        );
+        assert_eq!(got[&item][0].blob_id.as_deref(), Some("b1"));
+    }
+
+    /// The clone shape, which is what the server-side secure path actually
+    /// writes. `blob_id` there names a *clone* photo the ladder never ran on, so
+    /// a lookup keyed only on `blob_id` finds nothing and the picker vanishes for
+    /// every real secured video.
+    #[tokio::test]
+    async fn a_cloned_secure_item_resolves_the_ladder_through_its_original() {
+        let pool = test_pool().await;
+        insert_photo(&pool, "p_orig").await;
+        insert_photo(&pool, "p_clone").await;
+        insert_blob(&pool, "b1").await;
+        upsert_rendition(&pool, &rendition("p_orig", 1080, Some("b1")))
+            .await
+            .unwrap();
+        let item = secure_as_clone(&pool, "p_orig", "p_clone", "i1").await;
+
+        let got = list_renditions_for_secure_items(&pool, "u1", Some("g1"))
+            .await
+            .unwrap();
+        assert_eq!(
+            got[&item].iter().map(|r| r.short_edge).collect::<Vec<_>>(),
+            vec![1080]
+        );
+    }
+
+    /// **The safety property, stated as an equality rather than an example.**
+    /// Every rung this function offers must be one `is_secure_item` gates. The
+    /// two share [`SECURE_ITEM_RENDITION_MATCH`]; this pins that sharing against
+    /// someone "simplifying" either side, because the failure mode is silent —
+    /// an offered-but-ungated rung is a full-quality copy of a hidden video
+    /// fetchable with nothing but an account session.
+    #[tokio::test]
+    async fn every_offered_rung_is_gated_by_the_serve_path() {
+        let pool = test_pool().await;
+        insert_photo(&pool, "p_orig").await;
+        insert_photo(&pool, "p_clone").await;
+        insert_photo(&pool, "p_open").await;
+        for b in ["b_1080", "b_720", "b_open"] {
+            insert_blob(&pool, b).await;
+        }
+        upsert_rendition(&pool, &rendition("p_orig", 1080, Some("b_1080")))
+            .await
+            .unwrap();
+        upsert_rendition(&pool, &rendition("p_orig", 720, Some("b_720")))
+            .await
+            .unwrap();
+        // An unsecured video's rung, to prove the gate is not simply "true".
+        upsert_rendition(&pool, &rendition("p_open", 1080, Some("b_open")))
+            .await
+            .unwrap();
+        secure_as_clone(&pool, "p_orig", "p_clone", "i1").await;
+
+        let got = list_renditions_for_secure_items(&pool, "u1", None)
+            .await
+            .unwrap();
+        let offered: Vec<&str> = got
+            .values()
+            .flatten()
+            .filter_map(|r| r.blob_id.as_deref())
+            .collect();
+        assert_eq!(offered.len(), 2, "expected both rungs, got {offered:?}");
+
+        for blob in &offered {
+            assert!(
+                crate::gallery::access::is_secure_item(&pool, "u1", blob)
+                    .await
+                    .unwrap(),
+                "offered rung {blob} is not gated by the serve path"
+            );
+        }
+        assert!(
+            !crate::gallery::access::is_secure_item(&pool, "u1", "b_open")
+                .await
+                .unwrap(),
+            "an unsecured video's rung must stay freely fetchable"
+        );
+    }
+
+    /// One user's secure ladder must not appear in another's listing, and the
+    /// per-gallery form must not leak a sibling album's items.
+    #[tokio::test]
+    async fn the_secure_reader_is_scoped_by_user_and_gallery() {
+        let pool = test_pool().await;
+        sqlx::query(
+            "INSERT INTO users (id, username, password_hash, created_at) \
+             VALUES ('u2', 'u2', 'x', '2026-01-01T00:00:00Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        insert_photo(&pool, "p1").await;
+        insert_blob(&pool, "b1").await;
+        upsert_rendition(&pool, &rendition("p1", 1080, Some("b1")))
+            .await
+            .unwrap();
+        secure_in_place(&pool, "p1", "i1").await;
+
+        // A second album of the same user, holding a different secured video.
+        insert_photo(&pool, "p2").await;
+        insert_blob(&pool, "b2").await;
+        insert_blob(&pool, "p2").await;
+        upsert_rendition(&pool, &rendition("p2", 1080, Some("b2")))
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO encrypted_galleries (id, user_id, name, password_hash, created_at) \
+             VALUES ('g2', 'u1', 'other', 'x', '2026-01-01T00:00:00Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO encrypted_gallery_items (id, gallery_id, blob_id, added_at) \
+             VALUES ('i2', 'g2', 'p2', '2026-01-01T00:00:00Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let g1 = list_renditions_for_secure_items(&pool, "u1", Some("g1"))
+            .await
+            .unwrap();
+        assert_eq!(g1.keys().collect::<Vec<_>>(), vec!["i1"]);
+
+        let all = list_renditions_for_secure_items(&pool, "u1", None)
+            .await
+            .unwrap();
+        assert_eq!(all.len(), 2, "the aggregate feed covers every album");
+
+        assert!(
+            list_renditions_for_secure_items(&pool, "u2", None)
+                .await
+                .unwrap()
+                .is_empty(),
+            "u1's secure ladder must not reach u2"
+        );
+    }
+
+    /// An unproduced rung must not reach a secure picker either — the same
+    /// filter the two open-gallery readers apply. Written separately because the
+    /// secure reader does its own row loop rather than reusing theirs.
+    #[tokio::test]
+    async fn the_secure_reader_skips_unproduced_rungs() {
+        let pool = test_pool().await;
+        insert_photo(&pool, "p1").await;
+        upsert_rendition(&pool, &rendition("p1", 1080, None))
+            .await
+            .unwrap();
+        let item = secure_in_place(&pool, "p1", "i1").await;
+
+        let got = list_renditions_for_secure_items(&pool, "u1", Some("g1"))
+            .await
+            .unwrap();
+        assert!(
+            !got.contains_key(&item),
+            "a rung with no bytes must leave the item absent, not empty-laddered"
+        );
+    }
+
+    /// A secured **photo** — the overwhelming majority of secure items — must
+    /// cost nothing and carry nothing.
+    #[tokio::test]
+    async fn a_secured_still_has_no_ladder() {
+        let pool = test_pool().await;
+        insert_photo(&pool, "p1").await;
+        secure_in_place(&pool, "p1", "i1").await;
+
+        assert!(list_renditions_for_secure_items(&pool, "u1", Some("g1"))
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    /// The qualified projection is derived from [`RENDITION_COLUMNS`], not typed
+    /// out again. If someone re-hardcodes it, this catches the drift the moment
+    /// a column is added rather than when a picker starts lying.
+    #[test]
+    fn the_qualified_projection_tracks_the_shared_column_list() {
+        let q = qualified_rendition_columns("r");
+        assert_eq!(
+            q.matches("r.").count(),
+            RENDITION_COLUMNS.split(',').count(),
+            "every column must be alias-qualified: {q}"
+        );
+        assert!(q.starts_with("r.photo_id, r.short_edge"), "{q}");
+        assert!(!q.contains("r.r."), "{q}");
     }
 
     /// The delete trigger writes a change-log row by SELECTing the photo. On the

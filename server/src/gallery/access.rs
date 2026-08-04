@@ -84,13 +84,21 @@ impl FromRequestParts<AppState> for GalleryToken {
 /// video **after** its rung was produced, which is ordinary use rather than an
 /// edge case. That is a full-quality copy of the video the secure album exists
 /// to hide.
+///
+/// That third arm's correlation is
+/// [`SECURE_ITEM_RENDITION_MATCH`](crate::transcode::renditions::SECURE_ITEM_RENDITION_MATCH),
+/// shared verbatim with the secure listing that *offers* those rungs to a
+/// picker. Gate and offer must be derived from one expression: a listing that
+/// matched more broadly than the gate would publish an ungated blob id.
 pub async fn is_secure_item(
     pool: &sqlx::SqlitePool,
     user_id: &str,
     item_id: &str,
 ) -> Result<bool, AppError> {
+    use crate::transcode::renditions::SECURE_ITEM_RENDITION_MATCH;
+
     // `?1` = user_id, `?2` = item_id (each referenced several times).
-    let found: bool = sqlx::query_scalar(
+    let found: bool = sqlx::query_scalar(&format!(
         "SELECT (\
            EXISTS(\
              SELECT 1 FROM encrypted_gallery_items gi \
@@ -112,13 +120,12 @@ pub async fn is_secure_item(
            ) \
            OR EXISTS(\
              SELECT 1 FROM video_renditions r \
-             JOIN encrypted_gallery_items gi3 \
-               ON (r.photo_id = gi3.blob_id OR r.photo_id = gi3.original_blob_id) \
-             JOIN encrypted_galleries g3 ON g3.id = gi3.gallery_id \
+             JOIN encrypted_gallery_items gi ON {SECURE_ITEM_RENDITION_MATCH} \
+             JOIN encrypted_galleries g3 ON g3.id = gi.gallery_id \
              WHERE g3.user_id = ?1 AND r.blob_id = ?2 \
            ) \
-         )",
-    )
+         )"
+    ))
     .bind(user_id)
     .bind(item_id)
     .fetch_one(pool)

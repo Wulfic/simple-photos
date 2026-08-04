@@ -876,6 +876,16 @@ pub async fn list_gallery_items(
     .fetch_all(&state.pool)
     .await?;
 
+    // The ladder of each secured video (#49). Keyed by item id — see
+    // `list_renditions_for_secure_items` for why a secured video still has one
+    // and why a video secured before its rung existed never will.
+    let mut ladders = crate::transcode::renditions::list_renditions_for_secure_items(
+        &state.pool,
+        &auth.user_id,
+        Some(&gallery_id),
+    )
+    .await?;
+
     let items_json: Vec<serde_json::Value> = items
         .iter()
         .map(|r| {
@@ -884,6 +894,7 @@ pub async fn list_gallery_items(
                 "blob_id": r.blob_id,
                 "added_at": r.added_at,
                 "gallery_id": gallery_id,
+                "renditions": ladders.remove(&r.id).unwrap_or_default(),
                 "encrypted_thumb_blob_id": r.encrypted_thumb_blob_id,
                 "width": r.width,
                 "height": r.height,
@@ -975,6 +986,17 @@ pub async fn list_all_gallery_items(
     .fetch_all(&state.pool)
     .await?;
 
+    // Same ladder hydration as the per-gallery endpoint, unscoped. Both feeds
+    // must agree: the smart albums (Secure Videos in particular) are derived
+    // from this one, and a picker that appears in the album but not the smart
+    // view would read as the album being a different place.
+    let mut ladders = crate::transcode::renditions::list_renditions_for_secure_items(
+        &state.pool,
+        &auth.user_id,
+        None,
+    )
+    .await?;
+
     let items_json: Vec<serde_json::Value> = items
         .iter()
         .map(|r| {
@@ -984,6 +1006,7 @@ pub async fn list_all_gallery_items(
                 "added_at": r.added_at,
                 "gallery_id": r.gallery_id,
                 "gallery_name": r.gallery_name,
+                "renditions": ladders.remove(&r.id).unwrap_or_default(),
                 "encrypted_thumb_blob_id": r.encrypted_thumb_blob_id,
                 "width": r.width,
                 "height": r.height,

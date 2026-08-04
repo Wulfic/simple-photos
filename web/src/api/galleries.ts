@@ -8,6 +8,7 @@
  * Maps to server routes: `/api/galleries/secure/*`.
  */
 import { request } from "./core";
+import type { Rendition } from "../gallery/renditionChoice";
 
 /**
  * A single item in a secure gallery. `gallery_id` (the owning album) is present
@@ -37,6 +38,21 @@ export type SecureGalleryItem = {
    * regular photo — no re-render of the encrypted blob.
    */
   crop_metadata?: string | null;
+  /**
+   * The #49 resolution ladder of the video this item hides (highest first), or
+   * absent/empty when there is none.
+   *
+   * Present only for a video that was secured **after** its rungs were
+   * generated: rung generation is gated on gallery eligibility, so securing
+   * first means no ladder is ever produced. The picker therefore appears for
+   * some secure videos and not others — a server-side asymmetry the client does
+   * not paper over, because an empty ladder correctly draws no gear icon.
+   *
+   * The rung blobs belong to the hidden original, not to this item's clone, and
+   * the serve path gates them behind the same unlock token this listing
+   * required (`is_secure_item`'s rendition arm).
+   */
+  renditions?: Rendition[] | null;
 };
 
 // ── Secure Galleries API ─────────────────────────────────────────────────────

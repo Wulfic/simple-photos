@@ -61,7 +61,17 @@ data class SecureGalleryItem(
     // Non-destructive crop/edit JSON stored on the secure item itself (#31),
     // same shape as a regular photo's crop_metadata. Applied at display time in
     // the tile + viewer; null = no edits.
-    @SerializedName("crop_metadata") val cropMetadata: String? = null
+    @SerializedName("crop_metadata") val cropMetadata: String? = null,
+    // The #49 resolution ladder of the video this item hides, highest first.
+    // Carried here for the same reason photoSubtype is: secured photos are
+    // excluded from main-gallery sync, so the Room row the regular viewer reads
+    // its ladder from never exists for them.
+    //
+    // Only a video secured AFTER its rungs were generated has one — generation
+    // is gated on gallery eligibility, so securing first means no picker ever.
+    // Null (pre-#49 server) and empty (no rungs) both collapse to "draw no
+    // picker" via toDomain(), which is the same contract PhotoDto uses.
+    val renditions: List<RenditionDto>? = null
 )
 
 data class SecureGalleryItemsResponse(

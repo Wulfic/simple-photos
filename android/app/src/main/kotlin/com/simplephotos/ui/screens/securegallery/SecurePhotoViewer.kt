@@ -42,7 +42,11 @@ import androidx.core.view.WindowInsetsControllerCompat
 import coil.compose.AsyncImage
 import coil.compose.AsyncImagePainter
 import com.simplephotos.ui.components.rememberThumbnailRequest
+import com.simplephotos.data.media.Rendition
+import com.simplephotos.data.media.offerableRenditions
+import com.simplephotos.data.media.shouldOfferPicker
 import com.simplephotos.data.remote.dto.SecureGalleryItem
+import com.simplephotos.data.remote.dto.toDomain
 import com.simplephotos.ui.screens.viewer.MAX_PANO_DECODE_PX
 import com.simplephotos.ui.screens.viewer.PanoramaOverlay
 import com.simplephotos.ui.screens.viewer.VideoControlsOverlay
@@ -549,6 +553,27 @@ private fun SecureMediaPage(
 /**
  * Plays a decrypted secure video. The blob is streamed-decrypted to a temp file
  * (ExoPlayer needs a file/URI, not a ByteArray) and deleted on dispose.
+ *
+ * ## The quality picker (#49 remainder)
+ *
+ * Unlike the main viewer, this page cannot stream a rung through
+ * `MediaBlobDataSource` — the whole secure path is decrypt-to-a-temp-file — so a
+ * quality switch is a **second download**, not a re-point. Three consequences,
+ * each of which is a bug if skipped:
+ *
+ * 1. The playhead and play/pause state are captured before the swap and restored
+ *    after, exactly as `VideoPlayer` does. A quality change that restarts the
+ *    video reads as the player crashing.
+ * 2. The *previous* file is deleted only once the new one exists, so a failed
+ *    switch leaves the current quality playing rather than a blank page.
+ * 3. Every decrypted file is wiped on dispose, including one produced by a
+ *    switch. A rendition is as much plaintext as the original; leaving a 1080p
+ *    copy in the cache dir would defeat the album as thoroughly as leaving the
+ *    4K one.
+ *
+ * Selecting "Original" (`isSource`) means *this item's own payload*, not the
+ * source rung's `blobId` — that id names the hidden original's blob, which is a
+ * different object from the secure clone this page is showing.
  */
 @androidx.annotation.OptIn(UnstableApi::class)
 @Composable
@@ -560,6 +585,16 @@ private fun SecureVideoPage(
     var videoFile by remember(item.blobId) { mutableStateOf<File?>(null) }
     var loading by remember(item.blobId) { mutableStateOf(true) }
     var failed by remember(item.blobId) { mutableStateOf(false) }
+
+    // Which rung is on screen; null = this item's own payload ("Original").
+    var selectedRendition by remember(item.blobId) { mutableStateOf<Rendition?>(null) }
+    var switching by remember(item.blobId) { mutableStateOf(false) }
+    // Playback state carried across a source swap.
+    var pendingResume by remember(item.blobId) { mutableStateOf<Pair<Long, Boolean>?>(null) }
+
+    val ladder = remember(item.blobId, item.renditions) { item.renditions.toDomain() }
+    val offerable = remember(ladder) { offerableRenditions(ladder) }
+    val hasPicker = remember(ladder) { shouldOfferPicker(ladder) }
 
     LaunchedEffect(item.blobId) {
         loading = true; failed = false
@@ -592,6 +627,21 @@ private fun SecureVideoPage(
         }
     }
     DisposableEffect(player) { onDispose { player?.release() } }
+
+    // Restore the playhead once the swapped-in file is ready. Keyed on the file
+    // rather than the player so it also covers the initial load being replaced.
+    LaunchedEffect(player, videoFile) {
+        val p = player ?: return@LaunchedEffect
+        val resume = pendingResume ?: return@LaunchedEffect
+        pendingResume = null
+        val (position, wasPlaying) = resume
+        // A rendition has the same duration as its source, so the playhead
+        // transfers directly. Clamped anyway: #46's salvage re-encode of a
+        // corrupt source is legitimately shorter than the original.
+        val duration = p.duration
+        p.seekTo(if (duration > 0) minOf(position, duration - 100L).coerceAtLeast(0L) else position)
+        p.playWhenReady = wasPlaying
+    }
 
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         when {
@@ -641,12 +691,65 @@ private fun SecureVideoPage(
                         ) { showControls = !showControls }
                 )
 
+                val scope = rememberCoroutineScope()
                 VideoControlsOverlay(
                     player = activePlayer,
                     visible = showControls,
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
-                        .navigationBarsPadding()
+                        .navigationBarsPadding(),
+                    renditions = if (hasPicker) offerable else emptyList(),
+                    selectedRendition = selectedRendition,
+                    onSelectRendition = { target ->
+                        val alreadyOnSource = selectedRendition == null && target.isSource
+                        val alreadyOnTarget = target.shortEdge == selectedRendition?.shortEdge
+                        // Re-picking what is already playing must be a no-op, or
+                        // the user pays a full re-download to arrive where they
+                        // already were — and, worse, loses their place doing it.
+                        if (switching || alreadyOnSource || alreadyOnTarget) return@VideoControlsOverlay
+
+                        val resume = activePlayer.currentPosition to activePlayer.isPlaying
+                        val previous = videoFile
+                        // "Original" is this item's own payload, NOT the source
+                        // rung's blobId (which names the hidden original's blob).
+                        val targetBlob = if (target.isSource) item.blobId else target.blobId
+                        if (targetBlob == null) {
+                            // A null blobId means an unencrypted install, where
+                            // the bytes live behind the file route. The secure
+                            // path has no plaintext branch, and offerable rungs
+                            // are filtered on exactly this — so reaching here is
+                            // a bug in the filter, not a user-visible state.
+                            android.util.Log.w(
+                                "SecureVideoPage",
+                                "rung ${target.shortEdge} has no blob to fetch; ignoring"
+                            )
+                            return@VideoControlsOverlay
+                        }
+                        switching = true
+                        scope.launch {
+                            try {
+                                val next = viewModel.downloadAndDecryptToFile(targetBlob, "mp4")
+                                pendingResume = resume
+                                selectedRendition = target.takeIf { !it.isSource }
+                                videoFile = next
+                                // Only now: a failed switch must leave the
+                                // current quality playing, not a deleted file.
+                                if (previous != next) previous?.delete()
+                            } catch (e: Exception) {
+                                // Every failure path logs — a silent revert looks
+                                // exactly like the picker being ignored, which is
+                                // unreportable.
+                                android.util.Log.e(
+                                    "SecureVideoPage",
+                                    "quality switch to ${target.shortEdge}p failed " +
+                                        "(blobId=$targetBlob)",
+                                    e
+                                )
+                            } finally {
+                                switching = false
+                            }
+                        }
+                    }
                 )
             }
         }

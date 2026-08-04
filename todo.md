@@ -1,4 +1,4 @@
-# TODO — Open work
+﻿# TODO — Open work
 
 **Completed work lives in [todo-completed.md](todo-completed.md).** Split out
 2026-07-30, when the code side of the #38–#52 batch closed. That file is not an
@@ -515,11 +515,69 @@ silently undo it.
       *partly* addressed. Widening either bound is a disk-I/O decision
       (memory `idle-disk-thrash-investigation`), not a lane-width one. Measure
       on CT132 first: the redeploy below is what produces the evidence.
-- [ ] **Securing a video removes its picker.** The sync feed is the only delivery
-      path and secure photos are not in it, so the secure viewer shows a
-      single-quality video where the main gallery showed a choice. Not a
-      regression (there was no picker before) and arguably correct — decide
-      whether the secure gallery's own item listing should carry the ladder too.
+- [x] **Securing a video removes its picker — DONE 2026-08-04. Decided: yes,
+      carry the ladder.** What settled it was that **the exposure was already
+      paid for and doing nothing**: `access.rs`'s third arm exists *specifically*
+      to gate a secured video's rung blobs behind the unlock token, and nothing
+      in the product ever handed a client one of those ids, so that arm was dead
+      code. The rungs themselves survive securing untouched — the `photos` row is
+      only *hidden* (`ELIGIBLE_PREDICATE`), never deleted, so `video_renditions`
+      does not cascade and `orphan_sweep` still counts the blobs as referenced.
+      The bytes were on disk being paid for in storage with the benefit thrown
+      away. Both secure feeds (`{id}/items` and the aggregate `/items`) now
+      hydrate `renditions`.
+- [x] **The correlation is shared with the gate, not re-derived.**
+      `SECURE_ITEM_RENDITION_MATCH` is one const used by both
+      `is_secure_item`'s rendition arm and the new listing. Seventh instance of
+      the two-derivations risk below, and the only one so far where the drift
+      would be a **confidentiality** bug rather than a counting one: a listing
+      matching more broadly than the gate publishes an ungated blob id, i.e. a
+      full-quality copy of a hidden video fetchable with any session.
+      `every_offered_rung_is_gated_by_the_serve_path` asserts the containment
+      directly, with an `offered.len() == 2` guard — because breaking the shared
+      const breaks *both* sides symmetrically and the test would otherwise pass
+      vacuously. It did exactly that in the RED run: `expected both rungs, got []`.
+- [x] **Two ids, not one.** The plan said "the secure gallery's own item
+      listing", which reads as a one-line join. It is not: `add_gallery_item`'s
+      server-side path stores a **clone** photo in `gi.blob_id` and the real
+      photo in `gi.original_blob_id`, and the ladder only ever ran on the latter.
+      A lookup keyed on `blob_id` alone finds nothing for every genuinely secured
+      video — it passes only the in-place shape used in test fixtures.
+      `a_cloned_secure_item_resolves_the_ladder_through_its_original` is that
+      case, verified RED against the naive key.
+- [x] **The asymmetry is stated, not hidden.** Rung *generation* is gated on
+      `ELIGIBLE_PREDICATE`, so a video secured **before** its rung existed never
+      gets one. The picker therefore appears for some secure videos and not
+      others, keyed on the order of two operations the user does not think about.
+      **Rejected widening generation to secured photos** as a side effect of a
+      picker item: it would run ffmpeg over hidden content on a schedule and mint
+      new derived blobs from it, which is a privacy decision in its own right and
+      not one this item asked for. An empty ladder correctly draws no gear icon,
+      which is honest rather than papered over. Recorded so it is not re-proposed.
+- [x] Clients: web reads the ladder off the secure item (the IDB row `db.photos`
+      is a **guaranteed** miss for secured photos — the same reason
+      `photo_subtype` and `crop_metadata` already ride the item). Android's
+      `SecureVideoPage` cannot re-point a `MediaBlobDataSource` like the main
+      viewer does — the whole secure path is decrypt-to-a-temp-file — so a switch
+      is a second download, with the playhead/pause state carried across it, the
+      previous file deleted **only after** the new one exists, and every
+      decrypted rung wiped on dispose. A 1080p plaintext copy left in the cache
+      dir defeats the album as thoroughly as a 4K one.
+- [x] `API_REFERENCE.md` — **the secure-item row was stale before this touched
+      it**, listing seven fields of thirteen and omitting the aggregate
+      `/api/galleries/secure/items` endpoint entirely. Same shape as C1(d)'s
+      stale faces row. Fixed, plus the `is_source`/token contract.
+- [x] Tests: 7 server (522 green, was 515) + 4 Android. Server verified RED two
+      ways — the correlation narrowed to `blob_id` (2 fail) and the reader gutted
+      to simulate the pre-fix tree (4 fail). Android verified RED by renaming the
+      wire key to `rungs` (2 fail), which is the *realistic* regression: Gson
+      leaves an unknown field at its default, so a renamed key silently becomes
+      "no picker" — indistinguishable from a video with no rungs, and exactly the
+      bug `PhotoDto.renditions` records having already happened once.
+- [ ] **Device/browser check, folded into the verification session below.** No
+      JVM or vitest run can show a gear icon on a secure video. Needs a secured
+      >1080p video **that had a rung before it was secured** — securing first is
+      the no-picker case and would look like a failure while being correct.
 - [ ] **E2E: rendition serving + range requests.** The ladder arithmetic and the
       picker default-per-network-state are unit-tested; the *serving* path with a
       real `Range` header is not.
@@ -672,6 +730,13 @@ list exists.
   walk vs. registered rows vs. encryption-time filename). When they must differ,
   the comment has to say **why**, or the next tidy-up re-merges them — B3b's
   "mirrors `is_opaque_video_container`" comment was exactly that invitation.
+  **Seventh instance: B4's secure ladder** — "which renditions belong to this
+  secure item" is asked by the serve-path gate *and* by the listing that offers
+  them. Shared as `SECURE_ITEM_RENDITION_MATCH` in the same commit. This is the
+  first one where drift would be a **confidentiality** bug, and it is also the
+  first where a naive equality test passes vacuously: breaking the shared
+  expression breaks both sides at once, so the test needs a non-emptiness guard
+  on top of the containment assertion.
 - **Verify the *id space*, not just the call shape.** E3a's audit read five call
   sites, saw they all navigated identically, and filed the difference as
   "ordering". Four of them were in fact passing **server** photo ids to a lookup
@@ -688,3 +753,8 @@ list exists.
 - **A comment that asserts the old intent is a defect.** D1/#44, B2/#40, and now
   E3 all shipped with a comment claiming the opposite of the code. Update the
   comment in the same commit as the behaviour.
+
+
+
+NEW ITEM
+Z1 - when selecting items in an album there is a remove option, but no + button to add those items to another album. And in seceure albums wheen trying to do so, it removes the item from thhe current album its in rather then showwing in both. this also means we have diverging options for album headers, so the remove button can be changed to a trashcan icon, and a popup box letting the user know whats happening with a yes and no option shows.

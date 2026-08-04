@@ -158,9 +158,32 @@ Membership and photos are untouched.
 | `POST` | `/api/galleries/secure/unlock` | Bearer | `{ password }` | `{ gallery_token, expires_in }` |
 | `GET` | `/api/galleries/secure/blob-ids` | Bearer | — | `{ blob_ids: [string] }` |
 | `DELETE` | `/api/galleries/secure/{id}` | Bearer | — | **204** |
-| `GET` | `/api/galleries/secure/{id}/items` | Bearer | Header: `x-gallery-token` | `{ items: [{ id, blob_id, added_at, encrypted_thumb_blob_id, width, height, media_type }] }` |
+| `GET` | `/api/galleries/secure/{id}/items` | Bearer | Header: `x-gallery-token` | `{ items: [SecureItem] }` |
+| `GET` | `/api/galleries/secure/items` | Bearer | Header: `x-gallery-token` | `{ items: [SecureItem] }` (every album; adds `gallery_name`) |
 | `POST` | `/api/galleries/secure/{id}/items` | Bearer | `{ blob_id }` | **201** `{ item_id }` |
 | `DELETE` | `/api/galleries/secure/{id}/items/{item_id}` | Bearer | — | **204** (cloned blob deleted; original photo returns to the gallery) |
+
+**SecureItem fields:** `id, blob_id, added_at, gallery_id, gallery_name?,
+encrypted_thumb_blob_id, width, height, media_type, photo_subtype, burst_id,
+duration_secs, motion_video_blob_id, crop_metadata, renditions`
+
+> `gallery_name` is set only by the aggregate `/items` feed (the smart-album
+> header). The subtype/burst/duration/motion fields are read from the **hidden
+> original**, not the clone — see `list_gallery_items` — which is what lets the
+> secure viewer play videos, pan panoramas and collapse bursts like the main
+> gallery does. `crop_metadata` is the opposite: it lives on the item itself
+> (#31) so a secure edit never leaks back onto the original.
+>
+> `renditions` is the #49 ladder of the hidden video, same shape as on a sync
+> record (`[{ short_edge, width, height, is_source, blob_id, codec, size_bytes }]`,
+> highest first). **Empty is the normal case and means "draw no picker".** It is
+> non-empty only for a video secured *after* its rungs were generated — rung
+> generation is gated on gallery eligibility, so securing first means no ladder
+> is ever produced. The rung `blob_id`s belong to the hidden original and are
+> gated by the same unlock token this listing required, so fetching one via
+> `GET /api/blobs/{id}` needs `x-gallery-token` (or `?gallery_token=`). The
+> `is_source` rung names the *original's* blob, not this item's clone: treat
+> "Original" as "the item's own payload", never as a blob to fetch.
 
 ---
 
