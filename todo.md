@@ -251,15 +251,82 @@ The same file was treated two different ways depending only on when it arrived.
 
 ---
 
-### A2 — Tombstone retention (#38 remainder)
+### A2 — Tombstone retention (#38 remainder) — DONE 2026-08-03
 
 `photo_change_log` rows for deleted photos accumulate without bound.
 
-- [ ] Pruning needs a **policy**, not just a `DELETE` — a client offline longer
-      than the retention window must be forced through a full reconcile, which is
-      what `head_seq`/`total` exist for. Prune without that branch and a
-      long-offline client silently keeps rows the server deleted, forever.
-- [ ] Not urgent at current library sizes. Do not forget it.
+**The premise was half right, and the imprecise half matters.** `photo_change_log.photo_id`
+is the **PRIMARY KEY** — one row per photo, `seq` bumped in place — so the log
+does *not* grow per change, and for live photos it is bounded by the library
+size. Migration `033` says so in a comment the item never reconciled with.
+What actually accumulates is only the **tombstone**: one row per photo ever
+deleted, surviving by design (no FK — evidence that cascades away is not
+evidence). So the growth rate is "photos you have deleted", not "changes you
+have made", which is why this was correctly filed as not urgent.
+
+- [x] Pruning as a **policy**. `gallery/retention.rs`: prune tombstones older
+      than `TOMBSTONE_RETENTION_DAYS` (90), record how far the prune reached as
+      a floor in `server_settings`, and have `fetch_delta` refuse any `since`
+      below that floor. One `VICTIM_PREDICATE` const feeds both the reach probe
+      and the `DELETE`, so the two cannot drift. Hourly, in `spawn_housekeeping`
+      — but in **its own transaction**, since a failure in the audit-log trim
+      must not discard a floor whose rows are already gone.
+- [x] **The forced full reconcile needed zero client work, and not via the
+      mechanism the item named.** It is not `head_seq`/`total`: it is the
+      `deleted` handshake. Both clients already treat an **absent** `deleted`
+      array as "this server did not honour `since` — restart as a full walk"
+      ([syncPass.ts:151](web/src/gallery/hooks/syncPass.ts#L151),
+      [PhotoRepository.kt:1118](android/app/src/main/kotlin/com/simplephotos/data/repository/PhotoRepository.kt#L1118)),
+      built for the pre-#38-server case. A beyond-retention client wants the
+      identical recovery, so it reuses the branch: the fallback just calls
+      `fetch_page`, whose `deleted` is `None`. The `after` cursor is dropped —
+      a `"<seq>|<id>"` delta cursor is meaningless to the full walk's
+      `"<timestamp>|<id>"` keyset, and neither client resumes there anyway.
+- [x] **Head monotonicity — a hazard this item never named, and the one that
+      would have caused real data loss.** Every trigger in `033` computes
+      `MAX(seq) + 1`. Prune the highest-seq row and the next change **reuses a
+      sequence synced clients have already passed**, so that change is invisible
+      to them forever. The victim predicate therefore excludes the current
+      maximum unconditionally, age irrelevant; it is one row. The realistic
+      trigger is mundane: delete a photo, then don't touch the library for three
+      months.
+- [x] Consequence worth stating, because it looks like a bug: **a tombstone
+      only becomes prunable once some later change exists.** A deletion *is* the
+      head at the instant it happens. This is also how three of this work's own
+      tests were caught passing **vacuously** — "spared by the date window" and
+      "spared because its photo row still exists" both passed while actually
+      being spared by the head guard, and stayed green with the arm they claimed
+      to test deleted outright. Every such test now moves the head first.
+- [x] Secure-hidden photos are **not** tombstones — their `photos` row still
+      exists, so the predicate spares them. Pruning one would leave a photo the
+      user just secured visible on every not-yet-synced client, which is the
+      privacy-shaped half of this bug rather than the correctness-shaped half.
+- [x] An unparseable floor fails **closed** (`i64::MAX` ⇒ every client
+      full-walks) rather than open. Reading it as 0 would serve exactly the
+      deltas the prune has already invalidated.
+- [x] Tests: 12 new, 493 green (was 481). Verified RED against three separate
+      breakages: removing the floor check from `fetch_delta` (both fallback
+      tests fail with `deleted: Some([])` — the ghost-row bug verbatim, a client
+      told "nothing was removed" about a photo whose tombstone was pruned);
+      dropping the `seq < MAX(seq)` arm (the head falls); and swapping the
+      SQLite cutoff for a chrono RFC 3339 one.
+- [x] **The date-format claim was overstated on the first pass and is now
+      accurate.** `changed_at` is `datetime('now')` (`"… 12:00:00"`) compared as
+      a *string* against the cutoff. An RFC 3339 cutoff (`"…T12:00:00+00:00"`)
+      does **not** wipe the log as first written here — the date portion
+      dominates, so the two agree on every row except those dated the *same day*
+      as the cutoff, where `' '` (0x20) sorts under `'T'` (0x54) and an
+      inside-the-window row reads as expired. A boundary error of up to a day,
+      not a catastrophe — but the boundary is the only observable part of a
+      retention policy, so the cutoff is computed by the same function that
+      wrote the column. `a_tombstone_just_inside_the_window_survives` is built
+      on that same-day boundary precisely so it *can* fail.
+- [ ] **Live verify — folded into the redeploy below.** Nothing on CT132 is 90
+      days old (the DB was re-created 2026-07-22), so the prune is a guaranteed
+      no-op there and the floor stays 0. That is the *correct* reading, not a
+      passing test: confirm `photo_change_log` still holds one row per photo and
+      that `server_settings` has no `photo_change_log_pruned_through` key at
+      all. Forcing the other branch means backdating a tombstone by hand.
 
 ---
 

@@ -304,6 +304,15 @@ pub async fn fetch_page(
 /// off-by-one that lost one photo per page in #42, reintroduced in a new place.
 /// Ordering by `(seq, photo_id)` and comparing lexicographically makes the
 /// boundary exact. `rows_sharing_a_sequence_survive_a_page_boundary` covers it.
+///
+/// ## Retention floor
+///
+/// Tombstones do not live forever (`gallery::retention`). A `since` below the
+/// pruned-through floor cannot be answered: some removal in `(since, floor]`
+/// has been deleted, so a delta built from what remains would silently omit it
+/// and the client would keep that photo forever. Such a request is answered
+/// with the **full walk** instead — self-healing, and already the recovery
+/// branch both clients take when `deleted` comes back absent.
 pub async fn fetch_delta(
     pool: &sqlx::SqlitePool,
     user_id: &str,
@@ -311,6 +320,23 @@ pub async fn fetch_delta(
     after: Option<&str>,
     limit: i64,
 ) -> Result<EncryptedSyncResponse, AppError> {
+    // Checked before any delta work: below the floor there is no correct delta
+    // to build, only a convincing wrong one.
+    let floor = crate::gallery::retention::pruned_through_seq(pool).await?;
+    if since < floor {
+        tracing::info!(
+            user_id = %user_id, since, floor,
+            "delta cursor predates the retention floor; answering with a full walk"
+        );
+        // `after` is deliberately dropped. A delta cursor is `"<seq>|<id>"`,
+        // which means nothing to the full walk's `"<timestamp>|<id>"` keyset —
+        // and neither client resumes here anyway: an absent `deleted` makes web
+        // discard the partial delta and call `runFullPass`, and Android reset
+        // `after = null` and restart. Handing back page one of a coherent full
+        // walk is the only answer either of them can use.
+        return fetch_page(pool, user_id, None, limit).await;
+    }
+
     // Capture the head BEFORE reading, so a change landing mid-page is
     // re-delivered next time rather than stepped over.
     let head = head_seq(pool).await?;
@@ -869,6 +895,147 @@ mod tests {
         // An id containing the separator must split on the FIRST '|' so the
         // sequence parses; the remainder stays part of the id.
         assert_eq!(parse_delta_cursor("7|a|b"), (7, "a|b".to_string()));
+    }
+
+    // ── Retention floor (#38 A2) ───────────────────────────────────────────
+
+    /// Id of the photo added purely to move the change-log head past the
+    /// tombstone under test. It shows up in every expectation below, so it is
+    /// named rather than anonymous.
+    const AFTER_VICTIM: &str = "after-the-victim";
+
+    /// Age a tombstone past the window and prune it, returning the new floor.
+    ///
+    /// The extra insert is not scaffolding: a deletion is the most recent event
+    /// at the moment it happens, so its tombstone is the head, and the head is
+    /// never pruned (it seeds every trigger's `MAX(seq) + 1`). A tombstone only
+    /// becomes prunable once some later change exists — which is exactly the
+    /// real-world condition, and without it every test here would prune nothing.
+    async fn prune_after_deleting(pool: &sqlx::SqlitePool, photo_id: &str) -> i64 {
+        sqlx::query("DELETE FROM photos WHERE id = ?")
+            .bind(photo_id)
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE photo_change_log SET changed_at = datetime('now', '-200 days') WHERE photo_id = ?")
+            .bind(photo_id)
+            .execute(pool)
+            .await
+            .unwrap();
+        insert(pool, AFTER_VICTIM, "user-1", "2026-06-01T00:00:00Z").await;
+
+        let outcome = crate::gallery::retention::prune_change_log(
+            pool,
+            crate::gallery::retention::TOMBSTONE_RETENTION_DAYS,
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome.pruned, 1, "precondition: the tombstone was actually pruned");
+        outcome.floor
+    }
+
+    /// **The whole point of A2.** Once a tombstone is gone, a client whose
+    /// cursor predates it can never be told that photo left the feed — no
+    /// future response mentions the id again. Serving such a client a delta
+    /// looks fine and leaves a ghost row in its mirror forever, so the request
+    /// must be answered with the self-healing full walk instead.
+    ///
+    /// Verified RED by removing the floor check from `fetch_delta`: the delta
+    /// comes back with `deleted: Some([])` and the pruned photo absent from
+    /// `photos`, i.e. the client is told nothing at all about it.
+    #[tokio::test]
+    async fn a_cursor_below_the_retention_floor_gets_a_full_walk() {
+        let pool = test_pool().await;
+        insert(&pool, "alive", "user-1", "2026-01-01T00:00:00Z").await;
+        insert(&pool, "erased", "user-1", "2026-01-02T00:00:00Z").await;
+        insert(&pool, "newest", "user-1", "2026-01-03T00:00:00Z").await;
+
+        let floor = prune_after_deleting(&pool, "erased").await;
+        assert!(floor > 0);
+
+        let page = fetch_delta(&pool, "user-1", floor - 1, None, 500)
+            .await
+            .unwrap();
+
+        // The handshake both clients key off. `deleted` absent is what makes
+        // web's runDeltaPass return null and Android restart with after=null.
+        assert_eq!(
+            page.deleted, None,
+            "an absent `deleted` is the ONLY signal a client has that this is a full walk"
+        );
+        // And it really is the whole library, not an empty delta wearing a
+        // full walk's shape.
+        let ids: HashSet<&str> = page.photos.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, HashSet::from(["alive", "newest", AFTER_VICTIM]));
+    }
+
+    /// A client that is already at or above the floor saw every pruned
+    /// tombstone before it was pruned, so it still gets the cheap path. If this
+    /// regresses, the retention policy has quietly turned every sync back into
+    /// a full library walk — #38 undone.
+    #[tokio::test]
+    async fn a_cursor_at_the_retention_floor_still_gets_a_delta() {
+        let pool = test_pool().await;
+        insert(&pool, "alive", "user-1", "2026-01-01T00:00:00Z").await;
+        insert(&pool, "erased", "user-1", "2026-01-02T00:00:00Z").await;
+        insert(&pool, "newest", "user-1", "2026-01-03T00:00:00Z").await;
+
+        let floor = prune_after_deleting(&pool, "erased").await;
+
+        let page = fetch_delta(&pool, "user-1", floor, None, 500).await.unwrap();
+        assert_eq!(page.deleted, Some(Vec::new()), "still a delta, not a full walk");
+        // Exactly what changed after the floor — not the whole library.
+        let ids: Vec<&str> = page.photos.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, vec![AFTER_VICTIM]);
+
+        // The steady state must still cost nothing.
+        let head = head_seq(&pool).await.unwrap();
+        let page = fetch_delta(&pool, "user-1", head, None, 500).await.unwrap();
+        assert_eq!(page.deleted, Some(Vec::new()));
+        assert!(page.photos.is_empty());
+    }
+
+    /// A server that has never pruned must behave exactly as it did before
+    /// retention existed — floor 0, every cursor honoured, including `since=0`.
+    #[tokio::test]
+    async fn an_unpruned_server_honours_every_cursor() {
+        let pool = test_pool().await;
+        for i in 0..4 {
+            insert(&pool, &format!("n{i}"), "user-1", "2026-01-01T00:00:00Z").await;
+        }
+        let page = fetch_delta(&pool, "user-1", 0, None, 500).await.unwrap();
+        assert!(page.deleted.is_some(), "no prune has run, so since=0 is still a delta");
+        assert_eq!(page.photos.len(), 4);
+    }
+
+    /// The recovery has to actually recover. A client stuck below the floor
+    /// takes the full walk and set-differences — and must land on exactly the
+    /// same mirror a healthy delta client holds, pruned photo included.
+    #[tokio::test]
+    async fn the_full_walk_fallback_repairs_a_stale_mirror() {
+        let pool = test_pool().await;
+        let u = "user-1";
+        for i in 0..4 {
+            insert(&pool, &format!("r{i}"), u, &format!("2026-01-0{}T00:00:00Z", i + 1)).await;
+        }
+        // A client that synced when everything existed.
+        let mut mirror: HashSet<String> = paginate_all(&pool, u, 2).await.into_iter().collect();
+        let stale_cursor = head_seq(&pool).await.unwrap();
+
+        let floor = prune_after_deleting(&pool, "r0").await;
+        assert!(stale_cursor < floor, "precondition: this client is now below the floor");
+
+        // It asks for a delta and is handed a full walk, so it set-differences
+        // exactly as `runFullPass` does.
+        let page = fetch_delta(&pool, u, stale_cursor, None, 500).await.unwrap();
+        assert_eq!(page.deleted, None);
+        let served: HashSet<String> = page.photos.iter().map(|p| p.id.clone()).collect();
+        mirror.retain(|id| served.contains(id));
+        mirror.extend(served);
+
+        let fresh: HashSet<String> = paginate_all(&pool, u, 2).await.into_iter().collect();
+        assert_eq!(mirror, fresh, "the fallback must leave the mirror exactly correct");
+        assert!(!mirror.contains("r0"), "the pruned photo must be gone from the mirror");
     }
 
     // ── Video quality ladder (#49) ─────────────────────────────────────────

@@ -100,7 +100,8 @@ pub fn spawn_all(
 // ── Individual task spawners ─────────────────────────────────────────
 
 /// Hourly housekeeping: purge expired refresh tokens, trim audit log
-/// (30 days) and client diagnostic logs (14 days) in a single transaction.
+/// (30 days) and client diagnostic logs (14 days) in a single transaction,
+/// then prune sync change-log tombstones (90 days) in its own.
 /// Runs every hour, so the 30-day audit cutoff is enforced well within a day.
 fn spawn_housekeeping(pool: SqlitePool) {
     tokio::spawn(async move {
@@ -175,6 +176,32 @@ fn spawn_housekeeping(pool: SqlitePool) {
                     }
                 }
                 Err(e) => tracing::error!("Housekeeping: failed to begin transaction: {}", e),
+            }
+
+            // 4. Sync change-log tombstones (#38 A2).
+            //
+            // Deliberately OUTSIDE the transaction above. This one carries a
+            // policy — it raises the retention floor that `fetch_delta`
+            // enforces — and it must commit or roll back as a unit of its own;
+            // sharing a transaction with the audit trim would let an unrelated
+            // failure there discard a floor whose rows were already gone, which
+            // is the one state that produces silent ghost rows on clients.
+            match crate::gallery::retention::prune_change_log(
+                &pool,
+                crate::gallery::retention::TOMBSTONE_RETENTION_DAYS,
+            )
+            .await
+            {
+                Ok(outcome) if outcome.pruned > 0 => {
+                    tracing::info!(
+                        "Pruned {} sync change-log tombstones (> {} days); retention floor now {}",
+                        outcome.pruned,
+                        crate::gallery::retention::TOMBSTONE_RETENTION_DAYS,
+                        outcome.floor,
+                    );
+                }
+                Ok(_) => {}
+                Err(e) => tracing::error!("Failed to prune sync change log: {}", e),
             }
         }
     });
