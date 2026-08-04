@@ -1467,10 +1467,16 @@ class TestSecureGalleryMove:
 
 
 class TestSecureDuplicateGuard:
-    """Phase 0: the one-secure-album invariant is enforced SERVER-SIDE.  A photo
-    may live in at most one secure gallery — a second add (same album or a
-    different one) returns 409 Conflict.  Previously this was UI-only, so two
-    windows / a stale picker / a raw API call could double-add."""
+    """Phase 0: the duplicate guard is enforced SERVER-SIDE, not UI-only — two
+    windows / a stale picker / a raw API call could otherwise double-add.
+
+    **Scope narrowed by Z1 (2026-08-04).**  This class originally pinned the
+    *one-secure-album* invariant: a photo could live in at most one secure
+    gallery, so a second add returned 409 whether it named the same album or a
+    different one.  A photo may now live in SEVERAL secure albums, so only the
+    same-album half of that rule survives — "at most once per album".  The
+    cross-album case is now a supported operation and is asserted as such below;
+    the full behaviour lives in test_94_secure_multi_album.py."""
 
     def test_add_same_blob_twice_conflicts(self, user_client):
         token = user_client.unlock_secure_gallery(USER_PASSWORD)["gallery_token"]
@@ -1490,23 +1496,37 @@ class TestSecureDuplicateGuard:
             f"re-adding the same blob should 409, got {r.status_code}: {r.text}"
         )
 
-    def test_add_to_second_gallery_conflicts(self, user_client):
+    def test_add_to_second_gallery_is_allowed_and_shares_the_clone(self, user_client):
+        """Z1: a photo may be in several secure albums, sharing ONE clone.
+
+        This asserted 409 until 2026-08-04.  The rule was not wrong so much as
+        wider than it needed to be: what it actually protected was the aggregate
+        feed against duplicate tiles, which is now handled by collapsing that
+        feed (see `collapse_by_clone`) rather than by forbidding the membership.
+        """
         token = user_client.unlock_secure_gallery(USER_PASSWORD)["gallery_token"]
         g1 = user_client.create_secure_gallery("Dup Gallery One")
         g2 = user_client.create_secure_gallery("Dup Gallery Two")
         blob = user_client.upload_blob("photo", generate_random_bytes(512))
 
-        user_client.add_secure_gallery_item(g1["gallery_id"], blob["blob_id"], token)
+        first = user_client.add_secure_gallery_item(
+            g1["gallery_id"], blob["blob_id"], token
+        )
 
-        # Adding the same photo to a DIFFERENT secure gallery → 409.
         r = user_client.post(
             f"/api/galleries/secure/{g2['gallery_id']}/items",
             json_data={"blob_id": blob["blob_id"]},
             headers={"x-gallery-token": token},
         )
-        assert r.status_code == 409, (
-            f"adding to a second secure gallery should 409, got {r.status_code}: {r.text}"
+        assert r.status_code == 201, (
+            f"a second secure album should now be allowed, got {r.status_code}: {r.text}"
         )
+        second = r.json()
+        assert second["new_blob_id"] == first["new_blob_id"], (
+            "the second album must ADOPT the first album's clone rather than "
+            "producing another — a second clone doubles storage and splits edits"
+        )
+        assert second["item_id"] != first["item_id"], "each album gets its own row"
 
     def test_server_photo_dup_add_conflicts(self, user_client):
         """A server-side photo (photos-table id) is guarded too."""

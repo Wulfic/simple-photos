@@ -405,8 +405,15 @@ class APIClient:
     def move_secure_gallery_item(
         self, source_gallery_id: str, item_id: str, target_gallery_id: str
     ) -> requests.Response:
-        """Move an item from one secure gallery to another (#31/#43). A photo may
-        live in at most one secure album, so this reassigns membership."""
+        """Move an item from one secure gallery to another (#31/#43).
+
+        Reassigns the membership row rather than re-cloning.  A photo may now
+        live in SEVERAL secure albums (Z1), so this is no longer the only way to
+        get it into a second one — ``add_secure_gallery_item`` on another album
+        adds a membership while keeping the first.  Moving into an album that
+        already holds the photo is refused with a 409: "at most once per album"
+        is the half of the old one-secure-album invariant that survives.
+        """
         return self.post(
             f"/api/galleries/secure/{source_gallery_id}/items/{item_id}/move",
             json_data={"target_gallery_id": target_gallery_id},
