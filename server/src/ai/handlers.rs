@@ -1121,7 +1121,11 @@ mod tests {
         let clusters = fetch_face_clusters(&pool, u).await.unwrap();
         assert_eq!(clusters.len(), 1);
         let c = &clusters[0];
-        assert_eq!(c.representative.as_deref(), Some("p2"), "must skip the secured photo");
+        assert_eq!(
+            c.representative.as_deref(),
+            Some("p2"),
+            "must skip the secured photo"
+        );
         assert_eq!(c.rep_bbox_x, Some(0.5), "bbox must be p2's face, not p1's");
         assert_eq!(c.rep_bbox_y, Some(0.6));
     }

@@ -852,8 +852,12 @@ mod tests {
         tokio::fs::create_dir_all(&year_dir).await.unwrap();
         tokio::fs::create_dir_all(&album_dir).await.unwrap();
         let bytes = b"identical-dog-photo-bytes-in-two-folders";
-        tokio::fs::write(year_dir.join("dog.jpg"), bytes).await.unwrap();
-        tokio::fs::write(album_dir.join("dog.jpg"), bytes).await.unwrap();
+        tokio::fs::write(year_dir.join("dog.jpg"), bytes)
+            .await
+            .unwrap();
+        tokio::fs::write(album_dir.join("dog.jpg"), bytes)
+            .await
+            .unwrap();
 
         let opts = sqlx::sqlite::SqliteConnectOptions::from_str("sqlite::memory:")
             .unwrap()
@@ -911,7 +915,10 @@ mod tests {
         assert_eq!(reason, "hash_duplicate");
         assert_eq!(size, bytes.len() as i64);
         assert_eq!(mtime.as_deref(), Some("2021-06-01T00:00:00.000Z"));
-        assert!(hash.is_some(), "the shared content hash drives invalidation");
+        assert!(
+            hash.is_some(),
+            "the shared content hash drives invalidation"
+        );
 
         // Only the copy is recorded, not the first-registered original.
         let (rows,): (i64,) =
@@ -1016,7 +1023,10 @@ mod tests {
         pool
     }
 
-    async fn stored_row(pool: &sqlx::SqlitePool, rel_path: &str) -> crate::photos::scan_skip::SkipRow {
+    async fn stored_row(
+        pool: &sqlx::SqlitePool,
+        rel_path: &str,
+    ) -> crate::photos::scan_skip::SkipRow {
         let (size_bytes, mtime, reason, attempt_count): (i64, Option<String>, String, i64) =
             sqlx::query_as(
                 "SELECT size_bytes, mtime, reason, attempt_count FROM scan_skipped_paths \
@@ -1092,8 +1102,15 @@ mod tests {
                     "the walk must still retry before attempt {attempt}"
                 );
             }
-            charge_conversion_attempt(&pool, "user-1", path, 4_096, mtime, "2026-07-21T00:00:00.000Z")
-                .await;
+            charge_conversion_attempt(
+                &pool,
+                "user-1",
+                path,
+                4_096,
+                mtime,
+                "2026-07-21T00:00:00.000Z",
+            )
+            .await;
         }
 
         assert_eq!(

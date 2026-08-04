@@ -169,11 +169,9 @@ pub async fn encryption_status(
     // hidden in the first place is that feeding them to a progress bar wedges it.
     // Reporting them to the operator is a different question from counting them
     // as progress, and B3a is the case for answering the first one.
-    let parked = crate::photos::server_migrate::count_parked(
-        &state.read_pool,
-        Some(auth.user_id.as_str()),
-    )
-    .await;
+    let parked =
+        crate::photos::server_migrate::count_parked(&state.read_pool, Some(auth.user_id.as_str()))
+            .await;
 
     let mut reg = registry().lock().unwrap();
     let entry = reg.entry(auth.user_id.clone()).or_default();

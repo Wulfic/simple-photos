@@ -568,7 +568,11 @@ mod tests {
     fn failure_events_have_no_strays() {
         let strs: Vec<&str> = FAILURE_EVENTS.iter().map(|e| e.as_str()).collect();
         let unique: std::collections::HashSet<_> = strs.iter().collect();
-        assert_eq!(unique.len(), strs.len(), "duplicate in FAILURE_EVENTS: {strs:?}");
+        assert_eq!(
+            unique.len(),
+            strs.len(),
+            "duplicate in FAILURE_EVENTS: {strs:?}"
+        );
     }
 
     /// Every failure variant must be distinguishable from every success
@@ -594,7 +598,11 @@ mod tests {
             AuditEvent::PhotoRegister.as_str(),
         ];
         let unique: std::collections::HashSet<_> = strs.iter().collect();
-        assert_eq!(unique.len(), strs.len(), "duplicate audit event string: {strs:?}");
+        assert_eq!(
+            unique.len(),
+            strs.len(),
+            "duplicate audit event string: {strs:?}"
+        );
     }
 
     #[test]

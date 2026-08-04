@@ -403,8 +403,14 @@ mod tests {
     /// nothing", which is unattributable in a bug report.
     #[test]
     fn the_cpu_fallback_honours_the_rung_the_gpu_path_was_given() {
-        assert_eq!(cpu_fallback_graph(Some((1920, 1080))), "scale=1920:1080,setsar=1");
-        assert_eq!(cpu_fallback_graph(Some((1080, 1920))), "scale=1080:1920,setsar=1");
+        assert_eq!(
+            cpu_fallback_graph(Some((1920, 1080))),
+            "scale=1920:1080,setsar=1"
+        );
+        assert_eq!(
+            cpu_fallback_graph(Some((1080, 1920))),
+            "scale=1080:1920,setsar=1"
+        );
     }
 
     /// ...and at source resolution it must still emit exactly what it always

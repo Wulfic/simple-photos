@@ -613,13 +613,12 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
     // Rare (only genuinely-changed files land here), so a per-path delete is
     // fine; if the file is still a duplicate, register re-records the row.
     for stale in &stale_skip_paths {
-        if let Err(e) = sqlx::query(
-            "DELETE FROM scan_skipped_paths WHERE user_id = ? AND rel_path = ?",
-        )
-        .bind(&admin_id)
-        .bind(stale)
-        .execute(pool)
-        .await
+        if let Err(e) =
+            sqlx::query("DELETE FROM scan_skipped_paths WHERE user_id = ? AND rel_path = ?")
+                .bind(&admin_id)
+                .bind(stale)
+                .execute(pool)
+                .await
         {
             tracing::warn!(rel_path = %stale, error = %e, "Failed to clear stale scan-skip row");
         }
@@ -722,7 +721,9 @@ mod tests {
         tokio::fs::create_dir_all(&album).await.unwrap();
         let bytes = b"identical-cat-bytes-in-date-and-album-folders";
         tokio::fs::write(year.join("cat.jpg"), bytes).await.unwrap();
-        tokio::fs::write(album.join("cat.jpg"), bytes).await.unwrap();
+        tokio::fs::write(album.join("cat.jpg"), bytes)
+            .await
+            .unwrap();
 
         let first = run_auto_scan(&pool, &root).await;
         assert_eq!(first, 1, "identical bytes dedup to a single new photo");
@@ -754,12 +755,11 @@ mod tests {
         let second = run_auto_scan(&pool, &root).await;
         assert_eq!(second, 0, "steady state registers nothing new");
 
-        let (survived,): (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM scan_skipped_paths WHERE created_at = 'SENTINEL'",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let (survived,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM scan_skipped_paths WHERE created_at = 'SENTINEL'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(
             survived, 1,
             "the copy was skipped without re-hashing (register never re-ran)"
@@ -781,7 +781,9 @@ mod tests {
         tokio::fs::create_dir_all(&album).await.unwrap();
         let bytes = b"identical-cat-bytes-A";
         tokio::fs::write(year.join("cat.jpg"), bytes).await.unwrap();
-        tokio::fs::write(album.join("cat.jpg"), bytes).await.unwrap();
+        tokio::fs::write(album.join("cat.jpg"), bytes)
+            .await
+            .unwrap();
 
         assert_eq!(run_auto_scan(&pool, &root).await, 1);
 
@@ -852,7 +854,10 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(skips, 0, "the photo-delete trigger cleared the copy's skip row");
+        assert_eq!(
+            skips, 0,
+            "the photo-delete trigger cleared the copy's skip row"
+        );
     }
 
     /// The gallery-hidden analogue: removing a secure-gallery item un-hides its
@@ -895,6 +900,9 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(skips, 0, "the egi-delete trigger un-hides the file for re-scan");
+        assert_eq!(
+            skips, 0,
+            "the egi-delete trigger un-hides the file for re-scan"
+        );
     }
 }

@@ -168,7 +168,10 @@ pub async fn list_renditions(
         AppError::from(e)
     })?;
 
-    Ok(rows.into_iter().filter(StoredRendition::is_playable).collect())
+    Ok(rows
+        .into_iter()
+        .filter(StoredRendition::is_playable)
+        .collect())
 }
 
 /// Renditions for many photos at once, keyed by photo id.
@@ -212,7 +215,9 @@ pub async fn list_renditions_for_photos(
 
     let mut out: HashMap<String, Vec<RenditionDto>> = HashMap::new();
     for row in rows.into_iter().filter(StoredRendition::is_playable) {
-        out.entry(row.photo_id.clone()).or_default().push(row.into());
+        out.entry(row.photo_id.clone())
+            .or_default()
+            .push(row.into());
     }
     Ok(out)
 }
@@ -642,11 +647,10 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(rows, 1);
-        let still_a_photo: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM photos WHERE id = 'p1'")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let still_a_photo: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM photos WHERE id = 'p1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(still_a_photo, 0);
     }
 }

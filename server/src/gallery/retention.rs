@@ -107,11 +107,10 @@ pub struct PruneOutcome {
 /// Zero on a server that has never pruned, which makes every cursor valid —
 /// the pre-retention behaviour exactly.
 pub async fn pruned_through_seq(pool: &sqlx::SqlitePool) -> Result<i64, AppError> {
-    let raw: Option<String> =
-        sqlx::query_scalar("SELECT value FROM server_settings WHERE key = ?")
-            .bind(PRUNED_THROUGH_KEY)
-            .fetch_optional(pool)
-            .await?;
+    let raw: Option<String> = sqlx::query_scalar("SELECT value FROM server_settings WHERE key = ?")
+        .bind(PRUNED_THROUGH_KEY)
+        .fetch_optional(pool)
+        .await?;
 
     // An unparseable value must not be read as "no floor" — that would serve
     // deltas the prune has already invalidated. Treat corruption as the most
@@ -162,7 +161,10 @@ pub async fn prune_change_log(
         // an early return keeps a no-op hourly pass from writing to
         // server_settings 24 times a day forever.
         tx.rollback().await?;
-        return Ok(PruneOutcome { pruned: 0, floor: previous });
+        return Ok(PruneOutcome {
+            pruned: 0,
+            floor: previous,
+        });
     }
 
     let deleted = sqlx::query(&format!(
@@ -192,11 +194,15 @@ pub async fn prune_change_log(
     tx.commit().await?;
 
     tracing::info!(
-        pruned = deleted, floor,
+        pruned = deleted,
+        floor,
         "pruned change-log tombstones; clients below the floor will full-walk"
     );
 
-    Ok(PruneOutcome { pruned: deleted, floor })
+    Ok(PruneOutcome {
+        pruned: deleted,
+        floor,
+    })
 }
 
 #[cfg(test)]
@@ -299,9 +305,14 @@ mod tests {
 
         assert_eq!(pruned_through_seq(&pool).await.unwrap(), 0, "no prune yet");
 
-        let outcome = prune_change_log(&pool, TOMBSTONE_RETENTION_DAYS).await.unwrap();
+        let outcome = prune_change_log(&pool, TOMBSTONE_RETENTION_DAYS)
+            .await
+            .unwrap();
         assert_eq!(outcome.pruned, 1);
-        assert_eq!(outcome.floor, gone_seq, "the floor is how far the prune reached");
+        assert_eq!(
+            outcome.floor, gone_seq,
+            "the floor is how far the prune reached"
+        );
         assert_eq!(pruned_through_seq(&pool).await.unwrap(), gone_seq);
         assert_eq!(log_ids(&pool).await, vec!["keep", "later", "recent"]);
     }
@@ -325,8 +336,13 @@ mod tests {
         // it would not test the trap it exists for.
         bump_head(&pool, "later").await;
 
-        let outcome = prune_change_log(&pool, TOMBSTONE_RETENTION_DAYS).await.unwrap();
-        assert_eq!(outcome.pruned, 0, "a one-day-old tombstone is not 90 days old");
+        let outcome = prune_change_log(&pool, TOMBSTONE_RETENTION_DAYS)
+            .await
+            .unwrap();
+        assert_eq!(
+            outcome.pruned, 0,
+            "a one-day-old tombstone is not 90 days old"
+        );
         assert_eq!(outcome.floor, 0, "nothing pruned, so no floor");
         assert_eq!(log_ids(&pool).await, vec!["just-deleted", "keep", "later"]);
     }
@@ -370,7 +386,9 @@ mod tests {
         .unwrap();
         bump_head(&pool, "later").await;
 
-        let outcome = prune_change_log(&pool, TOMBSTONE_RETENTION_DAYS).await.unwrap();
+        let outcome = prune_change_log(&pool, TOMBSTONE_RETENTION_DAYS)
+            .await
+            .unwrap();
         assert_eq!(
             outcome.pruned, 0,
             "a tombstone inside the window was pruned — the cutoff is not in the \
@@ -391,7 +409,9 @@ mod tests {
             backdate(&pool, id, 500).await;
         }
 
-        let outcome = prune_change_log(&pool, TOMBSTONE_RETENTION_DAYS).await.unwrap();
+        let outcome = prune_change_log(&pool, TOMBSTONE_RETENTION_DAYS)
+            .await
+            .unwrap();
         assert_eq!(outcome.pruned, 0);
         assert_eq!(log_ids(&pool).await, vec!["a", "b", "c"]);
     }
@@ -421,8 +441,13 @@ mod tests {
         // tombstone check were deleted.
         bump_head(&pool, "later").await;
 
-        let outcome = prune_change_log(&pool, TOMBSTONE_RETENTION_DAYS).await.unwrap();
-        assert_eq!(outcome.pruned, 0, "the photos row still exists — not a tombstone");
+        let outcome = prune_change_log(&pool, TOMBSTONE_RETENTION_DAYS)
+            .await
+            .unwrap();
+        assert_eq!(
+            outcome.pruned, 0,
+            "the photos row still exists — not a tombstone"
+        );
         assert!(log_ids(&pool).await.contains(&"secret".to_string()));
     }
 
@@ -453,15 +478,27 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(tombstone_seq, head_before, "precondition: the tombstone IS the head");
+        assert_eq!(
+            tombstone_seq, head_before,
+            "precondition: the tombstone IS the head"
+        );
 
         // Age everything past the window — the whole log is now "expired".
         backdate(&pool, "keep", 400).await;
         backdate(&pool, "last-thing-that-happened", 400).await;
 
-        let outcome = prune_change_log(&pool, TOMBSTONE_RETENTION_DAYS).await.unwrap();
-        assert_eq!(outcome.pruned, 0, "the head row is spared even when expired");
-        assert_eq!(head(&pool).await, head_before, "head must never move backwards");
+        let outcome = prune_change_log(&pool, TOMBSTONE_RETENTION_DAYS)
+            .await
+            .unwrap();
+        assert_eq!(
+            outcome.pruned, 0,
+            "the head row is spared even when expired"
+        );
+        assert_eq!(
+            head(&pool).await,
+            head_before,
+            "head must never move backwards"
+        );
     }
 
     /// The floor only ever rises. A prune with nothing to take must not reset
@@ -480,14 +517,21 @@ mod tests {
         backdate(&pool, "gone", 200).await;
         bump_head(&pool, "later").await;
 
-        let first = prune_change_log(&pool, TOMBSTONE_RETENTION_DAYS).await.unwrap();
+        let first = prune_change_log(&pool, TOMBSTONE_RETENTION_DAYS)
+            .await
+            .unwrap();
         assert_eq!(first.pruned, 1);
         assert!(first.floor > 0);
 
         // Second pass: nothing left to take.
-        let second = prune_change_log(&pool, TOMBSTONE_RETENTION_DAYS).await.unwrap();
+        let second = prune_change_log(&pool, TOMBSTONE_RETENTION_DAYS)
+            .await
+            .unwrap();
         assert_eq!(second.pruned, 0);
-        assert_eq!(second.floor, first.floor, "an empty prune must not reset the floor");
+        assert_eq!(
+            second.floor, first.floor,
+            "an empty prune must not reset the floor"
+        );
         assert_eq!(pruned_through_seq(&pool).await.unwrap(), first.floor);
     }
 

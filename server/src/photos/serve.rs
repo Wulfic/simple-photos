@@ -251,23 +251,27 @@ pub async fn serve_photo(
         return Err(AppError::StorageUnavailable);
     }
 
-    let (mut file_path, mut mime_type, mut size_bytes, mut enc_blob_id): (String, String, i64, String) =
-        sqlx::query_as(
-            "SELECT file_path, mime_type, size_bytes, COALESCE(encrypted_blob_id, '') \
+    let (mut file_path, mut mime_type, mut size_bytes, mut enc_blob_id): (
+        String,
+        String,
+        i64,
+        String,
+    ) = sqlx::query_as(
+        "SELECT file_path, mime_type, size_bytes, COALESCE(encrypted_blob_id, '') \
              FROM photos WHERE id = ? AND user_id = ?",
-        )
-        .bind(&photo_id)
-        .bind(&auth.user_id)
-        .fetch_optional(&state.read_pool)
-        .await?
-        .ok_or_else(|| {
-            tracing::warn!(
-                user_id = %auth.user_id,
-                photo_id = %photo_id,
-                "serve_photo: photo not found in database"
-            );
-            AppError::NotFound
-        })?;
+    )
+    .bind(&photo_id)
+    .bind(&auth.user_id)
+    .fetch_optional(&state.read_pool)
+    .await?
+    .ok_or_else(|| {
+        tracing::warn!(
+            user_id = %auth.user_id,
+            photo_id = %photo_id,
+            "serve_photo: photo not found in database"
+        );
+        AppError::NotFound
+    })?;
 
     // Secure-album gate: if this photo lives in a secure gallery, require a
     // valid unlock token in addition to the account session.
@@ -373,7 +377,7 @@ pub async fn serve_photo(
             .map_err(|e| AppError::Internal(format!("Length probe panicked: {e}")))?
             .map_err(|e| AppError::Internal(format!("Length probe failed: {e}")))?;
 
-            let etag = format!("\"{}-enc-{}\"", etag_id, total_size);
+            let etag = format!("\"{etag_id}-enc-{total_size}\"");
             if let Some(not_modified) = check_etag(&headers, &etag) {
                 return Ok(not_modified);
             }
@@ -443,7 +447,7 @@ pub async fn serve_photo(
         .map_err(|e| AppError::Internal(format!("Decrypt panicked: {e}")))?
         .map_err(|e| AppError::Internal(format!("Decrypt failed: {e}")))?;
         let total_size = raw_bytes.len() as u64;
-        let etag = format!("\"{}-enc-{}\"", etag_id, total_size);
+        let etag = format!("\"{etag_id}-enc-{total_size}\"");
         if let Some(not_modified) = check_etag(&headers, &etag) {
             return Ok(not_modified);
         }
@@ -580,95 +584,6 @@ pub async fn serve_photo(
         )
         .body(body)
         .map_err(|e| AppError::Internal(e.to_string()))
-}
-
-#[cfg(test)]
-mod rendition_tests {
-    use super::*;
-    use crate::transcode::renditions::StoredRendition;
-
-    fn rung(short_edge: i64, blob: Option<&str>, path: Option<&str>) -> StoredRendition {
-        StoredRendition {
-            photo_id: "p1".into(),
-            short_edge,
-            width: 1920,
-            height: short_edge,
-            is_source: 0,
-            blob_id: blob.map(str::to_string),
-            file_path: path.map(str::to_string),
-            codec: Some("h264".into()),
-            bitrate: None,
-            size_bytes: 2048,
-        }
-    }
-
-    /// Encrypted mode: the rung's blob must route into the encrypted-blob
-    /// branch, which this handler selects on `file_path` being EMPTY. Leaving
-    /// the photo's own path in place would stream the 4K original in response
-    /// to a 1080p request.
-    #[test]
-    fn a_blob_rung_routes_to_the_encrypted_branch() {
-        let t = rendition_serve_target("p1", &rung(1080, Some("rb1"), None));
-        assert_eq!(t.file_path, "", "empty file_path is what selects the blob branch");
-        assert_eq!(t.enc_blob_id, "rb1");
-        assert_eq!(t.size_bytes, 2048);
-    }
-
-    /// Unencrypted install: the rung is a plaintext file, and the photo's
-    /// encrypted blob id — if it somehow had one — must not survive the swap.
-    #[test]
-    fn a_file_rung_routes_to_the_plaintext_branch() {
-        let t = rendition_serve_target("p1", &rung(1080, None, Some("renditions/u1/p1.1080.mp4")));
-        assert_eq!(t.file_path, "renditions/u1/p1.1080.mp4");
-        assert_eq!(t.enc_blob_id, "");
-    }
-
-    /// **The cache-poisoning guard.** Every rung, and the original, must have a
-    /// distinct cache identity. The ETag is completed downstream with the byte
-    /// length, so two rungs that happened to encode to the same size would
-    /// otherwise collide and a client would be served its cached copy of the
-    /// wrong quality — the one failure here that looks like the picker working.
-    #[test]
-    fn every_rung_has_a_distinct_cache_identity() {
-        let source = rendition_serve_target("p1", &rung(2160, Some("b0"), None));
-        let downscale = rendition_serve_target("p1", &rung(1080, Some("b1"), None));
-
-        assert_ne!(source.etag_id, downscale.etag_id);
-        // ...and neither may collide with the un-suffixed original's.
-        assert_ne!(source.etag_id, "p1");
-        assert_ne!(downscale.etag_id, "p1");
-        // Distinct across photos too, since the id is the prefix.
-        assert_ne!(
-            rendition_serve_target("p2", &rung(1080, Some("b1"), None)).etag_id,
-            downscale.etag_id
-        );
-    }
-
-    /// A row with no locator cannot be served. `list_renditions` filters these
-    /// out before the handler ever sees one, so this pins the belt-and-braces:
-    /// the result must be un-servable, never a quiet fallback to the original.
-    #[test]
-    fn a_rung_with_no_locator_yields_nothing_to_serve() {
-        let t = rendition_serve_target("p1", &rung(1080, None, None));
-        assert_eq!(t.file_path, "");
-        assert_eq!(t.enc_blob_id, "");
-    }
-
-    /// **The type must describe the rung, not its source.** The handler
-    /// otherwise reuses the parent photo's `mime_type`, and the ladder always
-    /// emits H.264 in MP4 — so every `.mov` in the library (10 live) would have
-    /// its downscale served as `video/quicktime`, promising the player a
-    /// container it is not being given.
-    #[test]
-    fn a_rung_is_typed_as_mp4_regardless_of_its_source_container() {
-        let t = rendition_serve_target("p1", &rung(1080, Some("rb1"), None));
-        assert_eq!(t.content_type, "video/mp4");
-        assert_eq!(
-            rendition_serve_target("p1", &rung(1080, None, Some("r/p1.1080.mp4"))).content_type,
-            "video/mp4",
-            "storage mode must not change the type"
-        );
-    }
 }
 
 /// GET /api/photos/:id/thumb
@@ -1082,4 +997,96 @@ pub async fn serve_motion_video(
         .header("Content-Length", len)
         .body(Body::from(video_bytes))
         .map_err(|e| AppError::Internal(format!("Response build: {e}")))
+}
+
+#[cfg(test)]
+mod rendition_tests {
+    use super::*;
+    use crate::transcode::renditions::StoredRendition;
+
+    fn rung(short_edge: i64, blob: Option<&str>, path: Option<&str>) -> StoredRendition {
+        StoredRendition {
+            photo_id: "p1".into(),
+            short_edge,
+            width: 1920,
+            height: short_edge,
+            is_source: 0,
+            blob_id: blob.map(str::to_string),
+            file_path: path.map(str::to_string),
+            codec: Some("h264".into()),
+            bitrate: None,
+            size_bytes: 2048,
+        }
+    }
+
+    /// Encrypted mode: the rung's blob must route into the encrypted-blob
+    /// branch, which this handler selects on `file_path` being EMPTY. Leaving
+    /// the photo's own path in place would stream the 4K original in response
+    /// to a 1080p request.
+    #[test]
+    fn a_blob_rung_routes_to_the_encrypted_branch() {
+        let t = rendition_serve_target("p1", &rung(1080, Some("rb1"), None));
+        assert_eq!(
+            t.file_path, "",
+            "empty file_path is what selects the blob branch"
+        );
+        assert_eq!(t.enc_blob_id, "rb1");
+        assert_eq!(t.size_bytes, 2048);
+    }
+
+    /// Unencrypted install: the rung is a plaintext file, and the photo's
+    /// encrypted blob id — if it somehow had one — must not survive the swap.
+    #[test]
+    fn a_file_rung_routes_to_the_plaintext_branch() {
+        let t = rendition_serve_target("p1", &rung(1080, None, Some("renditions/u1/p1.1080.mp4")));
+        assert_eq!(t.file_path, "renditions/u1/p1.1080.mp4");
+        assert_eq!(t.enc_blob_id, "");
+    }
+
+    /// **The cache-poisoning guard.** Every rung, and the original, must have a
+    /// distinct cache identity. The ETag is completed downstream with the byte
+    /// length, so two rungs that happened to encode to the same size would
+    /// otherwise collide and a client would be served its cached copy of the
+    /// wrong quality — the one failure here that looks like the picker working.
+    #[test]
+    fn every_rung_has_a_distinct_cache_identity() {
+        let source = rendition_serve_target("p1", &rung(2160, Some("b0"), None));
+        let downscale = rendition_serve_target("p1", &rung(1080, Some("b1"), None));
+
+        assert_ne!(source.etag_id, downscale.etag_id);
+        // ...and neither may collide with the un-suffixed original's.
+        assert_ne!(source.etag_id, "p1");
+        assert_ne!(downscale.etag_id, "p1");
+        // Distinct across photos too, since the id is the prefix.
+        assert_ne!(
+            rendition_serve_target("p2", &rung(1080, Some("b1"), None)).etag_id,
+            downscale.etag_id
+        );
+    }
+
+    /// A row with no locator cannot be served. `list_renditions` filters these
+    /// out before the handler ever sees one, so this pins the belt-and-braces:
+    /// the result must be un-servable, never a quiet fallback to the original.
+    #[test]
+    fn a_rung_with_no_locator_yields_nothing_to_serve() {
+        let t = rendition_serve_target("p1", &rung(1080, None, None));
+        assert_eq!(t.file_path, "");
+        assert_eq!(t.enc_blob_id, "");
+    }
+
+    /// **The type must describe the rung, not its source.** The handler
+    /// otherwise reuses the parent photo's `mime_type`, and the ladder always
+    /// emits H.264 in MP4 — so every `.mov` in the library (10 live) would have
+    /// its downscale served as `video/quicktime`, promising the player a
+    /// container it is not being given.
+    #[test]
+    fn a_rung_is_typed_as_mp4_regardless_of_its_source_container() {
+        let t = rendition_serve_target("p1", &rung(1080, Some("rb1"), None));
+        assert_eq!(t.content_type, "video/mp4");
+        assert_eq!(
+            rendition_serve_target("p1", &rung(1080, None, Some("r/p1.1080.mp4"))).content_type,
+            "video/mp4",
+            "storage mode must not change the type"
+        );
+    }
 }

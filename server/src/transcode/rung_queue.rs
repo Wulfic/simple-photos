@@ -936,7 +936,8 @@ mod tests {
         assert_eq!(backfill_ids(&pool).await, vec!["p_sd"]);
 
         let ladder: std::collections::HashSet<_> = candidate_ids(&pool).await.into_iter().collect();
-        let backfill: std::collections::HashSet<_> = backfill_ids(&pool).await.into_iter().collect();
+        let backfill: std::collections::HashSet<_> =
+            backfill_ids(&pool).await.into_iter().collect();
         assert!(
             ladder.is_disjoint(&backfill),
             "a photo must never be a candidate for both passes"
@@ -971,13 +972,18 @@ mod tests {
 
         let ids = backfill_ids(&pool).await;
         assert_eq!(
-            ids.iter().cloned().collect::<std::collections::HashSet<String>>(),
+            ids.iter()
+                .cloned()
+                .collect::<std::collections::HashSet<String>>(),
             ["p_mp4", "p_mov", "p_m4v"]
                 .iter()
                 .map(|s| s.to_string())
                 .collect::<std::collections::HashSet<String>>()
         );
-        assert!(!ids.contains(&"p_mkv".to_string()), "mkv converts by extension");
+        assert!(
+            !ids.contains(&"p_mkv".to_string()),
+            "mkv converts by extension"
+        );
         assert!(
             !ids.contains(&"p_webm".to_string()),
             "a VP9/AV1 WebM plays natively — selecting it only buys a needless re-encode"
@@ -1081,6 +1087,12 @@ mod tests {
             .collect();
         assert_eq!(ordered, vec!["p_small", "p_mid", "p_big"]);
 
-        assert_eq!(find_codec_backfill_candidates(&pool, 2).await.unwrap().len(), 2);
+        assert_eq!(
+            find_codec_backfill_candidates(&pool, 2)
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
     }
 }

@@ -724,7 +724,10 @@ mod tests {
         let got_set: HashSet<&String> = got.iter().collect();
         let want_set: HashSet<&String> = seeded.iter().collect();
         let missing: Vec<_> = want_set.difference(&got_set).collect();
-        assert!(missing.is_empty(), "photos never returned by ANY page: {missing:?}");
+        assert!(
+            missing.is_empty(),
+            "photos never returned by ANY page: {missing:?}"
+        );
         assert_eq!(got.len(), seeded.len(), "expected each photo exactly once");
         assert_eq!(got_set, want_set);
     }
@@ -733,12 +736,20 @@ mod tests {
     fn parses_photo_cursors_including_pipes_in_filename() {
         assert_eq!(
             parse_photo_cursor("2026-01-01T00:00:00Z|IMG_1.jpg|abc"),
-            ("2026-01-01T00:00:00Z".into(), "IMG_1.jpg".into(), "abc".into())
+            (
+                "2026-01-01T00:00:00Z".into(),
+                "IMG_1.jpg".into(),
+                "abc".into()
+            )
         );
         // A filename containing '|' stays intact: ts up to first, id after last.
         assert_eq!(
             parse_photo_cursor("2026-01-01T00:00:00Z|od|d|name.jpg|abc"),
-            ("2026-01-01T00:00:00Z".into(), "od|d|name.jpg".into(), "abc".into())
+            (
+                "2026-01-01T00:00:00Z".into(),
+                "od|d|name.jpg".into(),
+                "abc".into()
+            )
         );
         // Legacy bare-timestamp cursor.
         assert_eq!(
@@ -753,7 +764,14 @@ mod tests {
         let mut seeded = Vec::new();
         for i in 0..7 {
             let id = format!("d{i:02}");
-            insert(&pool, &id, "u1", &format!("IMG_{i}.jpg"), &format!("2026-01-{:02}T00:00:00Z", i + 1)).await;
+            insert(
+                &pool,
+                &id,
+                "u1",
+                &format!("IMG_{i}.jpg"),
+                &format!("2026-01-{:02}T00:00:00Z", i + 1),
+            )
+            .await;
             seeded.push(id);
         }
         for limit in [1, 2, 3, 7] {
@@ -773,7 +791,14 @@ mod tests {
         for i in 0..5 {
             let id = format!("t{i:02}");
             // Distinct filenames, identical taken_at — ordering falls to filename.
-            insert(&pool, &id, "u1", &format!("IMG_{i}.jpg"), "2026-02-01T00:00:00Z").await;
+            insert(
+                &pool,
+                &id,
+                "u1",
+                &format!("IMG_{i}.jpg"),
+                "2026-02-01T00:00:00Z",
+            )
+            .await;
             seeded.push(id);
         }
         for limit in [1, 2, 3, 4, 5] {

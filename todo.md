@@ -21,23 +21,60 @@ and the standing deploy/device verification debt.
   `test_18` audio 403s (6 — `audio_backup_enabled` defaults false). Do not blame
   your diff for those; do not let them grow.
 
-> **⚠ GitHub Actions has not run on `dev` since 2026-05-11** (last run
-> `3315990`, ~50 commits ago). Found 2026-08-04 while checking the fmt gate.
-> Consequences, all verified locally against CI's own pinned toolchain
-> (`RUST_TOOLCHAIN: "1.88"`, now installed here — `cargo +1.88 …`):
-> - `cargo fmt --all -- --check` reports **112 diffs on clean `dev`**, across
->   ~30 files. Not line endings (identical under LF and CRLF) and **not a
->   toolchain mismatch** — 1.88 and 1.96 produce the *same* list, byte for byte.
->   Memory `issue40-b2-rate-calibration-2026-08-04`'s "local 1.96 vs CI's 1.88
->   churned 20 untouched files" diagnosis is **wrong**: the repo has simply
->   drifted out of format since CI stopped checking. Corrected in that memory.
-> - `cargo clippy --all-targets -- -D warnings` fails on a pre-existing
->   `items after a test module` in
->   [server/src/photos/serve.rs:586](server/src/photos/serve.rs#L586).
-> So "never commit red" has been **unverified by CI for ~50 commits**; only the
-> local test suite has been holding the line. Two separate cleanups are owed
-> (a repo-wide `cargo +1.88 fmt`, and that one clippy lint), plus finding out
-> *why* Actions stopped — neither is in scope for the item that found it.
+> **✅ CI debt cleared 2026-08-04 — and "Actions is broken" was the wrong
+> diagnosis.** Actions did not *stop* on `dev`; it was **switched off, on
+> purpose, in two steps**:
+> - `5379845` (2026-06-02) removed `dev` from `ci.yml`'s push triggers and
+>   handed dev validation to `sync-dev-to-main.yml` ("Gate & Sync"), which ran
+>   the full suite on every `dev` push.
+> - `2f31460` (2026-06-11) **deleted that orchestrator** as part of the unified
+>   release pipeline, and `58f1d6c` stripped `ci.yml` down to
+>   `on: workflow_call`. [pipeline.yml](.github/workflows/pipeline.yml) states
+>   it in its own header: "Regular commits to `dev` or `main` do NOT trigger
+>   anything."
+>
+> So nothing was failing, and there is no Actions outage to chase. The drift
+> below is the *predicted consequence* of removing the gate, which is why it
+> accumulated silently. All of it verified against CI's own pinned toolchain
+> (`RUST_TOOLCHAIN: "1.88"`, installed here — `cargo +1.88 …`):
+>
+> - `cargo fmt --all -- --check`: **112 diffs across 20 files.** Fixed by
+>   `cargo +1.88 fmt --all`. The tree now reads clean under **both** 1.88 and
+>   1.96 — which is the proof that memory
+>   `issue40-b2-rate-calibration-2026-08-04`'s "local 1.96 vs CI's 1.88 churned
+>   20 untouched files" was wrong. They were the *same* 20 files and they were
+>   genuinely unformatted; nobody's rustfmt was churning anything. Corrected in
+>   that memory. Still use `cargo +1.88 fmt` — not because the two disagree
+>   today, but because rustfmt ships with the toolchain and 1.88 is what the
+>   gate runs.
+> - `cargo clippy`: **four failures, not one.** This file counted only
+>   `items_after_test_module` — real (`mod rendition_tests` had four
+>   `pub async fn` handlers after it; moved to the end of
+>   [serve.rs](server/src/photos/serve.rs)) — and stopped reading there. Behind
+>   it sat three `uninlined_format_args`: the two `-enc-` ETag `format!`s in
+>   `serve.rs`, and one in [setup/storage.rs](server/src/setup/storage.rs).
+> - **One of those four is invisible to CI, and still is.** The `storage.rs`
+>   lint sits under `#[cfg(target_os = "windows")]`; every runner here is
+>   `ubuntu-24.04`, so no Linux clippy ever compiles it. It was found only
+>   because this machine is Windows. The release pipeline *builds* the `.exe`
+>   but does not clippy it, so a Windows-only lint has **no gate whatsoever**.
+>   Fixed by hand. If it recurs, the fix is a `windows-latest` lint job; not
+>   added now, to keep the new gate cheap.
+>
+> **The gate is back, deliberately smaller than the old one:**
+> [.github/workflows/lint.yml](.github/workflows/lint.yml) runs `fmt --check` +
+> `clippy -D warnings` on every push to `dev` and every PR — a couple of
+> minutes, not the full chain. Build / unit tests / web / E2E stay in the
+> tag-triggered release pipeline, which is slow on purpose. `ci.yml` was **not**
+> given its push triggers back: it documents itself as having none, and
+> re-adding them would make it run twice during a release. The two invocations
+> in `lint.yml` are byte-identical to `ci.yml`'s on purpose — a gate that runs a
+> *slightly* different check is worse than no gate, because it goes green while
+> the release fails.
+>
+> **Residual, deliberately not closed here:** `cargo test`, `npm run build` and
+> the pytest E2E suite still have no pre-tag gate. "Never commit red" is
+> enforced on those by running them locally, exactly as before.
 
 ---
 

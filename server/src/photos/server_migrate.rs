@@ -363,9 +363,11 @@ pub async fn count_parked(pool: &sqlx::SqlitePool, user_id: Option<&str>) -> i64
             .await
         }
         None => {
-            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM photos WHERE encryption_deferred = 1")
-                .fetch_one(pool)
-                .await
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM photos WHERE encryption_deferred = 1",
+            )
+            .fetch_one(pool)
+            .await
         }
     };
 
@@ -700,7 +702,10 @@ mod tests {
 
         assert_eq!(deferred, 0);
         assert_eq!(attempts, 0, "a retry with no attempt budget is not a retry");
-        assert_eq!(error, None, "a stale error outlives the failure it describes");
+        assert_eq!(
+            error, None,
+            "a stale error outlives the failure it describes"
+        );
         assert_eq!(
             count_migratable(&pool).await.unwrap(),
             1,

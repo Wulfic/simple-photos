@@ -187,10 +187,9 @@ async fn hydrate_renditions(
 /// client's cursor only ever needs to be comparable against itself. A user with
 /// no changes simply has a sparse range, which costs one empty delta query.
 pub async fn head_seq(pool: &sqlx::SqlitePool) -> Result<i64, AppError> {
-    let head: i64 =
-        sqlx::query_scalar("SELECT COALESCE(MAX(seq), 0) FROM photo_change_log")
-            .fetch_one(pool)
-            .await?;
+    let head: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(seq), 0) FROM photo_change_log")
+        .fetch_one(pool)
+        .await?;
     Ok(head)
 }
 
@@ -381,9 +380,7 @@ pub async fn fetch_delta(
     let has_more = changed.len() as i64 > limit;
     changed.truncate(limit as usize);
     let next_cursor = if has_more {
-        changed
-            .last()
-            .map(|c| format!("{}|{}", c.seq, c.photo_id))
+        changed.last().map(|c| format!("{}|{}", c.seq, c.photo_id))
     } else {
         None
     };
@@ -417,8 +414,7 @@ pub async fn fetch_delta(
     let mut photos = q.bind(user_id).fetch_all(pool).await?;
     hydrate_renditions(pool, &mut photos).await?;
 
-    let alive: std::collections::HashSet<&str> =
-        photos.iter().map(|p| p.id.as_str()).collect();
+    let alive: std::collections::HashSet<&str> = photos.iter().map(|p| p.id.as_str()).collect();
     let deleted: Vec<String> = changed
         .iter()
         .filter(|c| !alive.contains(c.photo_id.as_str()))
@@ -639,7 +635,10 @@ mod tests {
         let head = head_seq(&pool).await.unwrap();
 
         let page = fetch_delta(&pool, "user-1", head, None, 500).await.unwrap();
-        assert!(page.photos.is_empty(), "no rows should move when nothing changed");
+        assert!(
+            page.photos.is_empty(),
+            "no rows should move when nothing changed"
+        );
         assert_eq!(page.deleted, Some(Vec::new()));
         assert_eq!(page.next_cursor, None, "no pagination for an empty delta");
         assert_eq!(page.head_seq, head, "head must not drift on a read");
@@ -654,7 +653,13 @@ mod tests {
         let mut seeded = Vec::new();
         for i in 0..7 {
             let id = format!("z{i:02}");
-            insert(&pool, &id, "user-1", &format!("2026-01-{:02}T00:00:00Z", i + 1)).await;
+            insert(
+                &pool,
+                &id,
+                "user-1",
+                &format!("2026-01-{:02}T00:00:00Z", i + 1),
+            )
+            .await;
             seeded.push(id);
         }
 
@@ -709,11 +714,18 @@ mod tests {
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        assert_eq!(still_there, 1, "the row must still exist — only eligibility changed");
+        assert_eq!(
+            still_there, 1,
+            "the row must still exist — only eligibility changed"
+        );
 
         let (up, del) = delta_all(&pool, "user-1", head, 500).await;
         assert!(up.is_empty());
-        assert_eq!(del, vec!["secret".to_string()], "secure-hidden reads as removed");
+        assert_eq!(
+            del,
+            vec!["secret".to_string()],
+            "secure-hidden reads as removed"
+        );
     }
 
     /// The mirror image: removing the secure-gallery item puts the photo back
@@ -732,7 +744,11 @@ mod tests {
             .unwrap();
 
         let (up, del) = delta_all(&pool, "user-1", head, 500).await;
-        assert_eq!(up, vec!["secret".to_string()], "back in the feed as an upsert");
+        assert_eq!(
+            up,
+            vec!["secret".to_string()],
+            "back in the feed as an upsert"
+        );
         assert!(del.is_empty());
     }
 
@@ -762,7 +778,10 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(items, 0, "precondition: the cascade actually removed the item");
+        assert_eq!(
+            items, 0,
+            "precondition: the cascade actually removed the item"
+        );
 
         let (up, _) = delta_all(&pool, "user-1", head, 500).await;
         assert_eq!(
@@ -831,7 +850,13 @@ mod tests {
         let pool = test_pool().await;
         let u = "user-1";
         for i in 0..6 {
-            insert(&pool, &format!("w{i:02}"), u, &format!("2026-01-{:02}T00:00:00Z", i + 1)).await;
+            insert(
+                &pool,
+                &format!("w{i:02}"),
+                u,
+                &format!("2026-01-{:02}T00:00:00Z", i + 1),
+            )
+            .await;
         }
 
         // A client that has fully synced holds exactly the full walk.
@@ -839,8 +864,14 @@ mod tests {
         let head = head_seq(&pool).await.unwrap();
 
         // Now churn the library through every mutation kind at once.
-        sqlx::query("DELETE FROM photos WHERE id = 'w00'").execute(&pool).await.unwrap();
-        sqlx::query("UPDATE photos SET is_favorite = 1 WHERE id = 'w01'").execute(&pool).await.unwrap();
+        sqlx::query("DELETE FROM photos WHERE id = 'w00'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE photos SET is_favorite = 1 WHERE id = 'w01'")
+            .execute(&pool)
+            .await
+            .unwrap();
         insert(&pool, "w99", u, "2026-02-01T00:00:00Z").await;
         secure_hide(&pool, "i1", "w02").await;
 
@@ -880,7 +911,10 @@ mod tests {
 
         let (up, del) = delta_all(&pool, "user-1", head, 500).await;
         assert_eq!(up, vec!["mine".to_string()]);
-        assert!(del.is_empty(), "another user's tombstone must not leak: {del:?}");
+        assert!(
+            del.is_empty(),
+            "another user's tombstone must not leak: {del:?}"
+        );
     }
 
     /// A malformed cursor must re-serve a page, never skip one. Cursors survive
@@ -930,7 +964,10 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(outcome.pruned, 1, "precondition: the tombstone was actually pruned");
+        assert_eq!(
+            outcome.pruned, 1,
+            "precondition: the tombstone was actually pruned"
+        );
         outcome.floor
     }
 
@@ -982,8 +1019,14 @@ mod tests {
 
         let floor = prune_after_deleting(&pool, "erased").await;
 
-        let page = fetch_delta(&pool, "user-1", floor, None, 500).await.unwrap();
-        assert_eq!(page.deleted, Some(Vec::new()), "still a delta, not a full walk");
+        let page = fetch_delta(&pool, "user-1", floor, None, 500)
+            .await
+            .unwrap();
+        assert_eq!(
+            page.deleted,
+            Some(Vec::new()),
+            "still a delta, not a full walk"
+        );
         // Exactly what changed after the floor — not the whole library.
         let ids: Vec<&str> = page.photos.iter().map(|p| p.id.as_str()).collect();
         assert_eq!(ids, vec![AFTER_VICTIM]);
@@ -1004,7 +1047,10 @@ mod tests {
             insert(&pool, &format!("n{i}"), "user-1", "2026-01-01T00:00:00Z").await;
         }
         let page = fetch_delta(&pool, "user-1", 0, None, 500).await.unwrap();
-        assert!(page.deleted.is_some(), "no prune has run, so since=0 is still a delta");
+        assert!(
+            page.deleted.is_some(),
+            "no prune has run, so since=0 is still a delta"
+        );
         assert_eq!(page.photos.len(), 4);
     }
 
@@ -1016,26 +1062,43 @@ mod tests {
         let pool = test_pool().await;
         let u = "user-1";
         for i in 0..4 {
-            insert(&pool, &format!("r{i}"), u, &format!("2026-01-0{}T00:00:00Z", i + 1)).await;
+            insert(
+                &pool,
+                &format!("r{i}"),
+                u,
+                &format!("2026-01-0{}T00:00:00Z", i + 1),
+            )
+            .await;
         }
         // A client that synced when everything existed.
         let mut mirror: HashSet<String> = paginate_all(&pool, u, 2).await.into_iter().collect();
         let stale_cursor = head_seq(&pool).await.unwrap();
 
         let floor = prune_after_deleting(&pool, "r0").await;
-        assert!(stale_cursor < floor, "precondition: this client is now below the floor");
+        assert!(
+            stale_cursor < floor,
+            "precondition: this client is now below the floor"
+        );
 
         // It asks for a delta and is handed a full walk, so it set-differences
         // exactly as `runFullPass` does.
-        let page = fetch_delta(&pool, u, stale_cursor, None, 500).await.unwrap();
+        let page = fetch_delta(&pool, u, stale_cursor, None, 500)
+            .await
+            .unwrap();
         assert_eq!(page.deleted, None);
         let served: HashSet<String> = page.photos.iter().map(|p| p.id.clone()).collect();
         mirror.retain(|id| served.contains(id));
         mirror.extend(served);
 
         let fresh: HashSet<String> = paginate_all(&pool, u, 2).await.into_iter().collect();
-        assert_eq!(mirror, fresh, "the fallback must leave the mirror exactly correct");
-        assert!(!mirror.contains("r0"), "the pruned photo must be gone from the mirror");
+        assert_eq!(
+            mirror, fresh,
+            "the fallback must leave the mirror exactly correct"
+        );
+        assert!(
+            !mirror.contains("r0"),
+            "the pruned photo must be gone from the mirror"
+        );
     }
 
     // ── Video quality ladder (#49) ─────────────────────────────────────────
@@ -1138,10 +1201,18 @@ mod tests {
 
         let (up, del) = delta_all(&pool, "user-1", head, 500).await;
         assert!(del.is_empty());
-        assert_eq!(up, vec!["vid".to_string()], "the rung must nominate the photo");
+        assert_eq!(
+            up,
+            vec!["vid".to_string()],
+            "the rung must nominate the photo"
+        );
 
         let page = fetch_delta(&pool, "user-1", head, None, 500).await.unwrap();
-        assert_eq!(page.photos[0].renditions.len(), 1, "picker must arrive with it");
+        assert_eq!(
+            page.photos[0].renditions.len(),
+            1,
+            "picker must arrive with it"
+        );
     }
 
     /// Another user's rows must never leak into a page, and must not consume

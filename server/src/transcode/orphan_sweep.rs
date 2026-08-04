@@ -124,12 +124,11 @@ async fn reclaim_one(
 
     // Truly unreferenced. Unlink the file first (idempotent on a missing file),
     // then drop the `blobs` row and the queue row atomically.
-    if let Some(storage_path) = sqlx::query_scalar::<_, String>(
-        "SELECT storage_path FROM blobs WHERE id = ?",
-    )
-    .bind(blob_id)
-    .fetch_optional(pool)
-    .await?
+    if let Some(storage_path) =
+        sqlx::query_scalar::<_, String>("SELECT storage_path FROM blobs WHERE id = ?")
+            .bind(blob_id)
+            .fetch_optional(pool)
+            .await?
     {
         crate::blobs::storage::delete_blob(storage_root, &storage_path).await?;
     }
@@ -227,9 +226,22 @@ mod tests {
 
         let outcome = sweep_orphaned_rendition_blobs(&pool, &root).await;
 
-        assert_eq!(outcome, OrphanSweepOutcome { examined: 1, deleted: 1, ..Default::default() });
-        assert!(!root.join(&rel).exists(), "the rendition file must be unlinked");
-        assert!(!blob_exists(&pool, "orphan-1").await, "the blobs row must be gone");
+        assert_eq!(
+            outcome,
+            OrphanSweepOutcome {
+                examined: 1,
+                deleted: 1,
+                ..Default::default()
+            }
+        );
+        assert!(
+            !root.join(&rel).exists(),
+            "the rendition file must be unlinked"
+        );
+        assert!(
+            !blob_exists(&pool, "orphan-1").await,
+            "the blobs row must be gone"
+        );
         assert_eq!(queue_count(&pool).await, 0, "the queue row must be cleared");
 
         std::fs::remove_dir_all(&root).ok();
@@ -258,11 +270,25 @@ mod tests {
 
         assert_eq!(
             outcome,
-            OrphanSweepOutcome { examined: 1, still_referenced: 1, ..Default::default() }
+            OrphanSweepOutcome {
+                examined: 1,
+                still_referenced: 1,
+                ..Default::default()
+            }
         );
-        assert!(root.join(&rel).exists(), "referenced bytes must NOT be unlinked");
-        assert!(blob_exists(&pool, "shared-1").await, "referenced blob must survive");
-        assert_eq!(queue_count(&pool).await, 0, "the stale hint must be dropped");
+        assert!(
+            root.join(&rel).exists(),
+            "referenced bytes must NOT be unlinked"
+        );
+        assert!(
+            blob_exists(&pool, "shared-1").await,
+            "referenced blob must survive"
+        );
+        assert_eq!(
+            queue_count(&pool).await,
+            0,
+            "the stale hint must be dropped"
+        );
 
         std::fs::remove_dir_all(&root).ok();
     }
@@ -297,7 +323,10 @@ mod tests {
     #[tokio::test]
     async fn photo_delete_cascade_enqueues_then_sweep_reclaims() {
         let pool = test_pool().await;
-        sqlx::query("PRAGMA foreign_keys = ON").execute(&pool).await.unwrap();
+        sqlx::query("PRAGMA foreign_keys = ON")
+            .execute(&pool)
+            .await
+            .unwrap();
 
         let (root, rel) = scratch_blob("rung-blob");
         // Parents the FK graph needs, then a video with a downscale rendition.
@@ -325,12 +354,19 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        assert_eq!(queue_count(&pool).await, 1, "cascade must fire the orphan trigger");
+        assert_eq!(
+            queue_count(&pool).await,
+            1,
+            "cascade must fire the orphan trigger"
+        );
 
         let outcome = sweep_orphaned_rendition_blobs(&pool, &root).await;
 
         assert_eq!(outcome.deleted, 1);
-        assert!(!root.join(&rel).exists(), "leaked rendition bytes must be freed");
+        assert!(
+            !root.join(&rel).exists(),
+            "leaked rendition bytes must be freed"
+        );
         assert!(!blob_exists(&pool, "rung-blob").await);
         assert_eq!(queue_count(&pool).await, 0);
 

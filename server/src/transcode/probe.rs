@@ -272,7 +272,9 @@ pub async fn probe_decode_health(path: &Path) -> Result<DecodeHealth, ProbeError
         .await
         .map_err(ProbeError::Unavailable)?;
 
-    Ok(parse_decode_errors(&String::from_utf8_lossy(&output.stderr)))
+    Ok(parse_decode_errors(&String::from_utf8_lossy(
+        &output.stderr,
+    )))
 }
 
 #[cfg(test)]
@@ -313,7 +315,11 @@ mod tests {
         assert!(!is_browser_native(&info("hevc", "Main", "yuv420p")));
         assert!(!is_browser_native(&info("hevc", "Main", "yuvj420p")));
         // 10 mpeg4 Part 2 (DivX/Xvid era).
-        assert!(!is_browser_native(&info("mpeg4", "Simple Profile", "yuv420p")));
+        assert!(!is_browser_native(&info(
+            "mpeg4",
+            "Simple Profile",
+            "yuv420p"
+        )));
     }
 
     /// `High 10` shares a prefix with the native `High`. Matching on prefix

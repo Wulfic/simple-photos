@@ -492,7 +492,9 @@ mod tests {
         // The last image lands, and the queue crosses into the video tail.
         t += 0.1;
         eta.complete(MediaCategory::Image, img, t);
-        let after = eta.eta_seconds().expect("estimate with the video tail left");
+        let after = eta
+            .eta_seconds()
+            .expect("estimate with the video tail left");
 
         let ratio = if before > after {
             before / after

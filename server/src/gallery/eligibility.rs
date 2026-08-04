@@ -68,7 +68,9 @@ mod tests {
     #[test]
     fn predicate_covers_all_three_secure_gallery_references() {
         assert_eq!(
-            ELIGIBLE_PREDICATE.matches("encrypted_gallery_items").count(),
+            ELIGIBLE_PREDICATE
+                .matches("encrypted_gallery_items")
+                .count(),
             3,
             "expected exactly three secure-gallery arms; if this changed on \
              purpose, update the EGI triggers in migration 033 to match"

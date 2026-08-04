@@ -356,8 +356,14 @@ mod tests {
             None,
             "precondition: the extension-only verdict for .mp4 is 'no preview needed'"
         );
-        assert_eq!(resolve_web_preview("hevc.mp4", Some(false)), Some(TRANSCODE_MP4));
-        assert_eq!(resolve_web_preview("hevc.MP4", Some(false)), Some(TRANSCODE_MP4));
+        assert_eq!(
+            resolve_web_preview("hevc.mp4", Some(false)),
+            Some(TRANSCODE_MP4)
+        );
+        assert_eq!(
+            resolve_web_preview("hevc.MP4", Some(false)),
+            Some(TRANSCODE_MP4)
+        );
     }
 
     /// A genuinely native `.mp4` must stay untouched. Getting this wrong
@@ -381,7 +387,10 @@ mod tests {
     /// A `.mov` that really is non-native still gets the full encode.
     #[test]
     fn a_non_native_mov_is_still_transcoded() {
-        assert_eq!(resolve_web_preview("prores.mov", Some(false)), Some(TRANSCODE_MP4));
+        assert_eq!(
+            resolve_web_preview("prores.mov", Some(false)),
+            Some(TRANSCODE_MP4)
+        );
     }
 
     /// Containers that are unambiguous by extension never reach the probe, and
@@ -390,7 +399,11 @@ mod tests {
     fn unambiguous_video_containers_skip_the_probe() {
         for name in ["a.mkv", "a.avi", "a.wmv", "a.asf", "a.mpg", "a.3gp"] {
             assert!(!preview_needs_probe(name), "{name} must not be probed");
-            assert_eq!(resolve_web_preview(name, None), Some(TRANSCODE_MP4), "{name}");
+            assert_eq!(
+                resolve_web_preview(name, None),
+                Some(TRANSCODE_MP4),
+                "{name}"
+            );
         }
     }
 
@@ -413,7 +426,13 @@ mod tests {
     /// rather than to an unplayable payload or a library-wide re-encode.
     #[test]
     fn an_unprobeable_file_keeps_the_old_extension_behaviour() {
-        assert_eq!(resolve_web_preview("clip.mp4", None), needs_web_preview("clip.mp4").map(|ext| WebPreview { ext, mode: PreviewMode::Transcode }));
+        assert_eq!(
+            resolve_web_preview("clip.mp4", None),
+            needs_web_preview("clip.mp4").map(|ext| WebPreview {
+                ext,
+                mode: PreviewMode::Transcode
+            })
+        );
         assert_eq!(resolve_web_preview("clip.mov", None), Some(TRANSCODE_MP4));
         assert_eq!(resolve_web_preview("clip.mkv", None), Some(TRANSCODE_MP4));
     }
@@ -449,7 +468,11 @@ mod tests {
             .map(|s| s.success())
             .unwrap_or(false);
 
-        if ok && std::fs::metadata(&path).map(|m| m.len() > 0).unwrap_or(false) {
+        if ok
+            && std::fs::metadata(&path)
+                .map(|m| m.len() > 0)
+                .unwrap_or(false)
+        {
             Some(path)
         } else {
             let _ = std::fs::remove_file(&path);
@@ -526,8 +549,8 @@ mod tests {
             "an H.264 .mov must be rewrapped, not re-encoded"
         );
 
-        let out = std::env::temp_dir()
-            .join(format!("sp_webprev_{}_remuxed.mp4", std::process::id()));
+        let out =
+            std::env::temp_dir().join(format!("sp_webprev_{}_remuxed.mp4", std::process::id()));
         let _ = std::fs::remove_file(&out);
         let ok = generate_web_preview_bg(&path, &out, plan.unwrap()).await;
 
@@ -574,7 +597,11 @@ mod tests {
             .status()
             .map(|s| s.success())
             .unwrap_or(false);
-        if !ok || std::fs::metadata(&path).map(|m| m.len() == 0).unwrap_or(true) {
+        if !ok
+            || std::fs::metadata(&path)
+                .map(|m| m.len() == 0)
+                .unwrap_or(true)
+        {
             eprintln!("ffmpeg/aac unavailable — skipping");
             let _ = std::fs::remove_file(&path);
             return;

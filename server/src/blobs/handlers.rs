@@ -577,7 +577,10 @@ mod tests {
         let got_set: HashSet<&String> = got.iter().collect();
         let want_set: HashSet<&String> = seeded.iter().collect();
         let missing: Vec<_> = want_set.difference(&got_set).collect();
-        assert!(missing.is_empty(), "blobs never returned by ANY page: {missing:?}");
+        assert!(
+            missing.is_empty(),
+            "blobs never returned by ANY page: {missing:?}"
+        );
         assert_eq!(got.len(), seeded.len(), "expected each blob exactly once");
         assert_eq!(got_set, want_set);
     }

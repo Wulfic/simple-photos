@@ -1,0 +1,89 @@
+name: Lint (dev)
+
+# The gate that `dev` lost on 2026-06-11.
+#
+# History, because the absence looked like a broken workflow rather than a
+# decision and cost a day to re-derive: `ci.yml` used to run on every push to
+# `dev`; `5379845` removed `dev` from its triggers and handed dev validation to
+# `sync-dev-to-main.yml`; `2f31460` then deleted that orchestrator as part of
+# the unified release pipeline, and `58f1d6c` stripped `ci.yml` down to
+# `workflow_call:`. From that point nothing at all ran until a `v*.*.*` tag was
+# pushed — which is what `pipeline.yml`'s header says, and it is deliberate.
+#
+# The cost was measured on 2026-08-04: clean `dev` had **112 `cargo fmt` diffs
+# across 20 files** and a `clippy -D warnings` failure, none of which any human
+# had seen, because the repo's own "never commit red" rule had been enforced
+# only by the local test suite for ~50 commits. Cleaning that up is a one-time
+# fix; without a gate it drifts again, so here is the gate.
+#
+# Deliberately NOT the full CI. Build + unit tests + web + E2E stay in the
+# release chain (`pipeline.yml` -> `ci.yml`), which is slow on purpose and is
+# where a release gets proven. This job exists to catch the *cheap* class of
+# breakage — formatting and lints — on the commit that introduces it, in a
+# couple of minutes rather than at tag time.
+#
+# `ci.yml` is NOT given push triggers back, on purpose: it documents itself as
+# having no triggers of its own, and re-adding them would make it run twice
+# during a release (once on the push, once via `workflow_call`).
+#
+# ⚠ The two invocations below must stay **byte-identical** to the `Format
+# check` and `Clippy` steps in `ci.yml`, including `RUST_TOOLCHAIN`,
+# `RUSTFLAGS` and `--no-default-features --all-targets --locked`. A gate that
+# runs a *slightly* different check is worse than no gate: it goes green and
+# the release still fails. (`default = ["cuda"]` in Cargo.toml is why
+# `--no-default-features` is not optional — the runner has no CUDA.)
+
+on:
+  push:
+    branches: [dev]
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # A fast lint has no reason to finish for a commit that has been superseded.
+  group: lint-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+  # Pinned to match ci.yml. Local rustfmt is NOT the thing this gates on:
+  # rustfmt ships with the toolchain, so an unpinned local `cargo fmt` can
+  # disagree with CI. Use `cargo +1.88 fmt` locally.
+  RUST_TOOLCHAIN: "1.88"
+
+jobs:
+  rust-lint:
+    name: Rust (fmt + clippy)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server -> target
+
+      # clippy --all-targets type-checks the crate and its tests, so the native
+      # deps (openssl-sys, aws-lc-sys) must be buildable. Same list as ci.yml.
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libssl-dev cmake make g++ libclang-dev perl
+
+      - name: Format check
+        working-directory: server
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (CPU build, all warnings = errors)
+        working-directory: server
+        run: cargo clippy --no-default-features --all-targets --locked -- -D warnings

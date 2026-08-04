@@ -26,7 +26,13 @@ pub async fn list_trash(
 ) -> Result<Json<TrashListResponse>, AppError> {
     let limit = params.limit.unwrap_or(100).min(500);
     Ok(Json(
-        list_trash_page(&state.read_pool, &auth.user_id, params.after.as_deref(), limit).await?,
+        list_trash_page(
+            &state.read_pool,
+            &auth.user_id,
+            params.after.as_deref(),
+            limit,
+        )
+        .await?,
     ))
 }
 
@@ -97,9 +103,7 @@ pub async fn list_trash_page(
     items.truncate(limit as usize);
 
     let next_cursor = if has_more {
-        items
-            .last()
-            .map(|i| format!("{}|{}", i.deleted_at, i.id))
+        items.last().map(|i| format!("{}|{}", i.deleted_at, i.id))
     } else {
         None
     };
@@ -212,7 +216,10 @@ mod tests {
         let got_set: HashSet<&String> = got.iter().collect();
         let want_set: HashSet<&String> = seeded.iter().collect();
         let missing: Vec<_> = want_set.difference(&got_set).collect();
-        assert!(missing.is_empty(), "rows never returned by ANY page: {missing:?}");
+        assert!(
+            missing.is_empty(),
+            "rows never returned by ANY page: {missing:?}"
+        );
         assert_eq!(got.len(), seeded.len(), "expected each row exactly once");
         assert_eq!(got_set, want_set);
     }
