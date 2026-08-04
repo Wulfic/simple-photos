@@ -578,9 +578,52 @@ silently undo it.
       JVM or vitest run can show a gear icon on a secure video. Needs a secured
       >1080p video **that had a rung before it was secured** — securing first is
       the no-picker case and would look like a failure while being correct.
-- [ ] **E2E: rendition serving + range requests.** The ladder arithmetic and the
-      picker default-per-network-state are unit-tested; the *serving* path with a
-      real `Range` header is not.
+- [x] **E2E: rendition serving + range requests — DONE 2026-08-04.**
+      [tests/test_91_video_rendition_serving.py](tests/test_91_video_rendition_serving.py),
+      18 cases, driving the real pipeline: upload a 2560x1440 H.264 source, kick
+      `POST /api/admin/photos/auto-scan` (which awaits the conversion pass and
+      *then* calls `generate_rungs_after_scan`), wait for `renditions` to appear
+      on the sync feed. The fixture asserts the ladder produced a **1920x1080**
+      rung before any test runs — "no rungs" would otherwise make all 18 pass
+      vacuously, which is this file's most-repeated lesson.
+      "The rung, not the original" is decided by **ffprobing the served bytes**
+      rather than by comparing lengths, so it survives any refactor of how the
+      locator is chosen. The three properties the locator swap could get wrong
+      are covered separately: the bytes, the length (`Content-Range` totals,
+      open-ended ranges, a 416 at the rung's own length, and a
+      reassemble-the-whole-file pass that catches chunk-frame boundary errors a
+      single mid-file range cannot), and the cache identity (the original's ETag
+      must **not** validate the rung — a 304 there hands the client the 4K bytes
+      it asked to avoid).
+- [x] **Found by that E2E, in a surface B4 never named: every video response was
+      being gzipped, and it cost `Accept-Ranges`.** `DefaultPredicate` excludes
+      `image/` and nothing else, so `video/mp4` went through the global
+      `CompressionLayer` while the JPEG beside it did not. The wasted CPU on
+      incompressible H.264 is the boring half. The functional half: **a
+      compressed body is a transformed body**, so the layer drops
+      `Content-Length` and `Accept-Ranges: bytes` and switches to
+      `Transfer-Encoding: chunked` — deleting the exact header `serve_photo` sets
+      to advertise seeking, on the serving path of a feature whose whole purpose
+      is swapping quality mid-playback.
+      **`main.rs` already documented the contract and `photos/serve.rs` had never
+      once honoured it:** "Binary blob endpoints explicitly set
+      `Content-Encoding: identity` to bypass this layer." `blobs/download.rs`
+      does, in four places. `serve.rs` does, in zero. Fixed **centrally**
+      (`http_utils::media_compression_predicate`, excluding `video/` and
+      `audio/`) rather than by adding a fifth hand-written copy — see the
+      eighth cross-cutting instance below. `application/octet-stream` is
+      deliberately **not** excluded: it is a genuine catch-all, some of it
+      compresses, and the blob route already opts itself out.
+      Tests: 4 unit (526 green, was 522) + 4 E2E. Verified RED both ways — the
+      E2E failed on the pre-fix tree with `assert None == 'bytes'` for
+      `Accept-Ranges`, and reverting the predicate to the stock default fails
+      `video_and_audio_are_never_compressed` and nothing else.
+      `the_stock_default_would_have_compressed_video_mp4` asserts the
+      precondition directly, so if a future tower-http ever declines video by
+      itself, that test says so instead of leaving the predicate as dead weight.
+      `json_and_text_are_still_compressed` is the vacuity guard: without it
+      `compress_when(|_| false)` passes every other assertion while silently
+      un-compressing the JSON API.
 
 ---
 
@@ -591,6 +634,63 @@ silently undo it.
       nothing yet drives five actual autoscan passes end to end. **Use a no-row
       path** — a test built on an ordinary failing conversion passes vacuously
       via `existing_set`, which is the trap recorded in B2's correction block.
+
+---
+
+### B6 — `no-store` on every `/api/` response makes all media caching dead code
+
+Found 2026-08-04 while writing B4's serving E2E, and **deliberately not fixed
+there**: it is a privacy decision, not a bug fix, and it does not belong inside a
+#49 commit.
+
+[security.rs](server/src/security.rs#L99-L105) stamps
+`Cache-Control: no-store, no-cache, must-revalidate` on **every** response whose
+path starts with `/api/`. That is a blanket `insert`, so it overwrites whatever
+the handler set. Measured on the wire, not inferred:
+
+| route | what the handler sets | what the client receives |
+|---|---|---|
+| `/api/photos/{id}/file` | `private, max-age=86400` | `no-store, no-cache, must-revalidate` |
+| `/api/photos/{id}/thumb` | `private, max-age=86400` | same |
+| `/api/blobs/{id}` | `private, max-age=31536000, immutable` | same |
+
+The three rows above are **measured on the wire**, not inferred from the code.
+The same blanket `insert` reaches every other handler that sets the header:
+`photos/serve.rs` sets it at **10** sites, `blobs/download.rs` at **5**,
+`trash/handlers.rs` and `backup/proxy.rs` at one each — 17 in total, all of them
+dead. (`setup/import.rs:220` is the 18th and the only one that survives, because
+it sets `no-store` itself and therefore agrees with the middleware.) Dead with
+them is the ETag machinery behind them: `no-store` forbids storing the response
+at all, so there is nothing left to revalidate with. The #49 picker's whole premise
+— swap quality, keep playing — assumes a client can hold onto bytes it already
+fetched. Today every thumbnail in a scrolled grid is re-fetched and re-decrypted
+on every visit.
+
+The header is not obviously wrong, which is why this is an item and not a patch.
+`no-store` on `/api/` was chosen so responses that may carry user data or tokens
+are never persisted, and media *is* user data: relaxing it means a browser
+writes **decrypted** photos and videos into its on-disk cache, which is
+precisely what the secure-gallery threat model exists to prevent. The plausible
+shape is a split — token/JSON endpoints keep `no-store`, media routes keep the
+handler's `private` value, and secure-gallery media stays `no-store`
+unconditionally — but "which routes are media" is a list, and this file already
+tracks what happens to those.
+
+- [ ] Decide the policy, then make the handler headers either authoritative or
+      deleted. **Leaving 17 headers that do nothing is the worst of the three
+      options**, because the next person to read `serve.rs` will believe media is
+      cached for a day.
+- [ ] Whatever is decided, pin it with an E2E that reads the header **off the
+      wire**. Every one of the 17 sites is "correct" when read in the handler;
+      the defect only exists after the middleware runs, which is why unit tests
+      have never seen it. `test_91`'s
+      `TestVideoIsNotCompressedOnTheWire` is the shape to copy.
+- [ ] `security.rs`'s own comment records this lesson already being learned once,
+      for static assets: "previously we stomped them with no-store, forcing
+      browsers to re-download the entire frontend on every page load." The same
+      mistake is live for media. **A comment that documents the fix for one case
+      while the other case is still broken is worth more than a comment that
+      asserts the old intent** — but only if someone reads it.
 
 ---
 
@@ -737,6 +837,17 @@ list exists.
   first where a naive equality test passes vacuously: breaking the shared
   expression breaks both sides at once, so the test needs a non-emptiness guard
   on top of the containment assertion.
+  **Eighth instance, and the first where the "one function" was never written at
+  all: the compression bypass** (B4's E2E finding). `main.rs` states the rule in
+  a comment — "binary blob endpoints explicitly set `Content-Encoding: identity`
+  to bypass this layer" — and then leaves every endpoint to remember it by hand.
+  `blobs/download.rs` remembered four times; `photos/serve.rs` remembered zero.
+  This is the failure mode one step earlier than usual: not two derivations that
+  drifted, but **a rule that only ever existed in prose**, so a whole route could
+  omit it without contradicting anything. A comment describing a convention is
+  not an implementation of it. Fixed as a predicate the router applies once, so
+  the next media route cannot forget. Watch for the same shape in
+  `Cache-Control` — B6 above is that rule stated 17 times and enforced zero.
 - **Verify the *id space*, not just the call shape.** E3a's audit read five call
   sites, saw they all navigated identically, and filed the difference as
   "ordering". Four of them were in fact passing **server** photo ids to a lookup

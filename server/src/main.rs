@@ -291,8 +291,20 @@ async fn main() -> anyhow::Result<()> {
         // Binary blob endpoints explicitly set `Content-Encoding: identity`
         // to bypass this layer — encrypted bytes are incompressible and the
         // compression attempt itself is CPU-expensive.
+        //
+        // `media_compression_predicate` extends that bypass to `video/*` and
+        // `audio/*` by content type, because `photos/serve.rs` never set the
+        // `identity` header this comment claims every binary endpoint sets. The
+        // saving is not the point: a compressed body loses `Content-Length` and
+        // `Accept-Ranges: bytes`, so every video was advertising no seek
+        // support. See the predicate's own doc.
         // Placed outermost so it wraps all responses after other middleware.
-        .layer(CompressionLayer::new().gzip(true).br(true))
+        .layer(
+            CompressionLayer::new()
+                .gzip(true)
+                .br(true)
+                .compress_when(crate::http_utils::media_compression_predicate()),
+        )
         .with_state(state);
 
     // Serve static web frontend if configured
