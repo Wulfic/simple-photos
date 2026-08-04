@@ -251,7 +251,7 @@ The same file was treated two different ways depending only on when it arrived.
 
 ---
 
-### A2 — Tombstone retention (#38 remainder) — DONE 2026-08-03
+### A2 — Tombstone retention (#38 remainder) — DONE 2026-08-03 `ea45f9c`
 
 `photo_change_log` rows for deleted photos accumulate without bound.
 
