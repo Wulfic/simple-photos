@@ -627,13 +627,71 @@ silently undo it.
 
 ---
 
-### B2 — E2E for the 3-strike conversion cap (#40 remainder)
+### B2 — E2E for the 3-strike conversion cap (#40 remainder) — DONE 2026-08-04
 
-- [ ] A fixture that always fails must be attempted **exactly 3 times across 5
-      real scan passes**. The unit + DB tests pin the arithmetic and the SQL;
-      nothing yet drives five actual autoscan passes end to end. **Use a no-row
-      path** — a test built on an ordinary failing conversion passes vacuously
-      via `existing_set`, which is the trap recorded in B2's correction block.
+[tests/test_92_conversion_attempt_cap.py](tests/test_92_conversion_attempt_cap.py),
+7 cases across 6 real autoscan passes.
+
+**The item asked for a test that cannot be built, and the measurement says so
+rather than an argument.** The ask was "a fixture that always fails must be
+attempted **exactly 3 times across 5 real scan passes**". Measured on the E2E
+server, garbage `.mkv` in the storage root, five `POST
+/api/admin/photos/auto-scan` passes:
+
+```
+pass 1..5: media_convert_failure=1  conversion_retired=0  photos row=1
+```
+
+**One attempt, not three, and the cap never fires.** `process_candidate`'s
+failure arm registers the ORIGINAL to avoid data loss, so the file lands in
+`photos.file_path` and every later pass skips it via `existing_set` — which is
+consulted *before* the skip cache. One strike is charged and nothing ever
+spends the other two.
+
+- [x] **The item's own warning was right and still not sufficient.** It said an
+      ordinary failing conversion "passes vacuously via `existing_set`" — true,
+      but it framed that as a test-authoring hazard when it is actually a
+      statement about the *cap's reachability*. Enumerated against the code:
+      both hash-dedup arms (success and failure side) record a terminal
+      `hash_duplicate` **deliberately**, so they are not strikes either. That
+      leaves the cap exactly two live consumers — the DB-error path at
+      `ingest.rs`'s "Failed to register converted photo", and a pass interrupted
+      between the charge and the registration. Neither is reachable over HTTP.
+- [x] **Rejected adding a fault-injection seam** to force the third strike. It
+      is the only way to reach `attempt_count = 3` end to end, and it means a
+      release binary carrying a knob that makes it drop photos on demand. That
+      is a worse thing to own than an untested branch whose arithmetic and SQL
+      are already pinned by `photos/scan_skip.rs` and `photos/register.rs`.
+      Recorded here so it is not re-proposed as "just an env var".
+- [x] **What the E2E pins instead is the property the cap exists to deliver** —
+      *no file is transcoded on every pass forever* — for both paths that
+      actually reach it, over five real passes each.
+- [x] **The no-row path is real, and it is the expensive one.** Same bytes at a
+      second path (the Takeout shape: date folder + every album folder) fails
+      conversion, hits the dedup arm, and returns **without registering
+      anything** — verified `photos row = 0`. Pre-#40 that file was fully
+      transcoded and the output discarded on every pass forever; it is now one
+      transcode total. This is the first end-to-end coverage of that loop.
+- [x] **Two vacuity traps, pointing opposite ways, and the file names both.**
+      "Attempted only once" passes for the *wrong reason* on the registered path
+      — it stops because a row exists, not because anything capped it — so
+      `test_it_stops_because_it_registered_not_because_of_the_cap` asserts the
+      row is present and that no `conversion_retired` was announced for a file
+      that is sitting in the library. On the no-row path the count means nothing
+      unless the row is genuinely absent, so
+      `test_the_duplicate_leaves_no_photos_row` runs first as the precondition.
+- [x] `retry-failed` scoping is now pinned end to end. It deletes
+      `conversion_failed` rows only; widening it re-admits the whole duplicate
+      set and re-hashes the library on the next pass — the disk thrash migration
+      031 removed. The `WHERE` clause is one line and the consequence lands a
+      full scan pass later, which is why no unit test has ever seen it.
+- [x] Verified RED two ways, each biting exactly the tests it should. Gutting
+      the conversion walk's skip-cache consultation (the pre-#40 tree) takes the
+      no-row duplicate to **5 transcodes instead of 1** and fails 2 of 7 — and
+      notably **not** `test_the_duplicate_leaves_no_photos_row`, which is
+      correct, since the row is still absent. Widening `retry-failed` past its
+      reason scope fails **1 of 7** (`assert 2 == 1`) and nothing else.
+      526 server unit tests still green; `cargo +1.88 fmt --check` clean.
 
 ---
 
