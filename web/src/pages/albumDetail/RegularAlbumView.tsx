@@ -17,8 +17,10 @@ import AppHeader from "../../components/AppHeader";
 import AppIcon from "../../components/AppIcon";
 import DetailHeader from "../../components/DetailHeader";
 import AddPhotosPanel from "../../components/AddPhotosPanel";
+import AddToAlbumModal from "../../components/AddToAlbumModal";
 import CastDialog, { CastIcon } from "../../components/CastDialog";
-import { Modal } from "../../components/ui";
+import { ConfirmDialog, Modal } from "../../components/ui";
+import { albumRemovalPrompt } from "../../gallery/albumRemoval";
 import JustifiedGrid from "../../components/gallery/JustifiedGrid";
 import AlbumTile from "../../components/AlbumTile";
 import { getEffectiveAspectRatio } from "../../utils/thumbnailCss";
@@ -120,6 +122,15 @@ export default function RegularAlbumView({ albumId }: { albumId: string | undefi
   const secureAddTarget = useSecureAdd((s) => s.target);
   const cancelSecureAdd = useSecureAdd((s) => s.cancel);
   const [addingSecure, setAddingSecure] = useState(false);
+
+  // "+ Add to album" (Z1): file the selection into ANOTHER album without
+  // unfiling it here. The album grid had a Remove but no way to add — the only
+  // add affordance was the album's own "Add Photos" panel, which pulls FROM the
+  // gallery INTO this album, never the other way.
+  const [showAddToAlbum, setShowAddToAlbum] = useState(false);
+  // Remove is now confirmed (Z1). It sits behind a trash icon, and a trash icon
+  // on an un-filing action has to say so or it reads as a delete.
+  const [confirmRemove, setConfirmRemove] = useState(false);
 
   if (!albumId) {
     return <p className="p-4 text-red-600 dark:text-red-400">Invalid album ID</p>;
@@ -479,6 +490,38 @@ export default function RegularAlbumView({ albumId }: { albumId: string | undefi
         />
       )}
 
+      {/* "+ Add to album" for the current selection (Z1). The photo stays in
+          THIS album — AddToAlbumModal merges into the target's manifest and
+          touches no other album. */}
+      {showAddToAlbum && selectedIds.size > 0 && (
+        <AddToAlbumModal
+          blobIds={[...selectedIds]}
+          onClose={() => setShowAddToAlbum(false)}
+          onAdded={(album, count) => {
+            setShowAddToAlbum(false);
+            toast.success(
+              count > 0
+                ? `Added ${count} item${count !== 1 ? "s" : ""} to ${album.name}`
+                : `Already in ${album.name}`,
+            );
+            clearSelection();
+          }}
+        />
+      )}
+
+      {/* Remove confirmation (Z1) */}
+      {confirmRemove && selectedIds.size > 0 && (
+        <ConfirmDialog
+          {...albumRemovalPrompt(selectedIds.size, album?.name)}
+          confirmLabel="Remove"
+          onCancel={() => setConfirmRemove(false)}
+          onConfirm={() => {
+            setConfirmRemove(false);
+            void removeSelected();
+          }}
+        />
+      )}
+
       {/* Album photo grid */}
       {(isSelectionMode || secureAddTarget) && (
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4 p-3 bg-accent-50 dark:bg-accent-900/30 rounded-lg">
@@ -512,12 +555,33 @@ export default function RegularAlbumView({ albumId }: { albumId: string | undefi
               {addingSecure ? "Adding…" : `Add to album (${selectedIds.size})`}
             </button>
           ) : (
-            <button
-              onClick={removeSelected}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium bg-orange-600 text-white hover:bg-orange-700 shadow-sm shrink-0 whitespace-nowrap tabular-nums"
-            >
-              Remove ({selectedIds.size})
-            </button>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={() => setShowAddToAlbum(true)}
+                disabled={selectedIds.size === 0}
+                title="Add the selected photos to another album"
+                className="btn btn-secondary btn-md inline-flex items-center gap-1.5 whitespace-nowrap tabular-nums disabled:opacity-50"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                </svg>
+                Add to album ({selectedIds.size})
+              </button>
+              <button
+                onClick={() => setConfirmRemove(true)}
+                disabled={selectedIds.size === 0}
+                title={`Remove ${selectedIds.size} from this album`}
+                aria-label={`Remove ${selectedIds.size} from this album`}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium bg-orange-600 text-white hover:bg-orange-700 shadow-sm whitespace-nowrap tabular-nums disabled:opacity-50"
+              >
+                {/* Trash icon (Z1). Orange, not red: this un-files the photo,
+                    it does not delete it — the confirm dialog says so. */}
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+                {selectedIds.size}
+              </button>
+            </div>
           )}
         </div>
       )}

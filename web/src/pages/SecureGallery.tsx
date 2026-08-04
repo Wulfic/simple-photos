@@ -21,9 +21,10 @@ import {
   otherSecureAlbumItems,
   resolveSecureMoves,
   expandSecureSelection,
-  planSecureMovesToTarget,
+  planSecureAddsToTarget,
   secureMoveTargets,
 } from "../gallery/secureMovePicker";
+import { isConflict } from "../api/core";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
 import { useAuthStore } from "../store/auth";
 import {
@@ -124,15 +125,18 @@ export default function SecureGallery() {
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
 
-  // Cross-secure-album picker (#31): move items INTO the open album from the
-  // user's OTHER secure albums. A photo can live in only one secure album, so
-  // this is a move (server reassigns membership), not a copy.
+  // Cross-secure-album picker (#31): MOVE items INTO the open album from the
+  // user's OTHER secure albums. Deliberately still a move: "bring these here"
+  // is what this picker means, and Z1 only removed the constraint that forced
+  // it to be one — it did not make every transfer a copy.
   const [showMovePicker, setShowMovePicker] = useState(false);
   const [moveSelected, setMoveSelected] = useState<Set<string>>(new Set());
   const [moving, setMoving] = useState(false);
 
-  // Push direction (#43): select items in the OPEN album and move them OUT to
-  // another secure album. Same server op as the pull picker, opposite framing.
+  // Push direction (#43): select items in the OPEN album and ADD them to another
+  // secure album (Z1) — they stay here too. This was a move until Z1, which is
+  // the bug Z1 was filed for: a "+"-shaped control that silently un-filed the
+  // photo from the album you were looking at.
   // Reuses the shared multi-select hook so behaviour matches every other grid.
   const pushSelect = usePhotoSelection();
   const [showMoveTarget, setShowMoveTarget] = useState(false);
@@ -428,41 +432,52 @@ export default function SecureGallery() {
     await loadItems(selectedGallery.id);
   }
 
-  // Push (#43): move the items selected in the OPEN album into `targetGalleryId`.
-  async function moveSelectedTo(targetGalleryId: string) {
+  // Push (#43, now an ADD under Z1): file the items selected in the OPEN album
+  // into `targetGalleryId` **without removing them from here**.
+  //
+  // This used to call `moveItem`, which is why filing a secure photo into a
+  // second album silently emptied it out of the first. The affordance was always
+  // a "+", so the operation is what was wrong, not the button.
+  async function addSelectedTo(targetGalleryId: string) {
     if (!selectedGallery || pushSelect.selectedIds.size === 0 || movingPush) return;
     setMovingPush(true);
     setError("");
     setSuccess("");
-    // A burst tile stands in for every frame, so a move must carry them all
-    // (mirrors secure-add) or a burst is split across two albums. Each item
-    // routes from its own gallery_id — right for a real album AND a smart view.
+    // A burst tile stands in for every frame, so the add must carry them all
+    // (mirrors secure-add) or a burst is split across two albums.
     const expanded = expandSecureSelection(items, pushSelect.selectedIds);
-    const moves = planSecureMovesToTarget(items, expanded, targetGalleryId);
+    const adds = planSecureAddsToTarget(items, expanded);
     const targetName = galleries.find((g) => g.id === targetGalleryId)?.name ?? "the album";
-    if (moves.length === 0) {
-      // Everything selected already lives in the target — nothing to do.
-      setSuccess(`Those photos are already in "${targetName}".`);
-      pushSelect.clear();
-      setShowMoveTarget(false);
-      setMovingPush(false);
-      return;
-    }
-    let moved = 0;
+    let added = 0;
+    let already = 0;
     let failed = 0;
-    // Each move is isolated so one failure never aborts the rest — a partial
-    // failure must not lose items (mirrors the pull picker and secure-add).
-    for (const mv of moves) {
+    // Each add is isolated so one failure never aborts the rest (mirrors the
+    // pull picker and secure-add).
+    for (const ad of adds) {
       try {
-        await api.secureGalleries.moveItem(mv.sourceGalleryId, mv.itemId, targetGalleryId);
-        moved++;
+        await api.secureGalleries.addItem(targetGalleryId, ad.blobId);
+        added++;
       } catch (err) {
-        console.error("[SecureGallery] push move failed", err); // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
-        failed++;
+        // 409 = already in the target album. That is the server answering the
+        // membership question authoritatively rather than the client guessing
+        // it from a feed that cannot see the target — it is a no-op, not a
+        // failure, and must not be reported as one.
+        if (isConflict(err)) {
+          already++;
+        } else {
+          console.error("[SecureGallery] push add failed", err); // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
+          failed++;
+        }
       }
     }
-    if (moved > 0) setSuccess(`Moved ${moved} item${moved !== 1 ? "s" : ""} into "${targetName}".`);
-    if (failed > 0) setError(`${failed} item${failed !== 1 ? "s" : ""} couldn't be moved.`);
+    if (added > 0)
+      setSuccess(
+        `Added ${added} item${added !== 1 ? "s" : ""} to "${targetName}". ` +
+          `${added !== 1 ? "They stay" : "It stays"} in "${selectedGallery.name}" too.`,
+      );
+    else if (already > 0 && failed === 0)
+      setSuccess(`Those photos are already in "${targetName}".`);
+    if (failed > 0) setError(`${failed} item${failed !== 1 ? "s" : ""} couldn't be added.`);
     pushSelect.clear();
     setShowMoveTarget(false);
     setMovingPush(false);
@@ -661,10 +676,10 @@ export default function SecureGallery() {
                 onClick={() => setShowMoveTarget(true)}
                 disabled={pushSelect.selectedIds.size === 0 || movingPush}
                 className="btn btn-primary btn-md inline-flex items-center gap-1.5"
-                title="Move selected photos to another secure album"
+                title="Add selected photos to another secure album — they stay in this one too"
               >
                 <span>🔒</span>
-                {`Move to album (${pushSelect.selectedIds.size})`}
+                {`Add to album (${pushSelect.selectedIds.size})`}
               </button>
             </div>
           )}
@@ -809,16 +824,23 @@ export default function SecureGallery() {
               <div className="card p-5 w-full max-w-sm" onClick={(e) => e.stopPropagation()}>
                 <h3 className="text-base font-semibold text-fg mb-3 flex items-center gap-2">
                   <span>🔒</span>
-                  Move {pushSelect.selectedIds.size} item{pushSelect.selectedIds.size !== 1 ? "s" : ""} to
+                  Add {pushSelect.selectedIds.size} item{pushSelect.selectedIds.size !== 1 ? "s" : ""} to
                 </h3>
+                {/* Z1: this ADDS. Said plainly, because the same control used to
+                    move, and a user who learned the old behaviour will otherwise
+                    assume this empties the current album. */}
+                <p className="text-xs text-fg-muted mb-3">
+                  {pushSelect.selectedIds.size !== 1 ? "They stay" : "It stays"} in “
+                  {selectedGallery?.name ?? "this album"}” as well.
+                </p>
                 {moveTargets.length === 0 ? (
-                  <p className="text-sm text-fg-muted">No other secure albums to move into.</p>
+                  <p className="text-sm text-fg-muted">No other secure albums to add to.</p>
                 ) : (
                   <div className="space-y-1 max-h-72 overflow-y-auto">
                     {moveTargets.map((t) => (
                       <button
                         key={t.id}
-                        onClick={() => moveSelectedTo(t.id)}
+                        onClick={() => addSelectedTo(t.id)}
                         disabled={movingPush}
                         className="w-full text-left px-3 py-2 rounded-md hover:bg-surface-raised flex items-center gap-2 disabled:opacity-50"
                       >

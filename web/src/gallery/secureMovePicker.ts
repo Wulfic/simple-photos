@@ -1,10 +1,23 @@
 /**
- * Pure helpers for the cross-secure-album move picker (#31).
+ * Pure helpers for the cross-secure-album pickers (#31 pull, #43 push).
  *
- * A photo may live in at most ONE secure album (server-enforced), so pulling
- * media "from other secure albums" into the open album is a MOVE, not a copy.
- * These functions compute the source pool and resolve each pick to the move
- * request the server expects — kept free of `api`/React so they're unit-tested.
+ * **The one-secure-album rule is gone (Z1).** A photo may now live in several
+ * secure albums at once, sharing a single encrypted clone server-side. What
+ * survives is only "at most once per *album*".
+ *
+ * That splits what used to be one operation into two, and they are not
+ * interchangeable:
+ *
+ *  - **MOVE** (`moveItem`) — reassigns the membership row. The photo leaves the
+ *    source album. Still what the #31 pull picker wants: "bring these here".
+ *  - **ADD** (`addItem`) — creates an additional membership row against the same
+ *    clone. The photo is in both albums. This is what the "+" button in an album
+ *    header means everywhere else in the app, and it is what the #43 push flow
+ *    was silently getting wrong: it offered a "+"-shaped affordance and then
+ *    moved, so filing a photo into a second album quietly removed it from the
+ *    first.
+ *
+ * Kept free of `api`/React so they're unit-tested.
  */
 
 /** Minimal shape needed to pick + move a secure item. */
@@ -127,4 +140,55 @@ export function secureMoveTargets<T extends SecureAlbumOption>(
   currentGalleryId: string,
 ): T[] {
   return albums.filter((g) => g.id !== currentGalleryId);
+}
+
+// ── Add direction (Z1): file items into another album, keeping them here ─────
+
+/** An item that can be added to another secure album by its clone blob id. */
+export interface AddableSecureItem extends BurstMovableItem {
+  /** The clone blob the server keys an adoption on. */
+  blob_id?: string | null;
+}
+
+/** A single add: give `blobId` an additional membership in the target album. */
+export interface SecureAdd {
+  itemId: string;
+  blobId: string;
+}
+
+/**
+ * Resolve a selection to concrete ADDs into `targetGalleryId`.
+ *
+ * Two deliberate omissions:
+ *
+ * 1. **No "is it already in the target" filter.** The move planner has one,
+ *    because a move's source is knowable from the item's own `gallery_id`. An
+ *    add's answer lives in a *different* album's membership rows, which the
+ *    per-album feed this runs against simply does not carry. The server already
+ *    answers it authoritatively with a 409, so the caller treats that as
+ *    "already there" rather than as a failure. Deriving it here would be a
+ *    second derivation of membership — the exact drift this repo has recorded
+ *    nine times — and it would be the *wrong* one, since it would be guessing
+ *    from a feed that cannot see the target.
+ * 2. **`blob_id`, not `id`.** An add is keyed on the clone blob (the server
+ *    matches it to find the donor membership and adopt it); the item id is
+ *    carried only so a caller can report per-item outcomes.
+ */
+export function planSecureAddsToTarget(
+  pool: AddableSecureItem[],
+  selectedItemIds: Iterable<string>,
+): SecureAdd[] {
+  const byId = new Map(pool.map((it) => [it.id, it]));
+  const out: SecureAdd[] = [];
+  const seenBlobs = new Set<string>();
+  for (const id of selectedItemIds) {
+    const it = byId.get(id);
+    if (!it?.blob_id) continue;
+    // One add per clone: two selected burst frames sharing a clone would
+    // otherwise issue two requests, the second guaranteed to 409.
+    if (seenBlobs.has(it.blob_id)) continue;
+    seenBlobs.add(it.blob_id);
+    out.push({ itemId: it.id, blobId: it.blob_id });
+  }
+  return out;
 }
