@@ -106,6 +106,111 @@ pub fn parse_range_header(header: &str, total_size: u64) -> Option<(u64, u64)> {
     }
 }
 
+// ── Cache-Control policy (B6) ────────────────────────────────────────────────
+
+/// `Cache-Control` for anything that must never reach a client-side store.
+///
+/// The exact string [`crate::security::security_headers`] stamps on every
+/// non-media `/api/` response, repeated here so a media handler that opts *out*
+/// of caching produces a byte-identical header to the middleware's. Two spellings
+/// of "do not store this" would be indistinguishable in a test and different on
+/// the wire.
+pub const NO_STORE: &str = "no-store, no-cache, must-revalidate";
+
+/// `Cache-Control` for mutable media (a photo's file / thumb / web preview).
+/// One day: a re-crop or a metadata edit changes the bytes behind a stable id,
+/// and the ETag catches that on revalidation.
+pub const MEDIA_CACHE_1D: &str = "private, max-age=86400";
+
+/// `Cache-Control` for content-addressed blobs, which are immutable by
+/// construction (the id *is* the identity), so revalidation is pure waste.
+pub const BLOB_CACHE_IMMUTABLE: &str = "private, max-age=31536000, immutable";
+
+/// Whether a media response may be written to a client-side cache.
+///
+/// Returned by [`crate::gallery::access::require_secure_access`] so a handler
+/// that has *already paid* for the secure-gallery lookup can spend the answer
+/// twice: once to enforce the unlock token, once to choose this header. The
+/// alternative — re-deriving "is this secure" at header-building time — is a
+/// second derivation of one fact, and this repo's todo tracks eight of those
+/// drifting.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Confidentiality {
+    /// Ordinary library media. Cacheable at the route's own max-age.
+    Cacheable,
+    /// Secure-gallery media. **Never stored**, at any layer.
+    ///
+    /// A browser cache is a plaintext copy on disk that outlives the unlock
+    /// token and the session. Caching a decrypted secure photo defeats the
+    /// album as thoroughly as not encrypting it, which is why this is not
+    /// merely a shorter `max-age`.
+    Secure,
+}
+
+/// The `Cache-Control` value a media handler should send.
+///
+/// `when_cacheable` is the route's own policy ([`MEDIA_CACHE_1D`] or
+/// [`BLOB_CACHE_IMMUTABLE`]); secure media ignores it entirely.
+pub fn media_cache_control(conf: Confidentiality, when_cacheable: &'static str) -> HeaderValue {
+    match conf {
+        Confidentiality::Cacheable => HeaderValue::from_static(when_cacheable),
+        Confidentiality::Secure => HeaderValue::from_static(NO_STORE),
+    }
+}
+
+/// Routes whose handler owns its own `Cache-Control`, so the security
+/// middleware must not overwrite it.
+///
+/// # Why this list exists at all
+///
+/// `security.rs` blanket-`insert`ed `no-store` on every `/api/` path, which
+/// silently overwrote **17** handler-set `Cache-Control` headers and, with them,
+/// the ETag machinery behind those handlers — `no-store` forbids storing the
+/// response, so there is nothing left to revalidate. Measured on the wire, a
+/// thumbnail declaring `private, max-age=86400` arrived as `no-store`, and every
+/// tile in a scrolled grid was re-fetched *and re-decrypted* on every visit.
+///
+/// # Why an allowlist rather than "don't stomp what the handler set"
+///
+/// Because that rule fails **open**. A future handler that forgets to set the
+/// header would get no protection at all and nothing would say so. Here, a route
+/// is cacheable only if it is named here *and* its handler actually set a value;
+/// anything else — a new route, an error response, a handler that returns early —
+/// falls through to `no-store`. Two independent conditions, both of which must
+/// hold, and the failure direction of each is "do not cache".
+///
+/// # Method matters
+///
+/// `GET` only. `/api/blobs/{id}` is media on `GET` and a *deletion* on `DELETE`;
+/// `/api/blobs` is a JSON listing. Matching on path alone would hand a JSON
+/// response the media policy.
+///
+/// # Deliberately absent
+///
+/// `/api/trash/{id}/thumb` and `/api/admin/backup/servers/{id}/photos/{id}/thumb`
+/// both set a `private, max-age` header today, and both are left to be stomped
+/// into `no-store` exactly as they are now. Neither calls
+/// [`crate::gallery::access::require_secure_access`], so neither can tell a
+/// secured photo from an ordinary one — and a route that cannot classify its own
+/// content must not be granted a cache. Adding them means gating them first.
+pub fn is_cacheable_media_route(method: &axum::http::Method, path: &str) -> bool {
+    if method != axum::http::Method::GET {
+        return false;
+    }
+    let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
+    match segments.as_slice() {
+        // `/api/photos/{id}/{kind}` — every gated media projection of one photo.
+        ["api", "photos", _id, kind] => matches!(
+            *kind,
+            "file" | "source-file" | "thumb" | "thumbnail" | "web" | "motion-video"
+        ),
+        // `/api/blobs/{id}` and `/api/blobs/{id}/thumb`.
+        ["api", "blobs", _id] => true,
+        ["api", "blobs", _id, "thumb"] => true,
+        _ => false,
+    }
+}
+
 /// Which responses the global [`CompressionLayer`] is allowed to touch.
 ///
 /// [`CompressionLayer`]: tower_http::compression::CompressionLayer
@@ -144,6 +249,132 @@ pub fn media_compression_predicate() -> impl tower_http::compression::Predicate 
     DefaultPredicate::new()
         .and(NotForContentType::const_new("video/"))
         .and(NotForContentType::const_new("audio/"))
+}
+
+#[cfg(test)]
+mod cache_policy_tests {
+    use super::*;
+    use axum::http::Method;
+
+    /// Every media route the allowlist is meant to cover, spelled as a real
+    /// path. A regression here is silent — the route keeps working, it just
+    /// stops being cacheable — so it has to be asserted rather than eyeballed.
+    #[test]
+    fn every_gated_media_route_is_cacheable() {
+        let id = "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0";
+        for path in [
+            format!("/api/photos/{id}/file"),
+            format!("/api/photos/{id}/source-file"),
+            format!("/api/photos/{id}/thumb"),
+            format!("/api/photos/{id}/thumbnail"),
+            format!("/api/photos/{id}/web"),
+            format!("/api/photos/{id}/motion-video"),
+            format!("/api/blobs/{id}"),
+            format!("/api/blobs/{id}/thumb"),
+        ] {
+            assert!(
+                is_cacheable_media_route(&Method::GET, &path),
+                "{path} serves media and its handler owns its Cache-Control"
+            );
+        }
+    }
+
+    /// The JSON API is the thing `no-store` exists for. Any of these leaking
+    /// onto the allowlist would let a token-bearing response be written to disk.
+    #[test]
+    fn json_and_control_routes_are_never_cacheable() {
+        for path in [
+            "/api/photos",
+            "/api/blobs",
+            "/api/auth/login",
+            "/api/auth/refresh",
+            "/api/galleries/secure/g1/items",
+            "/api/sync/delta",
+            "/api/status/encryption",
+            "/health",
+            // Same prefix, different resource — `burst` sits where an id does,
+            // so the id-shaped wildcard must not swallow it.
+            "/api/photos/burst/b1",
+            "/api/photos/crop-sync",
+            "/api/photos/detect-bursts",
+        ] {
+            assert!(
+                !is_cacheable_media_route(&Method::GET, path),
+                "{path} is not media — it must fall through to no-store"
+            );
+        }
+    }
+
+    /// `/api/blobs/{id}` is media on GET and a **deletion** on DELETE. Matching
+    /// on path alone would hand a mutation the media cache policy.
+    #[test]
+    fn only_get_is_cacheable() {
+        let path = "/api/blobs/0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0";
+        assert!(is_cacheable_media_route(&Method::GET, path));
+        for m in [Method::DELETE, Method::POST, Method::PUT, Method::PATCH] {
+            assert!(
+                !is_cacheable_media_route(&m, path),
+                "{m} {path} is not a cacheable read"
+            );
+        }
+    }
+
+    /// Two routes that set a `private, max-age` header today but cannot tell a
+    /// secured photo from an ordinary one — neither calls
+    /// `require_secure_access`. They are deliberately excluded, and this test is
+    /// the record of that decision: adding them means gating them first.
+    #[test]
+    fn routes_that_cannot_classify_their_content_are_excluded() {
+        for path in [
+            "/api/trash/t1/thumb",
+            "/api/admin/backup/servers/s1/photos/p1/thumb",
+        ] {
+            assert!(
+                !is_cacheable_media_route(&Method::GET, path),
+                "{path} has no secure-album gate, so it must not be granted a cache"
+            );
+        }
+    }
+
+    /// The whole point of `Confidentiality`. A secure item ignores the route's
+    /// own policy entirely rather than getting a shorter `max-age`.
+    #[test]
+    fn secure_media_never_gets_a_cacheable_header() {
+        for policy in [MEDIA_CACHE_1D, BLOB_CACHE_IMMUTABLE] {
+            let v = media_cache_control(Confidentiality::Secure, policy);
+            assert_eq!(v, NO_STORE);
+            let s = v.to_str().unwrap();
+            assert!(
+                !s.contains("max-age") && !s.contains("immutable"),
+                "secure media must not carry any storage permission, got {s:?}"
+            );
+        }
+    }
+
+    /// The other half — without this, `media_cache_control` returning `NO_STORE`
+    /// unconditionally would pass every assertion above while re-introducing the
+    /// exact bug B6 exists to fix.
+    #[test]
+    fn ordinary_media_keeps_its_routes_own_policy() {
+        assert_eq!(
+            media_cache_control(Confidentiality::Cacheable, MEDIA_CACHE_1D),
+            MEDIA_CACHE_1D
+        );
+        assert_eq!(
+            media_cache_control(Confidentiality::Cacheable, BLOB_CACHE_IMMUTABLE),
+            BLOB_CACHE_IMMUTABLE
+        );
+    }
+
+    /// The middleware's default and a handler's secure value must be **byte
+    /// identical**. Two spellings of "do not store this" are indistinguishable
+    /// in a test that only checks for the substring `no-store`, and different on
+    /// the wire — a proxy that understands one and not the other is exactly the
+    /// kind of gap that never shows up locally.
+    #[test]
+    fn the_secure_value_is_the_same_string_the_middleware_stamps() {
+        assert_eq!(NO_STORE, "no-store, no-cache, must-revalidate");
+    }
 }
 
 #[cfg(test)]

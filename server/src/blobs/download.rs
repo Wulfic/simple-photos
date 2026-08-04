@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
+use crate::http_utils::{media_cache_control, BLOB_CACHE_IMMUTABLE};
 use crate::state::AppState;
 
 /// GET /api/blobs/{id} — stream an encrypted blob from disk.
@@ -52,8 +53,19 @@ pub async fn download(
 
     // Secure-album gate: blobs that belong to a secure gallery require a valid
     // unlock token, not just the account session.
-    crate::gallery::access::require_secure_access(&state, &auth.user_id, &blob_id, &gallery_token)
-        .await?;
+    //
+    // The verdict also picks `Cache-Control` below. `immutable` is the most
+    // dangerous value in the file to hand a secure blob: it tells the browser
+    // never to revalidate for a year, so a single unlocked fetch would leave a
+    // plaintext copy on disk that no subsequent lock, logout, or token
+    // expiry can reach.
+    let conf = crate::gallery::access::require_secure_access(
+        &state,
+        &auth.user_id,
+        &blob_id,
+        &gallery_token,
+    )
+    .await?;
 
     // Per-request, so kept at debug: a gallery scroll legitimately fetches many
     // blobs. Carries the requester's user_id so that if a client ever hammers
@@ -95,7 +107,7 @@ pub async fn download(
                 )
                 .header(
                     "Cache-Control",
-                    HeaderValue::from_static("private, max-age=31536000, immutable"),
+                    media_cache_control(conf, BLOB_CACHE_IMMUTABLE),
                 )
                 .body(Body::empty())
                 .map_err(|e| AppError::Internal(e.to_string()));
@@ -139,7 +151,7 @@ pub async fn download(
             .header("Content-Encoding", HeaderValue::from_static("identity"))
             .header(
                 "Cache-Control",
-                HeaderValue::from_static("private, max-age=31536000, immutable"),
+                media_cache_control(conf, BLOB_CACHE_IMMUTABLE),
             )
             .header(
                 "ETag",
@@ -179,10 +191,11 @@ pub async fn download(
         .header("Content-Encoding", HeaderValue::from_static("identity"))
         .header("Content-Length", HeaderValue::from(size_bytes))
         .header("Accept-Ranges", HeaderValue::from_static("bytes"))
-        // Blobs are immutable (content-addressed by UUID) — cache aggressively
+        // Blobs are immutable (content-addressed by UUID) — cache aggressively,
+        // unless this one belongs to a secure gallery.
         .header(
             "Cache-Control",
-            HeaderValue::from_static("private, max-age=31536000, immutable"),
+            media_cache_control(conf, BLOB_CACHE_IMMUTABLE),
         )
         .header(
             "ETag",
@@ -239,9 +252,15 @@ pub async fn download_thumb(
     .ok_or(AppError::NotFound)?;
 
     // Secure-album gate: the parent photo's encrypted blob id is what callers
-    // pass here; gate it the same way as the full blob.
-    crate::gallery::access::require_secure_access(&state, &auth.user_id, &blob_id, &gallery_token)
-        .await?;
+    // pass here; gate it the same way as the full blob. The verdict also picks
+    // `Cache-Control` below.
+    let conf = crate::gallery::access::require_secure_access(
+        &state,
+        &auth.user_id,
+        &blob_id,
+        &gallery_token,
+    )
+    .await?;
 
     // Path traversal guard
     if storage_path.contains("..") || std::path::Path::new(&storage_path).is_absolute() {
@@ -272,7 +291,7 @@ pub async fn download_thumb(
                 )
                 .header(
                     "Cache-Control",
-                    HeaderValue::from_static("private, max-age=31536000, immutable"),
+                    media_cache_control(conf, BLOB_CACHE_IMMUTABLE),
                 )
                 .body(Body::empty())
                 .map_err(|e| AppError::Internal(e.to_string()));
@@ -293,7 +312,7 @@ pub async fn download_thumb(
         .header("Content-Length", HeaderValue::from(size_bytes))
         .header(
             "Cache-Control",
-            HeaderValue::from_static("private, max-age=31536000, immutable"),
+            media_cache_control(conf, BLOB_CACHE_IMMUTABLE),
         )
         .header(
             "ETag",

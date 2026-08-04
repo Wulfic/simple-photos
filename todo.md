@@ -75,6 +75,27 @@ and the standing deploy/device verification debt.
 > **Residual, deliberately not closed here:** `cargo test`, `npm run build` and
 > the pytest E2E suite still have no pre-tag gate. "Never commit red" is
 > enforced on those by running them locally, exactly as before.
+>
+> **⚠ Correction, 2026-08-04 — the sentence above about the release pipeline was
+> wrong, and in the reassuring direction.** This block claimed "Build / unit
+> tests / web / E2E stay in the tag-triggered release pipeline." Read
+> [ci.yml](.github/workflows/ci.yml) end to end: of the four suites the ground
+> rules at the top of this file name, **the tag pipeline runs exactly one.**
+> - `rust` — `fmt`, `clippy`, `build`, `cargo test`. Genuinely gated. ✅
+> - `web` — `npm ci` and `npm run build`. **`npm test` is never invoked**, so the
+>   vitest suite has no gate anywhere.
+> - `python-tests` — named **"Python E2E (smoke)"**, and its two steps are
+>   `pip install -r tests/requirements.txt` and a `grep` asserting the pins use
+>   `==`. **It never runs pytest.** The job is green whenever the dependency
+>   file parses.
+>
+> So the E2E suite has never been gated by anything, on any branch, at any
+> point — which is the context for the run below. **A job named after a suite it
+> does not run is worse than no job**, for the same reason `lint.yml` was made
+> byte-identical to `ci.yml`: it reports green and buys nothing. Not fixed here
+> (turning the E2E suite on in CI is its own workstream — it needs ffmpeg, the
+> AI models, and a run budget), but the name is a lie today and this file should
+> stop repeating it.
 
 ---
 
@@ -695,7 +716,7 @@ spends the other two.
 
 ---
 
-### B6 — `no-store` on every `/api/` response makes all media caching dead code
+### B6 — `no-store` on every `/api/` response makes all media caching dead code — DONE 2026-08-04
 
 Found 2026-08-04 while writing B4's serving E2E, and **deliberately not fixed
 there**: it is a privacy decision, not a bug fix, and it does not belong inside a
@@ -734,21 +755,104 @@ handler's `private` value, and secure-gallery media stays `no-store`
 unconditionally — but "which routes are media" is a list, and this file already
 tracks what happens to those.
 
-- [ ] Decide the policy, then make the handler headers either authoritative or
-      deleted. **Leaving 17 headers that do nothing is the worst of the three
-      options**, because the next person to read `serve.rs` will believe media is
-      cached for a day.
-- [ ] Whatever is decided, pin it with an E2E that reads the header **off the
-      wire**. Every one of the 17 sites is "correct" when read in the handler;
-      the defect only exists after the middleware runs, which is why unit tests
-      have never seen it. `test_91`'s
-      `TestVideoIsNotCompressedOnTheWire` is the shape to copy.
-- [ ] `security.rs`'s own comment records this lesson already being learned once,
-      for static assets: "previously we stomped them with no-store, forcing
-      browsers to re-download the entire frontend on every page load." The same
-      mistake is live for media. **A comment that documents the fix for one case
-      while the other case is still broken is worth more than a comment that
-      asserts the old intent** — but only if someone reads it.
+**DONE 2026-08-04. Decided: split by route, and the split is an allowlist.**
+
+- [x] Policy: media routes keep the handler's value; everything else under
+      `/api/` keeps `no-store`; **secure-gallery media is `no-store`
+      unconditionally**. The handler headers are now authoritative rather than
+      deleted.
+- [x] **The obvious implementation of "split by route" does not work, and the
+      reason is the whole shape of this item.** Secure media is served by the
+      *same* routes as ordinary media — `/api/photos/{id}/file`,
+      `/api/blobs/{id}` — and is distinguished only by an unlock token. A path
+      list therefore cannot classify it. Nor can "did the request carry a
+      gallery token": [core.ts:44](web/src/api/core.ts#L44) attaches
+      `X-Gallery-Token` to **every** request once a vault is unlocked, so that
+      rule would silently disable media caching library-wide for exactly the
+      users who have secure albums — fail-safe, but it would have quietly
+      undone the fix and left the tests green.
+      The verdict has to be **per item**, so `require_secure_access` now returns
+      `Confidentiality` (`Cacheable` / `Secure`) instead of `()`, and the six
+      call sites spend the `is_secure_item` query they were already paying for
+      twice: once to enforce the token, once to pick the header.
+- [x] The middleware grants caching only when **both** hold: the route is on
+      `http_utils::is_cacheable_media_route` **and** the handler actually set a
+      value. Both fail towards `no-store`, so a new route, an error response, or
+      an early return all land back on the default. An allowlist rather than
+      "don't stomp what the handler set" precisely because the latter fails
+      **open** — a handler that forgets gets no protection and nothing says so.
+- [x] `/api/trash/{id}/thumb` and the backup-proxy thumb are **deliberately
+      excluded** and still stomped to `no-store`. Both set a `private, max-age`
+      header today, and neither calls `require_secure_access` — a route that
+      cannot classify its own content must not be granted a cache. Pinned by
+      `routes_that_cannot_classify_their_content_are_excluded` so the exclusion
+      reads as a decision rather than an oversight. Adding them means gating
+      them first.
+- [x] **Found while classifying the routes, and it is a confidentiality bug, not
+      a caching one: `/api/photos/{id}/source-file` had no secure-album gate at
+      all.** Every sibling projection — `file`, `web`, `thumb`, `motion-video` —
+      took a `GalleryToken` and called `require_secure_access`.
+      `serve_source_file` took neither, so an account session alone downloaded
+      the **original, unconverted** source (the HEIC, the `.mkv`) of a photo
+      sitting in a secure album. Securing hides the `photos` row via
+      `ELIGIBLE_PREDICATE` but never deletes it and never clears `source_path`,
+      so the row this handler reads survives securing untouched. The route had
+      **zero** E2E coverage before this. Gated, and the E2E verified RED against
+      the pre-fix tree: `expected 401, got 200`.
+      Worth stating because it compounds: on that same RED run the secured
+      original also came back `private, max-age=86400`, i.e. B6's own fix would
+      have told the browser to keep a plaintext copy of it on disk for a day.
+      **Fixing the caching without fixing the gate would have made the leak
+      durable.**
+- [x] Two more sites the item never counted. `serve_photo`'s v1-monolithic
+      **206** exit set no `Cache-Control` at all — invisible while everything was
+      stomped, but a cacheable 200 beside an uncacheable 206 means seeking a
+      small encrypted video re-decrypts it every time. And `check_etag`'s **304**
+      hardcoded `max-age=86400`, which for a secure item would have *extended*
+      the life of a cache entry the 200 refused to create — the one response
+      where the mistake has no body to notice it.
+- [x] Tests: 13 unit (539 green, was 526) + 15 E2E
+      ([tests/test_93_media_cache_headers.py](tests/test_93_media_cache_headers.py)).
+      The unit tests drive the **real middleware** through `tower::oneshot`,
+      because every one of the 17 handler sites was already "correct" when read
+      in its handler — the defect only ever existed after the middleware ran.
+      Verified RED four ways, each biting exactly the tests it should:
+      the middleware restored to its unconditional `insert` (2 unit + 5 E2E,
+      each printing `no-store…` where the handler set `private, max-age=86400`);
+      `media_cache_control` ignoring its `Confidentiality` argument (2 unit,
+      printing `left: "private, max-age=86400"` for a secure item); and the
+      `serve_source_file` gate removed (2 E2E). The JSON and secure-media tests
+      stayed green in the middleware RED run, which is the point — they are not
+      coupled to the thing being fixed.
+      `TestJsonIsStillNeverStored` is the vacuity guard with teeth: deleting the
+      middleware's insert outright satisfies every "media is cacheable"
+      assertion while writing refresh tokens to a browser's disk cache.
+- [x] `test_the_etag_handshake_is_alive_again` is the one that proves the
+      *payoff* rather than the header: fetch, keep the ETag, re-fetch with
+      `If-None-Match`, require a 304 whose own `Cache-Control` still permits
+      storage. `no-store` made the ETag machinery unreachable by construction;
+      this is the first test that shows a conditional hit actually completing.
+- [x] `security.rs`'s comment recorded this lesson already being learned once,
+      for static assets ("previously we stomped them with no-store, forcing
+      browsers to re-download the entire frontend on every page load"). The same
+      mistake was live for media one `if` below it. The comment now describes
+      the media case too, in the same block as the code that implements it.
+
+> **Fixture lesson, recorded because it cost two runs and will recur:** ingest
+> deduplicates on content hash, so two uploads of identical bytes collapse into
+> **one** `photos` row. The first draft of `test_93`'s fixture called
+> `generate_test_jpeg(64, 64)` and `generate_test_tiff()` twice each; the
+> "ordinary" and "secured" photos came back as the same id, so securing one
+> secured the other and the caching tests failed with 401. **Every fixture photo
+> in a test that treats photos differently must be byte-distinct**, and the
+> fixture now asserts that directly rather than hoping.
+> Second trap in the same file: `/source-file` serves `photos.source_path`, and
+> **the upload endpoint never writes that column** — an ordinary upload of a
+> convertible file takes `upload.rs`'s *inline* branch, which converts and
+> registers but records no source. Only `run_conversion_pass` sets it, and the
+> only way to reach that over HTTP is a deferred upload, which is gated on
+> `X-Defer-Conversion` **and admin**. A regular-user upload 404s there, and a
+> 404 would have made the secure-gate test pass while proving nothing.
 
 ---
 
@@ -906,6 +1010,27 @@ list exists.
   not an implementation of it. Fixed as a predicate the router applies once, so
   the next media route cannot forget. Watch for the same shape in
   `Cache-Control` — B6 above is that rule stated 17 times and enforced zero.
+  **Ninth instance, and it is the `Cache-Control` case that sentence predicted**
+  (B6, now fixed). Two things were being derived twice. The header value itself
+  was 17 hand-written copies of two strings, now `media_cache_control` plus two
+  consts. More importantly, **"is this item secure" was about to become a second
+  derivation**: the handler already knew, via `require_secure_access`, and the
+  tempting shape was to re-ask at header-building time. It returns the verdict
+  instead. This is the second instance after B4's `SECURE_ITEM_RENDITION_MATCH`
+  where drift would be a **confidentiality** bug rather than a counting one —
+  and unlike B4's, the two sides here would not have broken symmetrically: the
+  gate would have kept working while the header quietly authorised a browser to
+  store a decrypted secure photo for a year. **When one query answers both "may
+  I serve this" and "may they keep it", return the answer; do not ask twice.**
+- **A route that cannot classify its own content must not be granted a
+  capability.** B6's allowlist excludes `/api/trash/{id}/thumb` and the
+  backup-proxy thumb for exactly this reason — they set cache headers but never
+  call `require_secure_access`, so they cannot tell a secured photo from an
+  ordinary one. The general form: before extending a permission (caching,
+  compression bypass, range serving) to a route, check the route can *answer the
+  question the permission depends on*. `serve_source_file` is what happens when
+  it cannot and is granted anyway — it had no gate at all, and B6 nearly handed
+  it a one-day cache.
 - **Verify the *id space*, not just the call shape.** E3a's audit read five call
   sites, saw they all navigated identically, and filed the difference as
   "ordering". Four of them were in fact passing **server** photo ids to a lookup

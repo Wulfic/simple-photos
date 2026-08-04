@@ -13,6 +13,7 @@ use serde::Deserialize;
 use crate::auth::middleware::AuthUser;
 use crate::blobs::storage;
 use crate::error::AppError;
+use crate::http_utils::{media_cache_control, Confidentiality, MEDIA_CACHE_1D};
 use crate::state::AppState;
 
 /// Stream buffer size for file serving — 64 KB per chunk instead of the
@@ -23,7 +24,16 @@ pub(crate) const STREAM_BUF_SIZE: usize = 64 * 1024;
 
 /// Check `If-None-Match` header against our ETag.  Returns `Some(304)` if
 /// the client already has the current version.
-pub(crate) fn check_etag(headers: &HeaderMap, etag: &str) -> Option<Response> {
+///
+/// `conf` decides the `Cache-Control` on the 304 exactly as it does on the 200.
+/// A 304 that said `max-age=86400` for a secure item would *extend* the life of
+/// a cache entry the 200 refused to create — the one response where getting this
+/// wrong is invisible, because there is no body to notice.
+pub(crate) fn check_etag(
+    headers: &HeaderMap,
+    etag: &str,
+    conf: Confidentiality,
+) -> Option<Response> {
     if let Some(inm) = headers.get("if-none-match").and_then(|v| v.to_str().ok()) {
         if inm == etag || inm.trim_matches('"') == etag.trim_matches('"') {
             return Response::builder()
@@ -32,10 +42,7 @@ pub(crate) fn check_etag(headers: &HeaderMap, etag: &str) -> Option<Response> {
                     "ETag",
                     HeaderValue::from_str(etag).unwrap_or(HeaderValue::from_static("")),
                 )
-                .header(
-                    "Cache-Control",
-                    HeaderValue::from_static("private, max-age=86400"),
-                )
+                .header("Cache-Control", media_cache_control(conf, MEDIA_CACHE_1D))
                 .body(Body::empty())
                 .ok();
         }
@@ -83,19 +90,24 @@ fn chunked_decrypt_body(key: [u8; 32], path: std::path::PathBuf) -> Body {
 /// Internal helper: serve a file with optional HTTP Range + ETag support.
 /// `etag` is optional — if provided, the response includes the ETag header
 /// and If-None-Match is checked for 304 early-return.
+///
+/// `conf` is threaded to all three exit paths (304, 206, 200) rather than
+/// applied by the caller afterwards: a `Cache-Control` set on only two of the
+/// three is a leak that appears exactly when a client seeks or revalidates.
 pub(crate) async fn serve_file_with_range(
     path: &std::path::Path,
     total_size: u64,
     content_type: &str,
     headers: &HeaderMap,
     etag: Option<&str>,
+    conf: Confidentiality,
 ) -> Result<Response, AppError> {
     let ct = HeaderValue::from_str(content_type)
         .unwrap_or(HeaderValue::from_static("application/octet-stream"));
 
     // ETag conditional check
     if let Some(tag) = etag {
-        if let Some(not_modified) = check_etag(headers, tag) {
+        if let Some(not_modified) = check_etag(headers, tag, conf) {
             return Ok(not_modified);
         }
     }
@@ -123,10 +135,8 @@ pub(crate) async fn serve_file_with_range(
             let body = Body::from_stream(stream);
 
             let mut builder =
-                crate::http_utils::partial_content_builder(ct, start, end, total_size)?.header(
-                    "Cache-Control",
-                    HeaderValue::from_static("private, max-age=86400"),
-                );
+                crate::http_utils::partial_content_builder(ct, start, end, total_size)?
+                    .header("Cache-Control", media_cache_control(conf, MEDIA_CACHE_1D));
             if let Some(ref ev) = etag_hv {
                 builder = builder.header("ETag", ev.clone());
             }
@@ -153,10 +163,7 @@ pub(crate) async fn serve_file_with_range(
         .header("Content-Type", ct)
         .header("Content-Length", HeaderValue::from(total_size))
         .header("Accept-Ranges", HeaderValue::from_static("bytes"))
-        .header(
-            "Cache-Control",
-            HeaderValue::from_static("private, max-age=86400"),
-        );
+        .header("Cache-Control", media_cache_control(conf, MEDIA_CACHE_1D));
     if let Some(ref ev) = etag_hv {
         builder = builder.header("ETag", ev.clone());
     }
@@ -281,8 +288,17 @@ pub async fn serve_photo(
     // of its own, it inherits its parent's. (The blob route cannot do this — it
     // is handed a bare blob id — which is why `is_secure_item` grew an arm that
     // resolves a rendition blob back to its photo.)
-    crate::gallery::access::require_secure_access(&state, &auth.user_id, &photo_id, &gallery_token)
-        .await?;
+    //
+    // The verdict is kept, not discarded: it also decides `Cache-Control` below.
+    // A secured photo must not be written to a browser's on-disk cache, where it
+    // would outlive both the unlock token and the session.
+    let conf = crate::gallery::access::require_secure_access(
+        &state,
+        &auth.user_id,
+        &photo_id,
+        &gallery_token,
+    )
+    .await?;
 
     // ── Rendition selection (#49) ────────────────────────────────────────
     // Swap in the rung's locator and let every branch below run unchanged, so
@@ -378,7 +394,7 @@ pub async fn serve_photo(
             .map_err(|e| AppError::Internal(format!("Length probe failed: {e}")))?;
 
             let etag = format!("\"{etag_id}-enc-{total_size}\"");
-            if let Some(not_modified) = check_etag(&headers, &etag) {
+            if let Some(not_modified) = check_etag(&headers, &etag, conf) {
                 return Ok(not_modified);
             }
 
@@ -408,10 +424,7 @@ pub async fn serve_photo(
                         "ETag",
                         HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("")),
                     )
-                    .header(
-                        "Cache-Control",
-                        HeaderValue::from_static("private, max-age=86400"),
-                    )
+                    .header("Cache-Control", media_cache_control(conf, MEDIA_CACHE_1D))
                     .body(Body::from(bytes))
                     .map_err(|e| AppError::Internal(e.to_string()));
                 } else {
@@ -426,10 +439,7 @@ pub async fn serve_photo(
                 .header("Content-Type", content_type)
                 .header("Content-Length", HeaderValue::from(total_size))
                 .header("Accept-Ranges", HeaderValue::from_static("bytes"))
-                .header(
-                    "Cache-Control",
-                    HeaderValue::from_static("private, max-age=86400"),
-                )
+                .header("Cache-Control", media_cache_control(conf, MEDIA_CACHE_1D))
                 .header(
                     "ETag",
                     HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("")),
@@ -448,7 +458,7 @@ pub async fn serve_photo(
         .map_err(|e| AppError::Internal(format!("Decrypt failed: {e}")))?;
         let total_size = raw_bytes.len() as u64;
         let etag = format!("\"{etag_id}-enc-{total_size}\"");
-        if let Some(not_modified) = check_etag(&headers, &etag) {
+        if let Some(not_modified) = check_etag(&headers, &etag, conf) {
             return Ok(not_modified);
         }
         if let Some(range_header) = headers.get("range").and_then(|v| v.to_str().ok()) {
@@ -466,6 +476,12 @@ pub async fn serve_photo(
                     "ETag",
                     HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("")),
                 )
+                // This 206 was the **only** exit in this handler that set no
+                // `Cache-Control` at all. It was invisible while the middleware
+                // stamped `no-store` over all of them; the moment media caching
+                // is real, a cacheable 200 beside an uncacheable 206 means
+                // seeking a small encrypted video re-decrypts it every time.
+                .header("Cache-Control", media_cache_control(conf, MEDIA_CACHE_1D))
                 .body(Body::from(slice))
                 .map_err(|e| AppError::Internal(e.to_string()));
             }
@@ -475,10 +491,7 @@ pub async fn serve_photo(
             .header("Content-Type", content_type)
             .header("Content-Length", HeaderValue::from(total_size))
             .header("Accept-Ranges", HeaderValue::from_static("bytes"))
-            .header(
-                "Cache-Control",
-                HeaderValue::from_static("private, max-age=86400"),
-            )
+            .header("Cache-Control", media_cache_control(conf, MEDIA_CACHE_1D))
             .header(
                 "ETag",
                 HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("")),
@@ -523,7 +536,7 @@ pub async fn serve_photo(
 
     // ── ETag / conditional response ─────────────────────────────────────
     let etag = format!("\"{etag_id}-{total_size}\"");
-    if let Some(not_modified) = check_etag(&headers, &etag) {
+    if let Some(not_modified) = check_etag(&headers, &etag, conf) {
         return Ok(not_modified);
     }
 
@@ -553,10 +566,7 @@ pub async fn serve_photo(
                 "ETag",
                 HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("")),
             )
-            .header(
-                "Cache-Control",
-                HeaderValue::from_static("private, max-age=86400"),
-            )
+            .header("Cache-Control", media_cache_control(conf, MEDIA_CACHE_1D))
             .body(body)
             .map_err(|e| AppError::Internal(e.to_string()));
         } else {
@@ -578,10 +588,7 @@ pub async fn serve_photo(
             "ETag",
             HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("")),
         )
-        .header(
-            "Cache-Control",
-            HeaderValue::from_static("private, max-age=86400"),
-        )
+        .header("Cache-Control", media_cache_control(conf, MEDIA_CACHE_1D))
         .body(body)
         .map_err(|e| AppError::Internal(e.to_string()))
 }
@@ -612,8 +619,13 @@ pub async fn serve_thumbnail(
     .ok_or(AppError::NotFound)?;
 
     // Secure-album gate (see `serve_photo`).
-    crate::gallery::access::require_secure_access(&state, &auth.user_id, &photo_id, &gallery_token)
-        .await?;
+    let conf = crate::gallery::access::require_secure_access(
+        &state,
+        &auth.user_id,
+        &photo_id,
+        &gallery_token,
+    )
+    .await?;
 
     // ── Encrypted thumbnail fallback (blob-only duplicates) ──────────────────
     if thumb_path_opt.is_none() {
@@ -647,7 +659,7 @@ pub async fn serve_thumbnail(
             .decode(data_b64)
             .map_err(|e| AppError::Internal(format!("Base64 decode thumb: {e}")))?;
         let etag = format!("\"{}-enc-thumb-{}\"", photo_id, raw_bytes.len());
-        if let Some(not_modified) = check_etag(&headers, &etag) {
+        if let Some(not_modified) = check_etag(&headers, &etag, conf) {
             return Ok(not_modified);
         }
         let content_type = if enc_thumb_blob_id.ends_with(".gif") {
@@ -660,10 +672,7 @@ pub async fn serve_thumbnail(
             .status(StatusCode::OK)
             .header("Content-Type", HeaderValue::from_static(content_type))
             .header("Content-Length", HeaderValue::from(len))
-            .header(
-                "Cache-Control",
-                HeaderValue::from_static("private, max-age=86400"),
-            )
+            .header("Cache-Control", media_cache_control(conf, MEDIA_CACHE_1D))
             .header(
                 "ETag",
                 HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("")),
@@ -692,7 +701,7 @@ pub async fn serve_thumbnail(
 
     // ETag for thumbnails — ID + file size on disk
     let etag = format!("\"{}-thumb-{}\"", photo_id, meta.len());
-    if let Some(not_modified) = check_etag(&headers, &etag) {
+    if let Some(not_modified) = check_etag(&headers, &etag, conf) {
         return Ok(not_modified);
     }
 
@@ -718,10 +727,7 @@ pub async fn serve_thumbnail(
             "ETag",
             HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("")),
         )
-        .header(
-            "Cache-Control",
-            HeaderValue::from_static("private, max-age=86400"),
-        )
+        .header("Cache-Control", media_cache_control(conf, MEDIA_CACHE_1D))
         .body(body)
         .map_err(|e| AppError::Internal(e.to_string()))
 }
@@ -755,8 +761,13 @@ pub async fn serve_web(
     .ok_or(AppError::NotFound)?;
 
     // Secure-album gate (see `serve_photo`).
-    crate::gallery::access::require_secure_access(&state, &auth.user_id, &photo_id, &gallery_token)
-        .await?;
+    let conf = crate::gallery::access::require_secure_access(
+        &state,
+        &auth.user_id,
+        &photo_id,
+        &gallery_token,
+    )
+    .await?;
 
     let storage_root = (**state.storage_root.load()).clone();
     let full_path = storage_root.join(&file_path);
@@ -769,6 +780,7 @@ pub async fn serve_web(
         content_type,
         &headers,
         Some(&etag),
+        conf,
     )
     .await
 }
@@ -776,9 +788,26 @@ pub async fn serve_web(
 /// GET /api/photos/:id/source-file
 /// Serve the **original unconverted** source file for a converted photo.
 /// Returns 404 if the photo was not converted or the source file is missing.
+///
+/// # This route was missing the secure-album gate entirely
+///
+/// Every other media projection of a photo — `file`, `web`, `thumb`,
+/// `motion-video` — took a [`GalleryToken`] and called `require_secure_access`.
+/// This one took neither, so an account session alone was enough to download the
+/// **original, unconverted, plaintext** source of a photo sitting in a secure
+/// album. Securing a photo hides its `photos` row from the gallery
+/// (`ELIGIBLE_PREDICATE`) but never deletes it, and never clears `source_path`,
+/// so the row this handler reads survives securing untouched.
+///
+/// The exposure is worse than the endpoint's name suggests: the *source* file is
+/// the pre-conversion original (the HEIC, the `.mkv`), which is exactly the copy
+/// the rest of the pipeline works to encrypt or replace.
+///
+/// [`GalleryToken`]: crate::gallery::access::GalleryToken
 pub async fn serve_source_file(
     State(state): State<AppState>,
     auth: AuthUser,
+    gallery_token: crate::gallery::access::GalleryToken,
     headers: HeaderMap,
     Path(photo_id): Path<String>,
 ) -> Result<Response, AppError> {
@@ -793,6 +822,17 @@ pub async fn serve_source_file(
             .fetch_optional(&state.read_pool)
             .await?
             .ok_or(AppError::NotFound)?;
+
+    // Secure-album gate (see `serve_photo`). Placed after the ownership-scoped
+    // lookup so a genuine 404 still wins and this cannot be used as an
+    // existence oracle — the same ordering every other media handler uses.
+    let conf = crate::gallery::access::require_secure_access(
+        &state,
+        &auth.user_id,
+        &photo_id,
+        &gallery_token,
+    )
+    .await?;
 
     let source_path = source_path.ok_or_else(|| {
         tracing::debug!(
@@ -844,8 +884,15 @@ pub async fn serve_source_file(
         .unwrap_or("original");
     let disposition = format!("attachment; filename=\"{filename}\"");
 
-    let mut resp =
-        serve_file_with_range(&full_path, total_size, content_type, &headers, Some(&etag)).await?;
+    let mut resp = serve_file_with_range(
+        &full_path,
+        total_size,
+        content_type,
+        &headers,
+        Some(&etag),
+        conf,
+    )
+    .await?;
 
     resp.headers_mut().insert(
         "Content-Disposition",

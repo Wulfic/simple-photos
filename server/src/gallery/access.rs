@@ -19,6 +19,7 @@ use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
 
 use crate::error::AppError;
+use crate::http_utils::Confidentiality;
 use crate::state::AppState;
 
 /// Extracted secure-gallery unlock token, if the request carried one.
@@ -140,14 +141,29 @@ pub async fn is_secure_item(
 /// unexpired unlock token for `user_id` must be present, otherwise `401` is
 /// returned. Call this *after* the handler's own ownership-scoped lookup so a
 /// genuine 404 still takes precedence (no existence oracle).
+///
+/// # The return value is not incidental
+///
+/// Returns **which kind of content the caller is about to serve**, so a handler
+/// that has already paid for the [`is_secure_item`] query can also use the
+/// answer to pick its `Cache-Control` ([`Confidentiality`]). Secure media must
+/// never be written to a client-side cache: a browser cache entry is a plaintext
+/// copy on disk that outlives both the unlock token and the session, so caching
+/// a decrypted secure photo defeats the album as thoroughly as never encrypting
+/// it.
+///
+/// This is deliberately *returned* rather than re-derived at header-building
+/// time. Two derivations of "is this item secure" is the exact failure shape
+/// `todo.md` tracks eight instances of — and here the drift would be a
+/// confidentiality bug, not a counting one.
 pub async fn require_secure_access(
     state: &AppState,
     user_id: &str,
     item_id: &str,
     token: &GalleryToken,
-) -> Result<(), AppError> {
+) -> Result<Confidentiality, AppError> {
     if !is_secure_item(&state.read_pool, user_id, item_id).await? {
-        return Ok(());
+        return Ok(Confidentiality::Cacheable);
     }
 
     let provided = token.0.as_deref().ok_or_else(|| {
@@ -162,7 +178,7 @@ pub async fn require_secure_access(
         ));
     }
 
-    Ok(())
+    Ok(Confidentiality::Secure)
 }
 
 #[cfg(test)]

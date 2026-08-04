@@ -69,11 +69,31 @@ All endpoints are prefixed with `/api` unless noted. Auth = `Authorization: Bear
 | `GET` | `/api/photos/{id}/file` | Bearer | — | streaming file; supports Range, ETag, 304 |
 | `GET` | `/api/photos/{id}/thumb` | Bearer | — | `image/jpeg` stream; or **202** `{ status: "pending" }` |
 | `GET` | `/api/photos/{id}/web` | Bearer | — | streaming file (same as `/file` — only browser-native formats are stored) |
+| `GET` | `/api/photos/{id}/source-file` | Bearer | — | the **original unconverted** upload, `Content-Disposition: attachment`; **404** if the photo was never converted |
+| `GET` | `/api/photos/{id}/motion-video` | Bearer | — | `video/mp4` — the embedded clip of a motion photo; **400** if the photo is not one |
 | `PUT` | `/api/photos/{id}/favorite` | Bearer | — | `{ id, is_favorite }` |
 | `PUT` | `/api/photos/{id}/crop` | Bearer | `{ crop_metadata?: string (JSON) }` | `{ id, crop_metadata }` |
 | `DELETE` | `/api/photos/{id}` | Bearer | — | **204** (soft-deletes to trash) |
 
 **PhotoRecord fields:** `id, filename, file_path, mime_type, media_type, size_bytes, width, height, duration_secs, taken_at, latitude, longitude, thumb_path, created_at, is_favorite, crop_metadata, camera_model, photo_hash`
+
+> **Secure-album gate and caching, for every media route above.** All five
+> projections of a photo — `/file`, `/source-file`, `/thumb` (and its
+> `/thumbnail` alias), `/web`, `/motion-video` — plus `/api/blobs/{id}` and
+> `/api/blobs/{id}/thumb` serve secure-gallery content over the **same URLs** as
+> ordinary content. When the item is in a secure album they additionally require
+> the unlock token, as `x-gallery-token` or `?gallery_token=` (the query form
+> exists because `<img>`/`<video>` cannot set headers); without it they answer
+> **401**, and a genuine **404** still takes precedence so the gate is not an
+> existence oracle.
+>
+> The response's `Cache-Control` states which kind of content was served:
+> `private, max-age=86400` for a photo projection, `private, max-age=31536000,
+> immutable` for a content-addressed blob, and **`no-store, no-cache,
+> must-revalidate` whenever the item is in a secure album** — a browser cache
+> entry would outlive both the unlock token and the session. Every other `/api/`
+> response is `no-store`. Clients should treat the header as authoritative
+> rather than caching media by URL shape.
 
 **Upload album headers:** a client that can see the folder a file came from (the
 web Import page's folder picker) declares its Google Takeout album with
