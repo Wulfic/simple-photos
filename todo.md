@@ -865,7 +865,10 @@ tracks what happens to those.
 > the remove button can be changed to a trashcan icon, and a popup box letting the
 > user know what's happening with a yes and no option shows."*
 
-Server (`8bf2f06`, `14606b9`) and the regular-album web view (`56f995c`) are done.
+Server (`8bf2f06`, `14606b9`), the regular-album web view (`56f995c`), the web
+secure removal (`50464c2`) and Android (Z1e below) are all done. **Every code
+half of the original report is now closed; what is left is a device check and
+the server suspicion Z1f raises.**
 
 **⚠ `56f995c` shipped Z1 HALF-WIRED, and the green suite is what hid it.** That
 commit wrote `web/src/gallery/albumRemoval.ts` — `secureRemovalPrompt`, fully
@@ -926,18 +929,108 @@ done. **Check the call site, not the export.**
       branch) and one in a single album (the `0` branch); confirm the two bodies
       differ and that neither promises the wrong outcome.
 
-#### Z1e — Android — NOT DONE
+#### Z1e — Android — DONE 2026-08-04
 
-- [ ] **`SecureGalleryViewModel.pushItemsTo` still calls `moveItem`** — this is
-      the reported bug itself, unfixed on the phone. Web was switched to `addItem`
-      (+ 409-as-no-op); Android never was, so adding a secure photo to a second
-      album still empties it out of the first.
-- [ ] `GalleryDetailView.kt` states the false "will return to your regular
-      gallery" sentence **unconditionally**, and its header still offers the verb
-      **"Move"** — the verb Z1 was filed to kill.
-- [ ] Regular `AlbumDetailScreen.kt` has a **Close** icon, **no confirmation at
-      all**, and no add-to-another-album picker. This is the header divergence the
-      report names, from the other side.
+- [x] **`SecureGalleryViewModel.pushItemsTo` called `moveItem`** — the reported
+      bug itself, and the last place it was still live. Now `addItem` against the
+      clone blob, with a 409 counted as **"already in that album", not a
+      failure**: that is the server answering the membership question
+      authoritatively, and the alternative — a client-side "is it already there"
+      filter — would have to guess it from a per-album feed that cannot see the
+      target. `planMovesToTarget` is **deleted** rather than left beside its
+      replacement; it had exactly one caller and this was it.
+- [x] `isConflict` reads the **status**, not the message text. The message is
+      authored in Rust and would have been compared in Kotlin — one fact derived
+      in two languages with nothing keeping them in step. Mirrors web's `core.ts`.
+- [x] **The false sentence is dead in all three places it lived**, and one of
+      them was a surface Z1d never named: `GalleryDetailView`'s multi-select
+      dialog, **`SecurePhotoViewer`'s own separate confirmation** (a second copy
+      of the same conditional outcome, which is a second thing to get wrong), and
+      the "Move" verb in the header. The viewer's dialog is not restated
+      accurately — it is **deleted**, and the overflow item now raises the one
+      shared dialog. An `AlertDialog` is its own window, so it renders over the
+      pager and a cancel leaves the page exactly where it was.
+- [x] `AlbumRemoval.kt` mirrors `albumRemoval.ts`, with one deliberate divergence:
+      **the parameter is a list of per-item counts, not a scalar.** This screen
+      removes a whole multi-select at once, so the answer is genuinely per item;
+      a scalar rule plus a batch rule would be two derivations of one question.
+      One unknown in a batch blocks the whole batch, and **an empty list is
+      unknown too** — a caller that resolved nothing has not answered the
+      question, and the safe reading of "no information" is never "no other
+      album". `SecureRemovalVerdict` is a sealed hierarchy rather than web's
+      `kind` string: a call site that renders only the confirm arm **fails to
+      compile** instead of silently dropping the refusal.
+- [x] `SecureGalleryItem.galleries` added to the Android DTO — it never had it,
+      so no client could have computed this. Null and empty both mean UNKNOWN;
+      the realistic Android failure is not an old server but **Gson leaving a
+      renamed wire key at its default**, which is the same regression shape
+      `PhotoDto.renditions` already suffered once (B4). Fail-closed either way.
+- [x] The dialog counts the **same batch the removal acts on**.
+      `SecureMovePlan.expandForRemoval` was extracted from `removeItems` and is
+      now called by both — asking one derivation what will be removed and another
+      what to say about it is how a prompt ends up accurate about the wrong set.
+- [x] Regular `AlbumDetailScreen.kt`: **Close icon → trash icon**, a confirmation
+      that did not exist at all, and the "+ Add to album" the report asked for.
+      `AlbumPickerDialog` was `private` in `GalleryScreen.kt`; it is **moved to
+      `ui/components` and shared** rather than copied — eleventh instance of the
+      two-derivations risk, in its mildest form.
+- [x] Tests: 33 new, **285 green** (was 252). Verified RED three ways, each
+      biting exactly the tests it should:
+      - **Reverting only the component** fails the 4 wiring tests while **all 18
+        `AlbumRemoval` tests stay green** — the exact signature of how `56f995c`
+        shipped Z1 half-wired, reproduced deliberately.
+      - `pushItemsTo` restored to `moveItem` fails **1** test, printing
+        `pushItemsTo must call addItem — a '+' that moves is the reported bug`.
+      - `otherSecureAlbumCount` reading empty as 0 fails **1**
+        (`expected:<null> but was:<0>`) — the single misreading this field exists
+        to prevent.
+- [x] **A wiring guard now exists on Android too**, reading source with
+      `java.io.File` after web's `safeArea.test.ts` precedent. Compose UI needs a
+      device, which is *why* this class of bug outlives its web twin here. The
+      path lookup walks up from `user.dir` and **throws** if it cannot find the
+      file, because a wrong guess would make every assertion in it pass
+      vacuously — which is the exact failure the file is about.
+- [ ] **Device check** — folded into the verification session below. Needs a
+      photo in **two** secure albums (the `>0` branch), one in a single album
+      (the `0` branch), and a server that publishes no `galleries` (the blocked
+      branch, reachable by pointing at an older build). Confirm the three bodies
+      differ, that the push genuinely leaves the photo in *both* albums, and that
+      the regular album's trash icon asks before un-filing.
+
+#### Z1f — the secure feed publishes an id the add path may not correlate — OPEN, UNVERIFIED
+
+Found while wiring Z1e, in the server, and **stated as a suspicion because it has
+not been proven yet** — the next session's first job is a unit test against
+`existing_memberships`, not a fix.
+
+`list_gallery_items` publishes `blob_id` as
+`COALESCE(gi.encrypted_blob_id, p.encrypted_blob_id, gi.blob_id)` — the *clone's
+encrypted* blob for a server-side photo whose clone has since been encrypted, not
+the raw `gi.blob_id`. Both clients' push-add sends that value back to
+`add_gallery_item`. There, `candidate_original_id` resolves it to the clone's own
+`photos` row (`= gi.blob_id`), and `SECURE_MEMBERSHIP_MATCH` is
+`(gi.original_blob_id = ?1 OR gi.blob_id = ?2)` — canonical is never matched
+against `gi.blob_id`. If that reading is right, the add finds **no** membership
+and therefore neither adopts the clone (a second full clone: double storage, a
+second decrypt+encrypt of a possibly multi-gigabyte video, and two physically
+different files so an edit in one album cannot reach the other) **nor 409s on a
+same-album duplicate**, which would break the one half of the invariant Z1 kept.
+
+Why it is plausible that this is live and unnoticed:
+- `test_94` adds with the **original** client-uploaded blob id, where
+  `gi.encrypted_blob_id == gi.blob_id`, so the published id *is* the clone id and
+  adoption works. The tested path and the UI path are different id spaces —
+  todo.md's own "verify the *id space*, not just the call shape" risk, again.
+- CT132 is ~13k **autoscanned** photos, i.e. entirely the untested shape.
+
+The suspected fix is one clause (`gi.blob_id = ?1` as well), since a clone id is a
+fresh UUID and cannot collide with an unrelated photo id — but **do not apply it
+before a RED test reproduces the miss.**
+
+Also found, and smaller: **web's `planSecureMovesToTarget` is dead** — exported
+and tested, called by nothing since `56f995c` switched the push to adds. Same
+shape as Z1's half-wiring one level down. Android's twin was deleted in Z1e; web's
+was left alone to keep that commit Android-only.
 
 ---
 
@@ -1019,6 +1112,13 @@ list exists.
          one-shot).
       4. A secured member of a face cluster is absent from the pager, and tapping
          its tile says "Photo not found" rather than opening it.
+- [ ] **Z1e** — the whole point of the item, and no JVM test reaches it. A photo
+      in **two** secure albums, one in a single album, and (by pointing at an
+      older build) one whose feed publishes no `galleries`: the three dialog
+      bodies must differ and none may promise the wrong outcome. Then the push
+      itself — file a secure photo into a second album and confirm it is still in
+      the first, which is the reported bug and the only check that settles it.
+      Also the regular album header: trash icon, confirmation, "+ Add to album".
 - [ ] **B5** — the fail-closed gate, which is the one part of B5 a unit test
       cannot reach. Three states, and the middle one is the whole point:
       1. **Server up** — the grid renders as before, no new latency.
@@ -1107,6 +1207,21 @@ list exists.
   gate would have kept working while the header quietly authorised a browser to
   store a decrypted secure photo for a year. **When one query answers both "may
   I serve this" and "may they keep it", return the answer; do not ask twice.**
+  **Tenth and eleventh instances, both in Z1e and both mild — which is the
+  point.** `SecureMovePlan.expandForRemoval` (the removal's burst expansion, now
+  asked by the dialog *and* the removal instead of inlined in one and re-derived
+  in the other) and `AlbumPickerDialog` (`private` in `GalleryScreen.kt`, needed
+  verbatim by the album detail screen). Neither would have caused a
+  confidentiality bug; both would have drifted. The cheap time to share is the
+  commit that needs the second copy — every entry above is what happens when it
+  is not.
+- **A tested helper with no call site is worse than no helper.** Z1 shipped
+  `secureRemovalPrompt` fully unit-tested and wired into nothing, while the
+  component kept the sentence the helper existed to kill; the green suite is what
+  stopped anyone looking. Both clients now carry a source-reading wiring guard
+  (web `node:fs`, Android `java.io.File`) for the prompts specifically, because
+  neither repo can render a dialog in a unit test. The general form: **when a
+  helper's whole value is that a component calls it, assert the call site.**
 - **A route that cannot classify its own content must not be granted a
   capability.** B6's allowlist excludes `/api/trash/{id}/thumb` and the
   backup-proxy thumb for exactly this reason — they set cache headers but never

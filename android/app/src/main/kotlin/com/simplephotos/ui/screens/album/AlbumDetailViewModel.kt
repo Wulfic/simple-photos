@@ -81,6 +81,29 @@ class AlbumDetailViewModel @Inject constructor(
     var showDeleteConfirm by mutableStateOf(false)
     var showRenameDialog by mutableStateOf(false)
 
+    // ── Selection actions (Z1) ────────────────────────────────────────────
+    /** Confirm before un-filing the selection. The action sits behind a trash
+     *  icon now, and a trash icon that removes without asking reads as a delete. */
+    var showRemoveConfirm by mutableStateOf(false)
+    /** "+ Add to album": file the selection into ANOTHER album, keeping it here.
+     *  The album grid had a Remove and no add at all — the only add affordance
+     *  was this album's own "Add Photos" panel, which pulls FROM the gallery
+     *  INTO here, never the other way. */
+    var showAddToAlbum by mutableStateOf(false)
+
+    /**
+     * Albums this selection can be filed into — every album except the one
+     * already open, which is where the photos already are.
+     *
+     * Smart albums have no manifest to add to, so a smart view offers nothing;
+     * `isSmartAlbum` also hides the control, and this is the half that would
+     * still be right if that ever changed.
+     */
+    val addToAlbumTargets: List<AlbumEntity>
+        get() = if (isSmartAlbum) emptyList() else allAlbums.filter { it.localId != albumId }
+
+    private var allAlbums by mutableStateOf<List<AlbumEntity>>(emptyList())
+
     var serverBaseUrl by mutableStateOf("")
         private set
 
@@ -97,6 +120,11 @@ class AlbumDetailViewModel @Inject constructor(
             } catch (_: Exception) {}
         }
         viewModelScope.launch { loadAlbum() }
+        // The "add to another album" target list. Collected rather than fetched
+        // once so an album created from the picker itself shows up next time.
+        viewModelScope.launch {
+            albumRepository.getAllAlbums().collect { allAlbums = it }
+        }
     }
 
     /** Re-derive the displayed list from the intrinsic-order base + current sort.
@@ -242,6 +270,55 @@ class AlbumDetailViewModel @Inject constructor(
 
     fun clearSelection() = selection.clear()
 
+    /**
+     * File the current selection into [targetAlbumId] as well (Z1) — it stays in
+     * this album.
+     *
+     * Bursts are expanded through the same repository call the gallery's
+     * add-to-album uses, so a burst cover carries its stack rather than splitting
+     * it across two albums. The manifest sync is not optional: without it the
+     * photos join the target on this device only, and the target's own next
+     * manifest sync overwrites the addition away — the failure
+     * `GalleryViewModel.addSelectedToAlbum` records having already happened.
+     */
+    fun addSelectedToAlbum(targetAlbumId: String) {
+        val ids = selectedIds.toSet()
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            try {
+                val expanded = photoRepository.expandBurstSelection(ids)
+                albumRepository.addPhotosToAlbum(expanded.toList(), targetAlbumId)
+                albumRepository.getAlbum(targetAlbumId)?.let { albumRepository.syncAlbum(it) }
+                clearSelection()
+                showAddToAlbum = false
+            } catch (e: Exception) {
+                android.util.Log.e("AlbumDetailViewModel", "add to album failed", e)
+                error = "Add to album failed: ${e.message}"
+            }
+        }
+    }
+
+    /** Create an album and file the current selection into it (Z1). A brand-new
+     *  album exists only locally until its manifest is uploaded — see
+     *  [addSelectedToAlbum]. */
+    fun createAlbumAndAddSelected(name: String) {
+        val ids = selectedIds.toSet()
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            try {
+                val created = albumRepository.createAlbum(name)
+                val expanded = photoRepository.expandBurstSelection(ids)
+                albumRepository.addPhotosToAlbum(expanded.toList(), created.localId)
+                albumRepository.getAlbum(created.localId)?.let { albumRepository.syncAlbum(it) }
+                clearSelection()
+                showAddToAlbum = false
+            } catch (e: Exception) {
+                android.util.Log.e("AlbumDetailViewModel", "create album + add failed", e)
+                error = "Create album failed: ${e.message}"
+            }
+        }
+    }
+
     fun removeSelectedFromAlbum() {
         viewModelScope.launch {
             try {
@@ -252,6 +329,7 @@ class AlbumDetailViewModel @Inject constructor(
                 clearSelection()
                 loadAlbum()
             } catch (e: Exception) {
+                android.util.Log.e("AlbumDetailViewModel", "remove from album failed", e)
                 error = e.message
             }
         }

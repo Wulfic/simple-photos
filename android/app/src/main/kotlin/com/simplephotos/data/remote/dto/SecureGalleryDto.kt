@@ -37,6 +37,21 @@ data class SecureGalleryUnlockResponse(
     @SerializedName("expires_in") val expiresIn: Int
 )
 
+/**
+ * One secure album a secure item is filed in (Z1).
+ *
+ * A photo may live in several secure albums at once, sharing a single encrypted
+ * clone, so "which album" became a real question — and so did "what does
+ * removing it from THIS one actually do". Both secure feeds publish the full
+ * membership list under the same field name, in the same oldest-first order,
+ * with the same meaning; see `AlbumRemoval.otherSecureAlbumCount` for the one
+ * misreading that turns it back into the bug it exists to fix.
+ */
+data class SecureGalleryRef(
+    val id: String,
+    val name: String
+)
+
 data class SecureGalleryItem(
     val id: String,
     @SerializedName("blob_id") val blobId: String,
@@ -45,6 +60,18 @@ data class SecureGalleryItem(
     // Needed to route a "remove" from a smart view to the real album; null only
     // on responses from older servers.
     @SerializedName("gallery_id") val galleryId: String? = null,
+    // EVERY secure album this photo is in (Z1), oldest membership first —
+    // including the owning one, which is what makes "how many OTHERS" answerable
+    // and its absence detectable.
+    //
+    // Null (older server, or a renamed wire key Gson silently left at its
+    // default) and empty both mean UNKNOWN, never "no other album": the server's
+    // own comment says a miss is unreachable by construction, so an empty array
+    // can only mean the feed did not publish memberships at all. The removal
+    // prompt refuses rather than guesses — reading it as 0 is precisely how a
+    // client comes to promise a photo returns to the regular gallery when it
+    // would stay secured.
+    val galleries: List<SecureGalleryRef>? = null,
     // Only set by the aggregate /galleries/secure/items feed (smart-album header).
     @SerializedName("gallery_name") val galleryName: String? = null,
     @SerializedName("encrypted_thumb_blob_id") val encryptedThumbBlobId: String? = null,

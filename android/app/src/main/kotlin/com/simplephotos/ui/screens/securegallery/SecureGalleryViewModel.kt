@@ -16,6 +16,7 @@ import com.simplephotos.data.SecureBlobIds
 import com.simplephotos.data.SecureSmartAlbum
 import com.simplephotos.data.SecureSmartAlbums
 import com.simplephotos.data.local.entities.PhotoEntity
+import com.simplephotos.data.remote.isConflict
 import com.simplephotos.data.remote.dto.SecureGallery
 import com.simplephotos.data.remote.dto.SecureGalleryItem
 import com.simplephotos.data.repository.AlbumRepository
@@ -453,53 +454,94 @@ class SecureGalleryViewModel @Inject constructor(
         }
     }
 
-    // ── Push direction (#43): move items OUT of the open album ───────────────
-    // Real albums the current selection can be pushed INTO. Excludes the open
-    // album; in a smart view (`selectedGallery` null) every album is a target,
-    // and each item still routes from its own owning gallery.
-    val moveTargets: List<SecureGallery>
-        get() = SecureMovePlan.moveTargets(galleries, selectedGallery?.id)
+    // ── Push direction (#43, an ADD since Z1) ────────────────────────────────
+    // Real albums the current selection can be filed INTO. Excludes the open
+    // album; in a smart view (`selectedGallery` null) every album is a target.
+    val addTargets: List<SecureGallery>
+        get() = SecureMovePlan.addTargets(galleries, selectedGallery?.id)
 
     /**
-     * Move the given selected items (by id) into [targetGalleryId] (#43). Expands
-     * bursts so a stack moves as one, routes each item from its own owning album,
-     * skips items already in the target, and isolates each move so one failure
-     * never aborts the rest (mirrors the pull picker and secure-add).
+     * File the given selected items (by id) into [targetGalleryId] **without
+     * removing them from the album they are in** (Z1).
+     *
+     * This called `moveItem` until Z1e, which is the originally reported bug:
+     * the affordance was always a "+", so adding a secure photo to a second
+     * album silently emptied it out of the first. Web was switched in `56f995c`;
+     * the phone was not, so the bug stayed live there for the whole of Z1.
+     *
+     * Expands bursts so a stack travels as one, dedups by clone, and isolates
+     * each add so one failure never aborts the rest (mirrors the pull picker and
+     * secure-add). A 409 is the server answering "already in that album" —
+     * counted as a no-op, never as a failure.
      */
     fun pushItemsTo(itemIds: List<String>, targetGalleryId: String) {
         if (itemIds.isEmpty()) return
         val expanded = SecureMovePlan.expandBurstSelection(items, itemIds.toSet())
-        val moves = SecureMovePlan.planMovesToTarget(items, expanded, targetGalleryId)
-        if (moves.isEmpty()) {
-            Log.i(TAG, "pushItemsTo: nothing to move (all already in $targetGalleryId)")
+        val adds = SecureMovePlan.planAddsToTarget(items, expanded)
+        if (adds.isEmpty()) {
+            Log.i(TAG, "pushItemsTo: nothing to add (selection resolved to no items)")
             return
         }
         viewModelScope.launch {
             val outcomes = withContext(Dispatchers.IO) {
                 coroutineScope {
-                    moves.map { mv ->
+                    adds.map { ad ->
                         async {
                             try {
-                                secureGalleryRepository.moveItem(mv.sourceGalleryId, mv.itemId, targetGalleryId)
-                                true
+                                secureGalleryRepository.addItem(targetGalleryId, ad.blobId)
+                                AddOutcome.ADDED
                             } catch (e: Exception) {
-                                Log.e(TAG, "  push move failed for item ${mv.itemId}", e)
-                                false
+                                // 409 = already in the target album. That is the
+                                // server answering the membership question
+                                // authoritatively rather than the client guessing
+                                // it from a feed that cannot see the target — a
+                                // no-op, and reporting it as a failure would tell
+                                // the user something went wrong when nothing did.
+                                if (isConflict(e)) {
+                                    Log.i(TAG, "  item ${ad.itemId} already in $targetGalleryId (409)")
+                                    AddOutcome.ALREADY
+                                } else {
+                                    Log.e(TAG, "  push add failed for item ${ad.itemId}", e)
+                                    AddOutcome.FAILED
+                                }
                             }
                         }
                     }.awaitAll()
                 }
             }
-            val moved = outcomes.count { it }
-            val failed = outcomes.size - moved
-            Log.i(TAG, "Pushed $moved/${moves.size} items into $targetGalleryId ($failed failed)")
+            val added = outcomes.count { it == AddOutcome.ADDED }
+            val already = outcomes.count { it == AddOutcome.ALREADY }
+            val failed = outcomes.count { it == AddOutcome.FAILED }
+            Log.i(
+                TAG,
+                "Added $added/${adds.size} items to $targetGalleryId " +
+                    "($already already there, $failed failed)"
+            )
             if (failed > 0) {
-                error = "$failed item${if (failed != 1) "s" else ""} couldn't be moved"
+                error = "$failed item${if (failed != 1) "s" else ""} couldn't be added"
             }
             loadAllItems()
             loadGalleries()
             selectedGallery?.let { loadItems(it.id) }
         }
+    }
+
+    /** Per-item result of a push add — "already there" is not a failure. */
+    private enum class AddOutcome { ADDED, ALREADY, FAILED }
+
+    /**
+     * Re-fetch both secure feeds and the album list.
+     *
+     * The recovery path for a removal blocked on unknown membership (Z1e): a
+     * re-fetch is the only thing that can turn "this server did not report which
+     * albums hold it" into a real answer. A fail-closed guard with no way out is
+     * one the next person deletes, which is why the refusal offers this rather
+     * than only a Cancel.
+     */
+    fun refreshFeeds() {
+        loadAllItems()
+        loadGalleries()
+        selectedGallery?.let { loadItems(it.id) }
     }
 
     /**
@@ -537,11 +579,17 @@ class SecureGalleryViewModel @Inject constructor(
     fun removeItem(item: SecureGalleryItem) = removeItems(listOf(item))
 
     /**
-     * Remove items from the selected secure gallery, returning their originals
-     * to the regular gallery (mirrors the web's per-item removal).
+     * Remove items from the selected secure gallery (mirrors the web's per-item
+     * removal).
+     *
+     * Whether the originals return to the regular gallery depends on whether
+     * this was their LAST secure membership — see
+     * [SecureGalleryRepository.removeItem]. The UI must have said which outcome
+     * it is before calling this; that verdict comes from `AlbumRemoval`.
      *
      * Burst-aware: any target that belongs to a burst pulls in ALL sibling
-     * frames sharing its `burst_id`. The grid and viewer collapse a burst to a
+     * frames sharing its `burst_id`, via the same [SecureMovePlan.expandForRemoval]
+     * the confirmation dialog counts. The grid and viewer collapse a burst to a
      * single tile/page, so a naive single-item delete would strand the other
      * frames in the album while only the cover returned to the gallery — the
      * exact bug this fixes.
@@ -553,17 +601,9 @@ class SecureGalleryViewModel @Inject constructor(
         // target gallery. Fall back to the selected real gallery when an item
         // predates gallery_id (older server).
         val fallbackGalleryId = selectedGallery?.id
-        // Burst-aware, but gallery-SCOPED: siblings must share BOTH the burst_id
-        // and the owning gallery. Frames of one burst live in one album, so this
-        // just guards against a hypothetical cross-album burst_id collision.
-        val burstKeys = targets
-            .filter { !it.burstId.isNullOrEmpty() }
-            .map { it.galleryId to it.burstId }
-            .toSet()
-        val siblings = items.filter {
-            !it.burstId.isNullOrEmpty() && (it.galleryId to it.burstId) in burstKeys
-        }
-        val toRemove = (targets + siblings).distinctBy { it.id }
+        // Burst expansion lives in SecureMovePlan so the confirmation dialog can
+        // describe the SAME set this removes — see `expandForRemoval`.
+        val toRemove = SecureMovePlan.expandForRemoval(items, targets)
         viewModelScope.launch {
             try {
                 withContext(Dispatchers.IO) {

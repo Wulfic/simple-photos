@@ -68,6 +68,7 @@ import com.simplephotos.data.repository.PhotoRepository
 import com.simplephotos.sync.DiagnosticLogger
 import com.simplephotos.sync.SyncScheduler
 import com.simplephotos.ui.components.ActiveTab
+import com.simplephotos.ui.components.AlbumPickerDialog
 import com.simplephotos.ui.components.AppHeader
 import com.simplephotos.ui.components.ConversionBanner
 import com.simplephotos.ui.components.EncryptionBanner
@@ -499,96 +500,6 @@ private fun DayHeader(
             }
         }
     }
-}
-
-// ── Album Picker Dialog ─────────────────────────────────────────────────────
-
-@Composable
-private fun AlbumPickerDialog(
-    albums: List<AlbumEntity>,
-    onDismiss: () -> Unit,
-    onAlbumSelected: (String) -> Unit,
-    onCreateAlbum: (String) -> Unit
-) {
-    var showCreateField by remember { mutableStateOf(false) }
-    var newAlbumName by remember { mutableStateOf("") }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Add to Album") },
-        text = {
-            Column(modifier = Modifier.widthIn(min = 260.dp)) {
-                if (albums.isEmpty() && !showCreateField) {
-                    Text(
-                        "No albums yet. Create one to get started.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(vertical = 8.dp)
-                    )
-                }
-
-                if (albums.isNotEmpty()) {
-                    LazyColumn(modifier = Modifier.heightIn(max = 240.dp)) {
-                        lazyItems(albums, key = { it.localId }) { album ->
-                            Surface(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { onAlbumSelected(album.localId) },
-                                shape = RoundedCornerShape(8.dp)
-                            ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 12.dp, vertical = 12.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        painter = painterResource(R.drawable.ic_folder),
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                    Spacer(Modifier.width(12.dp))
-                                    Text(album.name, style = MaterialTheme.typography.bodyLarge)
-                                }
-                            }
-                        }
-                    }
-                    Spacer(Modifier.height(8.dp))
-                }
-
-                if (showCreateField) {
-                    OutlinedTextField(
-                        value = newAlbumName,
-                        onValueChange = { newAlbumName = it },
-                        label = { Text("Album name") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                } else {
-                    TextButton(
-                        onClick = { showCreateField = true },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("Create New Album")
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            if (showCreateField) {
-                Button(
-                    onClick = { if (newAlbumName.isNotBlank()) onCreateAlbum(newAlbumName.trim()) },
-                    enabled = newAlbumName.isNotBlank()
-                ) { Text("Create & Add") }
-            }
-        },
-        dismissButton = {
-            OutlinedButton(onClick = onDismiss) { Text("Cancel") }
-        }
-    )
 }
 
 /**

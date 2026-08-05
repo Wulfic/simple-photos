@@ -31,6 +31,8 @@ import androidx.compose.ui.unit.sp
 import com.simplephotos.data.collapseBursts
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.remote.dto.SecureGalleryItem
+import com.simplephotos.ui.screens.album.AlbumRemoval
+import com.simplephotos.ui.screens.album.SecureRemovalVerdict
 import com.simplephotos.ui.theme.Violet
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -74,8 +76,14 @@ internal fun GalleryDetailView(
     // ── Grid multi-select (for deleting) state ──────────────────────────────
     var selectionMode by remember { mutableStateOf(false) }
     var selectedItemIds by remember { mutableStateOf(emptySet<String>()) }
-    var confirmDelete by remember { mutableStateOf(false) }
-    // Push (#43): pick a target secure album for the current selection.
+    // Items the user has ASKED to remove, awaiting the confirmation below (Z1e).
+    // Held as state rather than removed inline because the question is now
+    // conditional: what removal does depends on how many OTHER secure albums
+    // hold each photo, and one of the three answers is "we don't know, so don't
+    // ask". Also fed by the viewer, so a removal requested from the pager can be
+    // declined without losing the page.
+    var pendingRemoval by remember { mutableStateOf<List<SecureGalleryItem>?>(null) }
+    // Push (#43, an ADD since Z1): pick another secure album for the selection.
     var showMoveTarget by remember { mutableStateOf(false) }
     // Exiting selection mode whenever the album's items change keeps the bar
     // honest (e.g. after a delete the selection is gone).
@@ -111,6 +119,65 @@ internal fun GalleryDetailView(
             .groupingBy { it }.eachCount()
     }
 
+    // ── Removal confirmation (Z1e) ──────────────────────────────────────────
+    //
+    // Emitted BEFORE the viewer's early return on purpose: an AlertDialog is its
+    // own window, so this renders over the pager too, and a removal requested
+    // from the viewer can be cancelled without closing it.
+    //
+    // Until Z1e this dialog said "The selected photos will return to your
+    // regular gallery" unconditionally, and the viewer's remove had no
+    // confirmation at all. Since Z1 a photo may live in several secure albums,
+    // so that sentence is false whenever another album still holds it — the user
+    // is told they un-secured something they did not. The verdict now comes from
+    // `AlbumRemoval`, shared with web, and has a third arm: refuse when the
+    // server did not publish membership, because guessing is the Z1 bug
+    // restated.
+    pendingRemoval?.let { targets ->
+        // The SAME expansion `removeItems` will apply, so the prompt counts the
+        // batch that is actually removed rather than the tiles that were tapped.
+        val expanded = SecureMovePlan.expandForRemoval(items, targets)
+        val memberships = expanded.map { item ->
+            // No owning album id means we cannot even name the membership set to
+            // count, which is unknown — not zero.
+            val owning = item.galleryId ?: viewModel.selectedGallery?.id
+            if (owning == null) null
+            else AlbumRemoval.otherSecureAlbumCount(item.galleries, owning)
+        }
+        // The album NAME must come from the OWNING album, not the open view: in
+        // a smart view `title` is "Videos", and naming that as the thing being
+        // removed from is wrong in the one dialog whose whole job is accuracy. A
+        // batch spanning several albums names none rather than the wrong one.
+        val owningName =
+            if (!readOnly) title
+            else expanded.mapNotNull { it.galleryName }.distinct().singleOrNull()
+        val verdict = AlbumRemoval.secureRemovalPrompt(memberships, owningName)
+        AlertDialog(
+            onDismissRequest = { pendingRemoval = null },
+            title = { Text(verdict.prompt.title) },
+            text = { Text(verdict.prompt.body) },
+            confirmButton = {
+                when (verdict) {
+                    is SecureRemovalVerdict.Confirm -> TextButton(onClick = {
+                        pendingRemoval = null
+                        viewModel.removeItems(targets)
+                        exitSelection()
+                        viewerIndex = null
+                    }) { Text("Remove") }
+                    // Recovery, not just a refusal — re-fetching the feeds is the
+                    // only thing that can resolve the unknown.
+                    is SecureRemovalVerdict.Blocked -> TextButton(onClick = {
+                        pendingRemoval = null
+                        viewModel.refreshFeeds()
+                    }) { Text("Refresh") }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingRemoval = null }) { Text("Cancel") }
+            }
+        )
+    }
+
     // Full-screen viewer for secure items only
     if (viewerIndex != null) {
         SecurePhotoViewer(
@@ -120,58 +187,39 @@ internal fun GalleryDetailView(
             viewModel = viewModel,
             onBack = { viewerIndex = null },
             onRemove = { item ->
-                // Burst-aware: removeItem pulls in the whole burst stack.
-                viewModel.removeItem(item)
-                viewerIndex = null
+                // Ask first (Z1e). Burst-aware: the confirmation and the removal
+                // share one expansion, so a burst cover asks about the stack.
+                pendingRemoval = listOf(item)
             }
         )
         return
     }
 
-    // Delete-confirmation for grid multi-select.
-    if (confirmDelete) {
-        val targets = displayItems.filter { it.id in selectedItemIds }
-        val burstCount = targets.count { !it.burstId.isNullOrEmpty() }
-        AlertDialog(
-            onDismissRequest = { confirmDelete = false },
-            title = { Text("Remove ${targets.size} from secure album?") },
-            text = {
-                Text(
-                    if (burstCount > 0)
-                        "The selected photos (including all frames of any burst) " +
-                            "will return to your regular gallery."
-                    else
-                        "The selected photos will return to your regular gallery."
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmDelete = false
-                    viewModel.removeItems(targets)
-                    exitSelection()
-                }) { Text("Remove") }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmDelete = false }) { Text("Cancel") }
-            }
-        )
-    }
-
-    // Target-album picker for the push move (#43).
+    // Target-album picker for the push direction (#43, an ADD since Z1).
     if (showMoveTarget) {
-        val targets = viewModel.moveTargets
+        val targets = viewModel.addTargets
         AlertDialog(
             onDismissRequest = { showMoveTarget = false },
-            title = { Text("Move ${selectedItemIds.size} to") },
+            title = { Text("Add ${selectedItemIds.size} to") },
             text = {
                 if (targets.isEmpty()) {
-                    Text("No other secure albums to move into.")
+                    Text("No other secure albums to add to.")
                 } else {
                     Column(
                         modifier = Modifier
                             .heightIn(max = 320.dp)
                             .verticalScroll(rememberScrollState())
                     ) {
+                        // Z1: this ADDS. Said plainly, because the same control
+                        // used to move, and a user who learned the old behaviour
+                        // will otherwise assume it empties the current album.
+                        Text(
+                            "${if (selectedItemIds.size != 1) "They stay" else "It stays"} in " +
+                                "“$title” as well.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
                         targets.forEach { g ->
                             Row(
                                 modifier = Modifier
@@ -227,18 +275,24 @@ internal fun GalleryDetailView(
                         }) {
                             Text(if (allSelected) "Deselect all" else "Select all")
                         }
-                        // Move the selection to another secure album (#43) — only
-                        // when there's somewhere to move it to.
-                        if (viewModel.moveTargets.isNotEmpty()) {
+                        // File the selection into another secure album (#43) —
+                        // only when there is somewhere to add it to. The verb is
+                        // "Add", not "Move": since Z1 the photo stays here too,
+                        // and "Move" is the verb this item was filed to kill.
+                        if (viewModel.addTargets.isNotEmpty()) {
                             TextButton(
                                 onClick = { if (selectedItemIds.isNotEmpty()) showMoveTarget = true },
                                 enabled = selectedItemIds.isNotEmpty()
                             ) {
-                                Text("Move")
+                                Text("Add to album")
                             }
                         }
                         IconButton(
-                            onClick = { if (selectedItemIds.isNotEmpty()) confirmDelete = true },
+                            onClick = {
+                                if (selectedItemIds.isNotEmpty()) {
+                                    pendingRemoval = displayItems.filter { it.id in selectedItemIds }
+                                }
+                            },
                             enabled = selectedItemIds.isNotEmpty()
                         ) {
                             Icon(Icons.Default.Delete, contentDescription = "Remove selected")

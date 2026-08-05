@@ -97,8 +97,15 @@ class SecureGalleryRepository @Inject constructor(
         api.addSecureGalleryItem(galleryId, SecureGalleryAddItemRequest(blobId))
 
     /**
-     * Remove a single item from a secure gallery. The server deletes the
-     * cloned blob and the original photo returns to the regular gallery.
+     * Remove a single item from a secure gallery.
+     *
+     * **What this does depends on membership, and has since Z1.** With no other
+     * secure album holding the photo, the server deletes the cloned blob and the
+     * original returns to the regular gallery — the pre-Z1 behaviour this doc
+     * used to state unconditionally. With a sibling membership, `clone_is_shared`
+     * keeps the bytes (they are the *same* clone the other album displays) and
+     * only the membership row goes, so the photo stays hidden. Callers that show
+     * the user an outcome must resolve which one via `AlbumRemoval`.
      */
     suspend fun removeItem(galleryId: String, itemId: String) {
         api.deleteSecureGalleryItem(galleryId, itemId)

@@ -6,10 +6,10 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 /**
- * Mirrors `web/src/gallery/secureMovePicker.test.ts` for the push direction
- * (#43) so both clients move the same items to the same place: whole bursts
- * travel together, items already in the target are skipped, and each item routes
- * from its own source album.
+ * Mirrors `web/src/gallery/secureMovePicker.test.ts` so both clients file the
+ * same items into the same place: whole bursts travel together, one request per
+ * clone, and — since Z1 — the push direction **adds** rather than moves, so
+ * nothing is dropped for "already in the target" that only the server can judge.
  */
 class SecureMovePlanTest {
 
@@ -51,46 +51,93 @@ class SecureMovePlanTest {
         )
     }
 
-    // ── planMovesToTarget ───────────────────────────────────────────────────
+    // ── planAddsToTarget (Z1: the push direction ADDS, it does not move) ─────
 
     @Test
-    fun `routes each item from its own source into the target`() {
-        val moves = SecureMovePlan.planMovesToTarget(items, setOf("b1", "c"), "g3")
+    fun `plans one add per selected item, keyed on the clone blob`() {
+        val adds = SecureMovePlan.planAddsToTarget(items, setOf("a", "c"))
         assertEquals(
             listOf(
-                SecureMovePlan.Move("g1", "b1"),
-                SecureMovePlan.Move("g2", "c"),
+                SecureMovePlan.Add("a", "blob-a"),
+                SecureMovePlan.Add("c", "blob-c"),
             ),
-            moves,
+            adds,
         )
     }
 
     @Test
-    fun `drops items already in the target album`() {
-        // c already lives in g2 — moving the selection into g2 must skip it.
-        val moves = SecureMovePlan.planMovesToTarget(items, setOf("b1", "c"), "g2")
-        assertEquals(listOf(SecureMovePlan.Move("g1", "b1")), moves)
+    fun `does NOT drop an item whose own album is the target`() {
+        // The move planner dropped these; an add cannot, because "is it already
+        // in the target" lives in a different album's membership rows that this
+        // feed cannot see. The server answers it with a 409. Guessing here would
+        // be a second derivation of membership from a feed that cannot see the
+        // answer — and it would silently skip a legitimate add.
+        val adds = SecureMovePlan.planAddsToTarget(items, setOf("c"))
+        assertEquals(listOf(SecureMovePlan.Add("c", "blob-c")), adds)
     }
 
     @Test
-    fun `drops selections with no source gallery`() {
-        val orphan = listOf(item("d", null))
-        assertEquals(emptyList<SecureMovePlan.Move>(), SecureMovePlan.planMovesToTarget(orphan, setOf("d"), "g1"))
+    fun `issues one add per clone when several selected frames share one`() {
+        // Two burst frames sharing a clone would otherwise issue two requests,
+        // the second guaranteed to 409.
+        val shared = listOf(
+            item("f1", "g1").copy(blobId = "clone-1"),
+            item("f2", "g1").copy(blobId = "clone-1"),
+        )
+        val adds = SecureMovePlan.planAddsToTarget(shared, setOf("f1", "f2"))
+        assertEquals(listOf(SecureMovePlan.Add("f1", "clone-1")), adds)
     }
 
-    // ── moveTargets ─────────────────────────────────────────────────────────
+    @Test
+    fun `drops selections that are not in the pool`() {
+        assertEquals(
+            emptyList<SecureMovePlan.Add>(),
+            SecureMovePlan.planAddsToTarget(items, setOf("not-here")),
+        )
+    }
+
+    // ── expandForRemoval ────────────────────────────────────────────────────
+
+    @Test
+    fun `a removal of a burst cover carries every frame`() {
+        val expanded = SecureMovePlan.expandForRemoval(items, listOf(items[1]))
+        assertEquals(setOf("b1", "b2", "b3"), expanded.map { it.id }.toSet())
+    }
+
+    @Test
+    fun `a removal of a plain item carries only itself`() {
+        val expanded = SecureMovePlan.expandForRemoval(items, listOf(items[0]))
+        assertEquals(listOf("a"), expanded.map { it.id })
+    }
+
+    @Test
+    fun `burst siblings must share the owning album, not just the burst id`() {
+        // Guards a cross-album burst_id collision: pulling a stranger's frame in
+        // would remove a photo from an album the user never touched.
+        val crossAlbum = items + item("x", "g2", burstId = "burst-1")
+        val expanded = SecureMovePlan.expandForRemoval(crossAlbum, listOf(crossAlbum[1]))
+        assertEquals(setOf("b1", "b2", "b3"), expanded.map { it.id }.toSet())
+    }
+
+    @Test
+    fun `a target listed twice is removed once`() {
+        val expanded = SecureMovePlan.expandForRemoval(items, listOf(items[1], items[2]))
+        assertEquals(3, expanded.size)
+    }
+
+    // ── addTargets ──────────────────────────────────────────────────────────
 
     private fun gallery(id: String) = SecureGallery(id = id, name = id.uppercase(), createdAt = "", itemCount = 0)
 
     @Test
     fun `excludes the open real album`() {
-        val targets = SecureMovePlan.moveTargets(listOf(gallery("g1"), gallery("g2"), gallery("g3")), "g2")
+        val targets = SecureMovePlan.addTargets(listOf(gallery("g1"), gallery("g2"), gallery("g3")), "g2")
         assertEquals(listOf("g1", "g3"), targets.map { it.id })
     }
 
     @Test
     fun `offers every album for a smart view with a null current id`() {
-        val targets = SecureMovePlan.moveTargets(listOf(gallery("g1"), gallery("g2")), null)
+        val targets = SecureMovePlan.addTargets(listOf(gallery("g1"), gallery("g2")), null)
         assertEquals(listOf("g1", "g2"), targets.map { it.id })
     }
 }

@@ -83,7 +83,6 @@ internal fun SecurePhotoViewer(
         initialPage = initialIndex.coerceIn(0, (items.size - 1).coerceAtLeast(0)),
         pageCount = { items.size }
     )
-    var confirmRemove by remember { mutableStateOf(false) }
     var overflowOpen by remember { mutableStateOf(false) }
     // Info panel + Download parity with the regular viewer (#31).
     var showInfo by remember { mutableStateOf(false) }
@@ -201,31 +200,14 @@ internal fun SecurePhotoViewer(
         )
     }
 
-    if (confirmRemove) {
-        val current = items.getOrNull(pagerState.currentPage)
-        val isBurst = current?.let { framesFor(it).size > 1 } == true
-        AlertDialog(
-            onDismissRequest = { confirmRemove = false },
-            title = { Text("Remove from secure album?") },
-            text = {
-                Text(
-                    if (isBurst)
-                        "This burst (all of its frames) will return to your regular gallery."
-                    else
-                        "The photo will return to your regular gallery."
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmRemove = false
-                    current?.let { onRemove?.invoke(it) }
-                }) { Text("Remove") }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmRemove = false }) { Text("Cancel") }
-            }
-        )
-    }
+    // The removal confirmation used to live HERE, and it stated "will return to
+    // your regular gallery" unconditionally — false since Z1, whenever another
+    // secure album still holds the photo. It is not restated accurately here:
+    // the overflow item hands the photo to [onRemove], which raises the one
+    // shared dialog `GalleryDetailView` also uses for the grid selection. A
+    // second copy of a conditional outcome is a second thing to get wrong, and
+    // this one had already drifted once. That dialog is a window of its own, so
+    // it renders over the pager and a cancel leaves the page where it was.
 
     Box(
         modifier = Modifier
@@ -306,7 +288,11 @@ internal fun SecurePhotoViewer(
                                 text = { Text("Remove from secure album", color = MaterialTheme.colorScheme.error) },
                                 onClick = {
                                     overflowOpen = false
-                                    confirmRemove = true
+                                    // Raises the shared confirmation in
+                                    // GalleryDetailView — see the note where this
+                                    // viewer's own dialog used to be.
+                                    items.getOrNull(pagerState.currentPage)
+                                        ?.let { onRemove.invoke(it) }
                                 },
                                 leadingIcon = {
                                     Icon(

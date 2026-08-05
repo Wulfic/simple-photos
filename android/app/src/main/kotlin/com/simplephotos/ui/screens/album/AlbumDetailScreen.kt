@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
+import com.simplephotos.ui.components.AlbumPickerDialog
 import com.simplephotos.ui.components.CloudBackupBadge
 import com.simplephotos.ui.components.TileSelectionCircle
 import com.simplephotos.ui.components.rememberThumbnailRequest
@@ -107,12 +108,36 @@ fun AlbumDetailScreen(
                             }
                         }
                         Spacer(Modifier.width(8.dp))
+                        // Z1: the header offered a Remove and nothing else — no
+                        // way to file the selection into another album, which is
+                        // the divergence the report names from the regular side.
+                        // Hidden for smart albums, which have no manifest to add
+                        // to (and no other album to add *from*).
+                        if (!viewModel.isSmartAlbum) {
+                            OutlinedButton(
+                                onClick = { viewModel.showAddToAlbum = true },
+                                enabled = viewModel.selectedIds.isNotEmpty(),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                            ) {
+                                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Add to album", fontSize = 12.sp, maxLines = 1)
+                            }
+                            Spacer(Modifier.width(8.dp))
+                        }
                         Button(
-                            onClick = { viewModel.removeSelectedFromAlbum() },
+                            // Confirms now (Z1). It also un-files rather than
+                            // deletes, which is what the dialog body says — the
+                            // trash icon alone would make it look destructive.
+                            onClick = { viewModel.showRemoveConfirm = true },
                             enabled = viewModel.selectedIds.isNotEmpty(),
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                         ) {
-                            Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Icon(
+                                Icons.Default.Delete,
+                                contentDescription = "Remove from album",
+                                modifier = Modifier.size(16.dp)
+                            )
                             Spacer(Modifier.width(4.dp))
                             Text("Remove", fontSize = 12.sp)
                         }
@@ -413,6 +438,44 @@ fun AlbumDetailScreen(
             dismissButton = {
                 TextButton(onClick = { viewModel.showRenameDialog = false }) { Text("Cancel") }
             }
+        )
+    }
+
+    // Remove-from-album confirmation (Z1). The wording is shared with the secure
+    // side and with web via [AlbumRemoval] — the second sentence is the one that
+    // earns the dialog, because "Remove" behind a trash icon reads as a delete
+    // and this un-files the photo without deleting anything.
+    if (viewModel.showRemoveConfirm && viewModel.selectedIds.isNotEmpty()) {
+        val prompt = AlbumRemoval.albumRemovalPrompt(
+            viewModel.selectedIds.size,
+            if (viewModel.isSmartAlbum) viewModel.smartAlbumLabel else viewModel.album?.name,
+        )
+        AlertDialog(
+            onDismissRequest = { viewModel.showRemoveConfirm = false },
+            title = { Text(prompt.title) },
+            text = { Text(prompt.body) },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.showRemoveConfirm = false
+                    viewModel.removeSelectedFromAlbum()
+                }) { Text("Remove") }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.showRemoveConfirm = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    // "+ Add to album" for the current selection (Z1). The photos stay in THIS
+    // album — the picker merges into the target's manifest and touches no other.
+    if (viewModel.showAddToAlbum && viewModel.selectedIds.isNotEmpty()) {
+        AlbumPickerDialog(
+            albums = viewModel.addToAlbumTargets,
+            subtitle = "${if (viewModel.selectedIds.size != 1) "They stay" else "It stays"} in " +
+                "\"${viewModel.album?.name ?: "this album"}\" as well.",
+            onDismiss = { viewModel.showAddToAlbum = false },
+            onAlbumSelected = { viewModel.addSelectedToAlbum(it) },
+            onCreateAlbum = { viewModel.createAlbumAndAddSelected(it) },
         )
     }
 
