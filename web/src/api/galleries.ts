@@ -22,6 +22,19 @@ export type SecureGalleryItem = {
   added_at: string;
   gallery_id: string;
   gallery_name?: string | null;
+  /**
+   * Every secure album that holds this photo (Z1), oldest membership first.
+   * Published by **both** the per-album and aggregate feeds, with the same
+   * meaning on each, so a client never has to know which endpoint it came from.
+   *
+   * **Absent or empty means UNKNOWN, not "no other album."** The server's own
+   * comment says so: a miss is unreachable by construction, so an empty array
+   * can only be an older server that does not publish memberships. Reading it as
+   * 0 is what made the removal dialog promise a photo would return to the
+   * regular gallery when it would stay secured. Resolve it through
+   * `otherSecureAlbumCount`, which encodes that distinction.
+   */
+  galleries?: Array<{ id: string; name: string }> | null;
   encrypted_thumb_blob_id?: string | null;
   width?: number | null;
   height?: number | null;

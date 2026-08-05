@@ -48,6 +48,12 @@ import {
 } from "../gallery/secureSmartAlbums";
 import type { SecureGalleryItem as SecureItem } from "../api/galleries";
 import { GallerySkeleton, AlbumGridSkeleton } from "../components/skeletons";
+import { ConfirmDialog } from "../components/ui";
+import {
+  otherSecureAlbumCount,
+  secureRemovalPrompt,
+  type SecureRemovalVerdict,
+} from "../gallery/albumRemoval";
 
 interface Gallery {
   id: string;
@@ -145,6 +151,24 @@ export default function SecureGallery() {
   // Error / success
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+
+  // Pending single-item removal (Z1d). Held as state rather than run inline
+  // behind `confirm()`, because the question is now conditional: what removal
+  // does depends on how many OTHER secure albums hold the photo, and one of the
+  // three answers is "we don't know, so don't ask".
+  const [pendingRemoval, setPendingRemoval] = useState<{
+    item: GalleryItem;
+    owningGalleryId: string;
+    /** How many other secure albums hold it; `undefined` = unknown. */
+    otherAlbums: number | undefined;
+    verdict: SecureRemovalVerdict;
+  } | null>(null);
+  const [removing, setRemoving] = useState(false);
+
+  // Pending album deletion — the other prompt on this page that used to be a
+  // `window.confirm`.
+  const [pendingDelete, setPendingDelete] = useState<Gallery | null>(null);
+  const [deletingAlbum, setDeletingAlbum] = useState(false);
 
   // A ref so the URL-sync effect can read the current gallery without being
   // in its dependency array (avoids infinite-loop risk).
@@ -327,10 +351,17 @@ export default function SecureGallery() {
     }
   }
 
-  // Delete album
+  // Delete album. Genuinely destructive — unlike removing one item, this can
+  // drop the last reference to a clone and take its bytes with it — so it is the
+  // one prompt on this page that earns `tone="danger"`.
   async function handleDelete(gallery: Gallery) {
-    if (!confirm(`Delete secure album "${gallery.name}"? All items inside will be removed.`))
-      return;
+    setPendingDelete(gallery);
+  }
+
+  async function confirmDeleteAlbum() {
+    const gallery = pendingDelete;
+    if (!gallery || deletingAlbum) return;
+    setDeletingAlbum(true);
     try {
       await api.secureGalleries.delete(gallery.id);
       setSuccess(`Album "${gallery.name}" deleted.`);
@@ -342,15 +373,21 @@ export default function SecureGallery() {
       await loadAllItems();
     } catch (err: unknown) {
       setError(getErrorMessage(err));
+    } finally {
+      setDeletingAlbum(false);
+      setPendingDelete(null);
     }
   }
 
-  // Remove a single item from the current secure album.
-  // The cloned blob is deleted server-side and the original photo becomes
-  // visible again in the regular gallery (the server's
-  // `/galleries/secure/blob-ids` endpoint will stop reporting its id, so
-  // the next gallery refresh unhides it automatically).
-  async function handleRemoveItem(item: GalleryItem) {
+  // Ask about removing a single item from the current secure album.
+  //
+  // Since Z1 a photo may live in several secure albums, so removal has two
+  // genuinely different outcomes — the photo returns to the regular gallery, or
+  // it stays hidden because another secure album still holds it — and the user
+  // is entitled to know which one they are agreeing to BEFORE agreeing. The
+  // verdict is resolved here, from the `galleries` array the feed publishes, and
+  // rendered by the dialog below.
+  function requestRemoveItem(item: GalleryItem) {
     if (!selectedGallery) return;
     // In a smart view the selected "gallery" is synthetic — route removal to
     // the item's REAL owning album. `gallery_id` is always present on both the
@@ -361,15 +398,48 @@ export default function SecureGallery() {
       setError("Could not determine which album this photo belongs to.");
       return;
     }
-    if (!confirm("Remove this photo from the secure album? It will return to your regular gallery."))
-      return;
+    // The album NAME must come from the owning album, not from the open view: in
+    // a smart view `selectedGallery.name` is "Videos", and naming that as the
+    // thing being removed from is wrong in the one dialog whose job is accuracy.
+    const owningName = smartView
+      ? (item.gallery_name ?? galleries.find((g) => g.id === owningGalleryId)?.name)
+      : selectedGallery.name;
+    const otherAlbums = otherSecureAlbumCount(item.galleries, owningGalleryId);
+    setPendingRemoval({
+      item,
+      owningGalleryId,
+      otherAlbums,
+      verdict: secureRemovalPrompt(1, owningName, otherAlbums),
+    });
+  }
+
+  // Perform the removal the dialog just described.
+  // The cloned blob is deleted server-side. Whether the original photo becomes
+  // visible again in the regular gallery depends on whether this was its LAST
+  // secure membership — the server drops only the membership row, and
+  // `/galleries/secure/blob-ids` stops reporting the id only once none remain.
+  async function confirmRemoveItem() {
+    if (!pendingRemoval || removing) return;
+    const { item, owningGalleryId, otherAlbums } = pendingRemoval;
+    if (!selectedGallery) return;
+    const smartView = isSecureSmartAlbum(selectedGallery.id);
+    setRemoving(true);
     try {
       await api.secureGalleries.removeItem(owningGalleryId, item.id);
       // Drop the local IDB clone entry that `handleAddSelectedPhotos`
       // created at add time, so the secure album view stays consistent
       // even before the next reload.
       try { await db.photos.delete(item.blob_id); } catch { /* non-fatal */ }
-      setSuccess("Photo returned to your gallery.");
+      // The toast reports what actually happened, for the same reason the
+      // prompt does. "Photo returned to your gallery" was unconditional and was
+      // false whenever another secure album still held it — a user told that
+      // believes they have un-secured something they have not.
+      setSuccess(
+        otherAlbums && otherAlbums > 0
+          ? "Removed. The photo stays secured in your other secure albums."
+          : "Photo returned to your gallery.",
+      );
+      setPendingRemoval(null);
       // Refresh the aggregate feed (smart items re-derive from it via effect)
       // and the album list; real albums also re-fetch their own items.
       await loadAllItems();
@@ -377,7 +447,22 @@ export default function SecureGallery() {
       if (!smartView) await loadItems(selectedGallery.id);
     } catch (err: unknown) {
       setError(getErrorMessage(err));
+      setPendingRemoval(null);
+    } finally {
+      setRemoving(false);
     }
+  }
+
+  // Recovery path for the `blocked` verdict: re-fetch the feeds, which is the
+  // only thing that can turn "unknown membership" into a real answer. Without
+  // this the refusal would be a dead end, and a dead end is how a fail-closed
+  // guard gets deleted by the next person who hits it.
+  async function refreshForRemoval() {
+    if (!selectedGallery) return;
+    setPendingRemoval(null);
+    await loadAllItems();
+    await loadGalleries();
+    if (!isSecureSmartAlbum(selectedGallery.id)) await loadItems(selectedGallery.id);
   }
 
   // Items in the user's OTHER secure albums — the source pool for the
@@ -800,9 +885,15 @@ export default function SecureGallery() {
                   )}
                   {!isBackupServer && !pushSelect.selectionMode && (
                     <button
-                      onClick={(e) => { e.stopPropagation(); handleRemoveItem(item); }}
+                      onClick={(e) => { e.stopPropagation(); requestRemoveItem(item); }}
                       className="absolute top-1 right-1 hidden group-hover:flex items-center justify-center w-7 h-7 bg-black/60 hover:bg-red-600 text-white rounded-full transition-colors z-10"
-                      title="Remove from secure album (returns to regular gallery)"
+                      // No outcome claim here (Z1d). This tooltip used to
+                      // promise the photo went back to the main gallery, which
+                      // is false whenever another secure album still holds it —
+                      // and a tooltip cannot be conditional on a per-item
+                      // membership lookup the way the dialog is. The dialog
+                      // states the outcome; the tooltip names the action.
+                      title="Remove from secure album"
                       aria-label="Remove from secure album"
                     >
                       <AppIcon name="trashcan" size="w-4 h-4" />
@@ -811,6 +902,33 @@ export default function SecureGallery() {
                 </div>
                 );
               }}
+            />
+          )}
+
+          {/* Removal confirmation (Z1d). Two verdicts render here: `confirm`
+              asks the question with an accurate body, `blocked` refuses and
+              offers the refresh that can resolve the unknown. Neither is a
+              `window.confirm`, which could not have said either thing. */}
+          {pendingRemoval && pendingRemoval.verdict.kind === "confirm" && (
+            <ConfirmDialog
+              title={pendingRemoval.verdict.title}
+              body={pendingRemoval.verdict.body}
+              confirmLabel="Remove"
+              cancelLabel="Cancel"
+              busy={removing}
+              busyLabel="Removing…"
+              onConfirm={confirmRemoveItem}
+              onCancel={() => setPendingRemoval(null)}
+            />
+          )}
+          {pendingRemoval && pendingRemoval.verdict.kind === "blocked" && (
+            <ConfirmDialog
+              title={pendingRemoval.verdict.title}
+              body={pendingRemoval.verdict.body}
+              confirmLabel="Refresh"
+              cancelLabel="Cancel"
+              onConfirm={refreshForRemoval}
+              onCancel={() => setPendingRemoval(null)}
             />
           )}
 
@@ -1056,6 +1174,27 @@ export default function SecureGallery() {
           </div>
         )}
       </main>
+
+      {/* Album deletion. Rendered at the page root rather than inside the album
+          list, so it survives the list re-rendering underneath it. `danger`
+          because this one really can destroy bytes — see `handleDelete`. */}
+      {pendingDelete && (
+        <ConfirmDialog
+          title={`Delete secure album “${pendingDelete.name}”?`}
+          body={
+            `Every photo in this album will be removed from it. Photos that are ` +
+            `also in another secure album stay secured there; the rest return to ` +
+            `your regular gallery. The album itself is deleted.`
+          }
+          confirmLabel="Delete album"
+          cancelLabel="Cancel"
+          tone="danger"
+          busy={deletingAlbum}
+          busyLabel="Deleting…"
+          onConfirm={confirmDeleteAlbum}
+          onCancel={() => setPendingDelete(null)}
+        />
+      )}
     </div>
   );
 }

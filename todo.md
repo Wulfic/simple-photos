@@ -856,6 +856,91 @@ tracks what happens to those.
 
 ---
 
+### Z1 — Album headers diverge; adding to a second secure album MOVED instead of adding
+
+> Original report: *"when selecting items in an album there is a remove option,
+> but no + button to add those items to another album. And in secure albums when
+> trying to do so, it removes the item from the current album it's in rather than
+> showing in both. This also means we have diverging options for album headers, so
+> the remove button can be changed to a trashcan icon, and a popup box letting the
+> user know what's happening with a yes and no option shows."*
+
+Server (`8bf2f06`, `14606b9`) and the regular-album web view (`56f995c`) are done.
+
+**⚠ `56f995c` shipped Z1 HALF-WIRED, and the green suite is what hid it.** That
+commit wrote `web/src/gallery/albumRemoval.ts` — `secureRemovalPrompt`, fully
+unit-tested, documenting at length why "returns to your regular gallery" is a
+privacy-shaped lie after Z1 — and **wired it into nothing**. Meanwhile
+`SecureGallery.tsx` still shipped a raw `confirm()` containing *that exact
+sentence*, plus the same claim in the success toast and the tile tooltip. Its
+twin `albumRemovalPrompt` *was* wired, which is what made the omission read as
+done. **Check the call site, not the export.**
+
+#### Z1d — web secure removal — DONE 2026-08-04
+
+- [x] Three-way verdict, not two. `otherSecureAlbumCount` resolves the feed's
+      `galleries` array to `0` / `>0` / **`undefined`**, and
+      `secureRemovalPrompt` returns a discriminated `confirm` | `blocked`.
+      **Empty means UNKNOWN, not zero** — the server's own comment says a miss is
+      unreachable by construction, so an empty array can only be an older server.
+      Reading it as 0 is precisely how the UI came to promise a photo would
+      return to the regular gallery when it would stay secured.
+- [x] **The `otherSecureAlbums = 0` default was removed, deliberately.** The
+      parameter is now required and has no default: the old signature handed the
+      most dangerous of the three answers to every call site that had not thought
+      about membership, *by omission*. An argument you must pass is the only
+      version of this function that cannot be misused by accident.
+- [x] **Decided: block rather than hedge** when membership is unknown. A prompt
+      that hedges makes the user adjudicate a fact only the server holds; a
+      prompt that guesses is the original bug restated. The refusal offers a
+      **Refresh** that re-fetches the feeds, because a fail-closed guard with no
+      recovery path is one the next person deletes.
+- [x] A list that does not contain the owning album is **unknown**, not
+      off-by-one. Counting the owner as an "other" flips a last-membership
+      removal into the "stays secured" branch — wrong in the direction that
+      surprises the user.
+- [x] All three false claims killed: the `confirm()`, the success toast
+      (now conditional), and the tile tooltip (now names the action and claims no
+      outcome — a tooltip cannot be conditional on a per-item lookup).
+- [x] In a smart view the dialog names the **owning** album, not the open one.
+      `selectedGallery.name` there is "Videos", and naming that as the thing being
+      removed from is wrong in the one dialog whose entire job is accuracy.
+- [x] `SecureGalleryItem.galleries` added to the web DTO — **the type never had
+      it**, so no client could have computed this even if it had wanted to.
+- [x] The album-delete `confirm()` was ported to `ConfirmDialog` too. Leaving a
+      native confirm beside a real dialog is the same divergence this item is
+      about. It is the one prompt here that earns `tone="danger"`: unlike removing
+      an item, deleting an album can drop the last reference to a clone and take
+      its bytes with it.
+- [x] Tests: 10 new, **322 green** (was 312). Verified RED two ways, and the
+      first is the one that matters: reverting **only the component** fails the 4
+      wiring tests while **all 14 helper tests stay green** — the exact signature
+      of how `56f995c` shipped. Reverting only the helper fails 8.
+- [x] **A wiring guard now exists**, reading source with `node:fs` after
+      `safeArea.test.ts`'s precedent. This repo has no jsdom, so the dialog cannot
+      be rendered and asserted; what *is* checkable is that the call site exists
+      and the false sentences are gone. **A tested helper with no call site is
+      worse than no helper** — the green suite is what stops anyone looking.
+- [ ] **Browser check** — folded into the verification session below. No vitest
+      run can show a dialog. Needs a photo in **two** secure albums (the `>0`
+      branch) and one in a single album (the `0` branch); confirm the two bodies
+      differ and that neither promises the wrong outcome.
+
+#### Z1e — Android — NOT DONE
+
+- [ ] **`SecureGalleryViewModel.pushItemsTo` still calls `moveItem`** — this is
+      the reported bug itself, unfixed on the phone. Web was switched to `addItem`
+      (+ 409-as-no-op); Android never was, so adding a secure photo to a second
+      album still empties it out of the first.
+- [ ] `GalleryDetailView.kt` states the false "will return to your regular
+      gallery" sentence **unconditionally**, and its header still offers the verb
+      **"Move"** — the verb Z1 was filed to kill.
+- [ ] Regular `AlbumDetailScreen.kt` has a **Close** icon, **no confirmation at
+      all**, and no add-to-another-album picker. This is the header divergence the
+      report names, from the other side.
+
+---
+
 ## 2. Verification debt
 
 Everything below is code that is written, tested and merged but has never run
@@ -1048,7 +1133,3 @@ list exists.
   E3 all shipped with a comment claiming the opposite of the code. Update the
   comment in the same commit as the behaviour.
 
-
-
-NEW ITEM
-Z1 - when selecting items in an album there is a remove option, but no + button to add those items to another album. And in seceure albums wheen trying to do so, it removes the item from thhe current album its in rather then showwing in both. this also means we have diverging options for album headers, so the remove button can be changed to a trashcan icon, and a popup box letting the user know whats happening with a yes and no option shows.
