@@ -85,6 +85,30 @@ android {
     }
 }
 
+// kspDebugKotlin is 58s of a ~90s one-line-change rebuild — it dominates every
+// other task combined. Hilt's aggregating processor is the reason: without this
+// flag it re-inspects the whole compile classpath, so editing a comment in one
+// ViewModel invalidates all of it. The aggregating task isolates that step into
+// its own incremental unit. Measure kspDebugKotlin in a --profile report before
+// changing this, not the wall clock — daemon startup swamps the signal.
+hilt {
+    enableAggregatingTask = true
+}
+
+// The androidTest KSP task and the main-variant KSP task mkdir into overlapping
+// generated-source trees. On Windows two workers racing that mkdirs lose to each
+// other and KSP dies with "failed to make parent directories". This used to be
+// papered over with org.gradle.workers.max=1, which serialised the whole build
+// to fix two tasks; ordering just those two costs nothing and leaves the other
+// ~40 tasks free to run in parallel. mustRunAfter (not dependsOn) so building
+// only one of them never drags in the other.
+tasks.matching { it.name.startsWith("ksp") && it.name.contains("AndroidTest") }
+    .configureEach {
+        mustRunAfter(tasks.matching {
+            it.name.startsWith("ksp") && !it.name.contains("AndroidTest")
+        })
+    }
+
 dependencies {
     // Compose
     implementation(platform(libs.compose.bom))
