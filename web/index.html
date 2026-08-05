@@ -2,7 +2,12 @@
 <html lang="en" class="overflow-x-hidden dark">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- viewport-fit=cover (#50) is load-bearing, not cosmetic: without it
+         `viewport-fit` defaults to `auto`, the viewport is constrained to the
+         safe area, and every `env(safe-area-inset-*)` in index.css evaluates
+         to 0. The `.safe-*` utilities silently become no-ops if this is
+         removed, which is why viewportFit.test.ts asserts it is here. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#111827" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />

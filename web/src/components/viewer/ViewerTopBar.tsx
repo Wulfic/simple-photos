@@ -1,6 +1,8 @@
 /**
- * Viewer top toolbar — back, info, edit, favorite, download, delete/remove buttons.
+ * Viewer top toolbar — back, favorite, info, edit up front; tags, slideshow,
+ * download and delete/remove tucked into a 3-dot overflow menu (todo1 #3).
  */
+import { useState, useRef, useEffect } from "react";
 import type { MediaType } from "../../db";
 import AppIcon from "../AppIcon";
 
@@ -15,6 +17,13 @@ export interface ViewerTopBarProps {
   mediaUrl: string | null;
   isFavorite: boolean;
   isBackupServer: boolean;
+  /**
+   * Allow the Edit button even when `isBackupServer` is true. Used by the secure
+   * viewer (#31): secure mode passes `isBackupServer` to keep favorite / tags /
+   * delete hidden, but edit is safe (a crop stays inside the secure album and is
+   * persisted via the secure crop endpoint), so it is opted back in here.
+   */
+  allowEdit?: boolean;
   isRenderingVideo: boolean;
   /** True only for real user-created albums — smart albums (Photos, Videos,
    *  GIFs, Audio, People, …) can't have items "removed" so they show Delete. */
@@ -40,6 +49,7 @@ export default function ViewerTopBar({
   mediaUrl,
   isFavorite,
   isBackupServer,
+  allowEdit,
   isRenderingVideo,
   canRemoveFromAlbum,
   onBack,
@@ -51,11 +61,41 @@ export default function ViewerTopBar({
   onStartSlideshow,
   hasSlideshow,
 }: ViewerTopBarProps) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // Close the overflow menu on outside click or Escape (same pattern as the
+  // AppHeader user dropdown).
+  useEffect(() => {
+    if (!menuOpen) return;
+    function onClick(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setMenuOpen(false);
+    }
+    document.addEventListener("mousedown", onClick);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onClick);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [menuOpen]);
+
+  const canEdit =
+    (mediaType === "photo" || mediaType === "gif" || mediaType === "video" || mediaType === "audio") &&
+    (!isBackupServer || !!allowEdit);
+
+  const menuItemClass =
+    "w-full text-left px-4 py-2 text-sm text-fg-muted hover:bg-surface-sunken dark:hover:bg-white/10 flex items-center gap-2 transition-colors";
+
   return (
     <div className={`absolute top-0 left-0 right-0 z-30 transition-opacity duration-300 ${
       showOverlay || editMode ? "opacity-100" : "opacity-0 pointer-events-none"
     }`}>
-    <div className="flex items-center justify-between px-4 py-3 bg-black/80">
+    <div className="flex items-center justify-between px-4 safe-px safe-top-bar bg-black/80">
       <button
         onClick={onBack}
         className="text-white hover:text-gray-300 flex items-center justify-center w-8 h-8 rounded-full hover:bg-white/20 transition-colors"
@@ -64,37 +104,6 @@ export default function ViewerTopBar({
         <AppIcon name="back-arrow" size="w-5 h-5" themed={false} className="invert" />
       </button>
       <div className="flex gap-3 items-center">
-        <button
-          onClick={() => setShowInfoPanel(!showInfoPanel)}
-          className={`flex items-center justify-center w-8 h-8 rounded-full transition-colors ${
-            showInfoPanel ? "bg-accent-600 text-white" : "text-white hover:bg-white/20"
-          }`}
-          title="Info"
-        >
-          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-        </button>
-        {!isBackupServer && (
-          <button
-            onClick={() => setShowTagPanel(!showTagPanel)}
-            className={`flex items-center justify-center w-8 h-8 rounded-full transition-colors ${
-              showTagPanel ? "bg-accent-600 text-white" : "text-white hover:bg-white/20"
-            }`}
-            title="Tags"
-          >
-            <AppIcon name="tag" size="w-5 h-5" themed={false} className="invert" />
-          </button>
-        )}
-        {(mediaType === "photo" || mediaType === "video" || mediaType === "audio") && !isBackupServer && (
-          <button
-            onClick={onToggleEdit}
-            className={`flex items-center gap-1 px-2 py-1 rounded text-sm font-medium transition-colors ${
-              editMode ? "bg-accent-600 text-white" : "text-white hover:bg-white/20"
-            }`}
-            title="Edit"
-          >Edit</button>
-        )}
         {!isBackupServer && (
         <button
           onClick={onToggleFavorite}
@@ -108,48 +117,109 @@ export default function ViewerTopBar({
           )}
         </button>
         )}
-        {hasSlideshow && onStartSlideshow && (
+        {canEdit && (
           <button
-            onClick={onStartSlideshow}
-            className="text-white hover:bg-white/20 flex items-center justify-center w-8 h-8 rounded-full transition-colors"
-            title="Start Slideshow"
+            onClick={onToggleEdit}
+            className={`flex items-center gap-1 px-2 py-1 rounded text-sm font-medium transition-colors ${
+              editMode ? "bg-accent-600 text-white" : "text-white hover:bg-white/20"
+            }`}
+            title="Edit"
+          >Edit</button>
+        )}
+
+        {/* ── Overflow menu: tags · slideshow · download · delete/remove ── */}
+        <div className="relative" ref={menuRef}>
+          <button
+            onClick={() => setMenuOpen((v) => !v)}
+            className={`flex items-center justify-center w-8 h-8 rounded-full transition-colors ${
+              menuOpen ? "bg-white/20 text-white" : "text-white hover:bg-white/20"
+            }`}
+            title="More options"
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
           >
             <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M8 5v14l11-7z" />
+              <path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z" />
             </svg>
           </button>
-        )}
-        <button
-          onClick={onDownload}
-          className="text-white hover:text-gray-300 flex items-center justify-center w-8 h-8 rounded-full hover:bg-white/20 transition-colors disabled:opacity-50 disabled:cursor-wait"
-          disabled={!mediaUrl || isRenderingVideo}
-          title={isRenderingVideo ? "Converting…" : "Download"}
-        >
-          {isRenderingVideo
-            ? <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-            : <AppIcon name="download" size="w-5 h-5" themed={false} className="invert" />}
-        </button>
-        {!isBackupServer && (
-        <>
-        {canRemoveFromAlbum ? (
-          <button
-            onClick={onRemoveFromAlbum}
-            className="text-orange-400 hover:text-orange-300 flex items-center justify-center w-8 h-8 rounded-full hover:bg-white/20 transition-colors"
-            title="Remove from album"
-          >
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M15 12H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-          </button>
-        ) : (
-          <button
-            onClick={onDelete}
-            className="text-red-400 hover:text-red-300 flex items-center justify-center w-8 h-8 rounded-full hover:bg-white/20 transition-colors"
-            title="Delete"
-          >
-            <AppIcon name="trashcan" size="w-5 h-5" themed={false} className="invert" />
-          </button>
-        )}
-        </>
-        )}
+
+          {menuOpen && (
+            <div
+              className="absolute right-0 top-full mt-2 w-48 bg-surface rounded-lg shadow-2xl border border-edge py-1"
+              style={{ zIndex: 9999 }}
+              role="menu"
+            >
+              {/* Info lives ONLY here (#44). #30 added this entry and left the
+                  standalone top-bar button in place; the button is gone now, so
+                  this is the one way in (the swipe-up gesture aside). */}
+              <button
+                onClick={() => { setShowInfoPanel(!showInfoPanel); setMenuOpen(false); }}
+                className={menuItemClass}
+                role="menuitem"
+              >
+                <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                Info
+              </button>
+              {!isBackupServer && (
+                <button
+                  onClick={() => { setShowTagPanel(!showTagPanel); setMenuOpen(false); }}
+                  className={menuItemClass}
+                  role="menuitem"
+                >
+                  <AppIcon name="tag" />
+                  Tags
+                </button>
+              )}
+              {hasSlideshow && onStartSlideshow && (
+                <button
+                  onClick={() => { onStartSlideshow(); setMenuOpen(false); }}
+                  className={menuItemClass}
+                  role="menuitem"
+                >
+                  <svg className="w-4 h-4 shrink-0" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
+                  Start Slideshow
+                </button>
+              )}
+              <button
+                onClick={() => { onDownload(); setMenuOpen(false); }}
+                disabled={!mediaUrl || isRenderingVideo}
+                className={`${menuItemClass} disabled:opacity-50 disabled:cursor-wait`}
+                role="menuitem"
+              >
+                {isRenderingVideo
+                  ? <div className="w-4 h-4 shrink-0 border-2 border-fg-muted/40 border-t-fg-muted rounded-full animate-spin" />
+                  : <AppIcon name="download" />}
+                {isRenderingVideo ? "Converting…" : "Download"}
+              </button>
+              {!isBackupServer && (
+                <>
+                  <div className="border-t border-edge my-1" />
+                  {canRemoveFromAlbum ? (
+                    <button
+                      onClick={() => { onRemoveFromAlbum(); setMenuOpen(false); }}
+                      className="w-full text-left px-4 py-2 text-sm text-orange-500 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/30 flex items-center gap-2 transition-colors"
+                      role="menuitem"
+                    >
+                      <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M15 12H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                      Remove from album
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => { onDelete(); setMenuOpen(false); }}
+                      className="w-full text-left px-4 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 flex items-center gap-2 transition-colors"
+                      role="menuitem"
+                    >
+                      <AppIcon name="trashcan" />
+                      Delete
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </div>
     </div>

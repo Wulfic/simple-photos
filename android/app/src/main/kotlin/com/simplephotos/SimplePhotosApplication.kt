@@ -16,8 +16,15 @@ import coil.ImageLoader
 import coil.ImageLoaderFactory
 import coil.decode.GifDecoder
 import coil.decode.SvgDecoder
+import com.simplephotos.data.remote.ApiService
+import com.simplephotos.sync.CrashHandler
+import com.simplephotos.ui.navigation.AppWindows
 import com.simplephotos.ui.theme.ThemeState
 import dagger.hilt.android.HiltAndroidApp
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import javax.inject.Inject
 
@@ -38,14 +45,34 @@ class SimplePhotosApplication : Application(), Configuration.Provider, ImageLoad
     @Inject
     lateinit var okHttpClient: OkHttpClient
 
+    @Inject
+    lateinit var apiService: ApiService
+
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder()
             .setWorkerFactory(workerFactory)
             .build()
 
     override fun onCreate() {
+        // Install the crash handler FIRST, before any other init can throw —
+        // without it a UI-thread crash is completely invisible (no Crashlytics,
+        // DiagnosticLogger only runs inside BackupWorker). See CrashHandler.
+        CrashHandler.install(this)
         super.onCreate()
         ThemeState.init(dataStore)
+
+        // Count live MainActivity instances so "New Window" can be capped (#41).
+        // Registered here, before any activity can be created, so the very first
+        // window is counted — an activity that starts before this runs would be
+        // invisible to the cap and permanently offset the count.
+        AppWindows.install(this)
+
+        // Drain any crash logs captured on previous runs (best-effort, IO thread).
+        appScope.launch {
+            CrashHandler.uploadPendingCrashes(this@SimplePhotosApplication, apiService)
+        }
     }
 
     override fun newImageLoader(): ImageLoader {

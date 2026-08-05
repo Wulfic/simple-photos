@@ -9,6 +9,24 @@ import { request, tryRefresh, BASE } from "./core";
 import { useAuthStore } from "../store/auth";
 import type { TotpSetupResponse } from "./types";
 
+/** Conversion-pipeline progress, mirrors the server `ConversionStatusResponse`. */
+export interface ConversionStatus {
+  active: boolean;
+  total: number;
+  done: number;
+  /** Server-authoritative seconds remaining, or null when idle / not estimable.
+   *  Work-weighted and per-category since #40, so it is available from the
+   *  start of a batch rather than only after the first file completes. */
+  eta_seconds: number | null;
+  /** Epoch-ms of the last observed progress, or 0 when idle. Frozen while a
+   *  pass is wedged — the client uses this to offer a manual reset (#18). */
+  last_progress_at: number;
+  /** Times the watchdog / a manual reset has recovered a stall since boot. */
+  stall_count: number;
+  /** Epoch-ms of the most recent stall recovery, or 0 if none this boot. */
+  last_stall_at: number;
+}
+
 // ── Admin API ────────────────────────────────────────────────────────────────
 
 export const adminApi = {
@@ -219,6 +237,32 @@ export const adminApi = {
     );
   },
 
+  /**
+   * Rebuild Google Takeout album membership for photos that are ALREADY
+   * imported. Album membership is only captured at import time, so a library
+   * imported before that existed reconstructs partial or empty albums — and no
+   * other path repairs it (a re-scan skips already-registered files before the
+   * album code runs). Re-walks the Takeout tree under `path`, matches files to
+   * existing photos by content hash, and records the membership. Writes nothing
+   * else, and is idempotent — safe to re-run.
+   */
+  backfillTakeoutAlbums: (path: string) =>
+    request<{
+      directory: string;
+      albums_seen: number;
+      albums_recorded: number;
+      /** Albums whose real Google Photos name was recovered from metadata.json. */
+      albums_retitled: number;
+      photos_matched: number;
+      photos_unmatched: number;
+      shadowed_skipped: number;
+      errors: string[];
+      errors_total: number;
+    }>("/admin/import/google-photos/backfill-albums", {
+      method: "POST",
+      body: JSON.stringify({ path }),
+    }),
+
   getPort: () =>
     request<{ port: number; suggested_port: number; external_port?: number; message: string }>("/admin/port"),
 
@@ -239,23 +283,33 @@ export const adminApi = {
       method: "POST",
     }),
 
-  /** Get conversion pipeline status */
+  /** Get conversion pipeline status. `eta_seconds` is the server-authoritative
+   *  estimate of time remaining (item #4, reworked in #40), null when idle. */
   conversionStatus: () =>
-    request<{ active: boolean; total: number; done: number }>("/admin/conversion-status"),
+    request<ConversionStatus>("/admin/conversion-status"),
 
   /** Declare an upcoming convertible-upload batch so the conversion banner
    *  pins its denominator to `total` instead of tracking one ahead (#11).
    *  Pair every successful call with `conversionBatchEnd()`. */
   conversionBatchStart: (total: number) =>
-    request<{ active: boolean; total: number; done: number }>(
+    request<ConversionStatus>(
       "/admin/conversion-batch/start",
       { method: "POST", body: JSON.stringify({ total }) },
     ),
 
   /** Release the conversion batch pin set by `conversionBatchStart()`. */
   conversionBatchEnd: () =>
-    request<{ active: boolean; total: number; done: number }>(
+    request<ConversionStatus>(
       "/admin/conversion-batch/end",
+      { method: "POST" },
+    ),
+
+  /** Manual intervention (#18): force-clear a stuck conversion pipeline so the
+   *  AI/geo processors and the banner resume. Pairs with the server-side
+   *  watchdog for cases where the operator wants to recover immediately. */
+  conversionReset: () =>
+    request<ConversionStatus>(
+      "/admin/conversion/reset",
       { method: "POST" },
     ),
 

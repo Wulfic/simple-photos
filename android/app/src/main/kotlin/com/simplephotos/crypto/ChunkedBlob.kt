@@ -6,6 +6,7 @@ package com.simplephotos.crypto
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.File
+import java.io.IOException
 import java.io.InputStream
 import java.security.DigestOutputStream
 import java.security.MessageDigest
@@ -47,6 +48,49 @@ object ChunkedBlob {
      * there). Matches server `CHUNKED_THRESHOLD_BYTES` (32 MiB).
      */
     const val CHUNKED_THRESHOLD_BYTES: Long = 32L * 1024 * 1024
+
+    /**
+     * Per-frame AES-GCM overhead: 12-byte nonce prefix + 16-byte GCM tag. Matches
+     * server `FRAME_OVERHEAD`. Every frame's ciphertext is its plaintext + this.
+     */
+    const val FRAME_OVERHEAD: Int = 12 + 16
+
+    /**
+     * On-disk size of a *full* chunk frame: 4-byte big-endian length prefix +
+     * nonce + [CHUNK_SIZE] plaintext + tag. Matches server `FULL_FRAME_DISK_SIZE`.
+     * `Long` because a blob can exceed 2 GiB — the whole reason v2 exists.
+     */
+    const val FULL_FRAME_DISK_SIZE: Long = 4L + FRAME_OVERHEAD + CHUNK_SIZE
+
+    /**
+     * Byte offset of the first chunk frame, given the encrypted metadata-frame
+     * length read from the header. Layout: `MAGIC(8) + metaLen:u32(4) + encMeta`.
+     * Matches server `read_header_chunks_start`.
+     */
+    fun chunksStart(metaLen: Int): Long = MAGIC_SIZE.toLong() + 4L + metaLen
+
+    /**
+     * Total *plaintext* length of a v2 chunked blob, derived purely from the
+     * encrypted total size and the frame geometry — no decryption, no full-file
+     * walk. The server encoder writes exactly [CHUNK_SIZE] plaintext per non-final
+     * frame, so the layout is deterministic: every full frame occupies
+     * [FULL_FRAME_DISK_SIZE] on disk and only the trailing frame is short. Mirrors
+     * the sum that server `plaintext_len_from_file` computes by walking frames.
+     */
+    fun plaintextTotalOf(encryptedTotal: Long, chunksStart: Long): Long {
+        val dataRegion = encryptedTotal - chunksStart
+        require(dataRegion >= 0) { "chunked blob ($encryptedTotal) smaller than header ($chunksStart)" }
+        val fullBlocks = dataRegion / FULL_FRAME_DISK_SIZE
+        val remainder = dataRegion % FULL_FRAME_DISK_SIZE
+        val lastPlain = if (remainder == 0L) {
+            0L
+        } else {
+            val lp = remainder - 4L - FRAME_OVERHEAD
+            require(lp > 0L) { "malformed trailing chunk frame ($remainder bytes)" }
+            lp
+        }
+        return fullBlocks * CHUNK_SIZE + lastPlain
+    }
 
     /**
      * What the caller needs to build the upload request and `blobs` row after a
@@ -202,11 +246,72 @@ object ChunkedBlob {
 
     private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 
-    private fun readU32BE(b: ByteArray, off: Int): Int {
+    internal fun readU32BE(b: ByteArray, off: Int): Int {
         require(off + 4 <= b.size) { "truncated chunked blob (length prefix)" }
         return ((b[off].toInt() and 0xFF) shl 24) or
             ((b[off + 1].toInt() and 0xFF) shl 16) or
             ((b[off + 2].toInt() and 0xFF) shl 8) or
             (b[off + 3].toInt() and 0xFF)
+    }
+}
+
+/**
+ * Random-access **plaintext** reader over a v2 chunked blob that fetches and
+ * decrypts only the ~4 MiB frame(s) overlapping the requested position — never
+ * the whole file. This is what lets a video start (and seek) without first
+ * downloading + decrypting a multi-gigabyte blob (issue #17: large videos
+ * failing / small videos buffering slowly).
+ *
+ * Seek is O(1) frame arithmetic, mirroring the server's
+ * `decrypt_chunked_range_from_file`: plaintext byte `p` lives in frame
+ * `p / CHUNK_SIZE`, whose on-disk length-prefix sits at
+ * `chunksStart + frameIdx * FULL_FRAME_DISK_SIZE`.
+ *
+ * Deliberately free of Android and network types — [fetchBlock] (a blocking
+ * byte-range fetch) and [decryptFrame] (single AES-GCM frame) are injected, so
+ * the seek/slice/EOF arithmetic is unit-testable on the plain JVM with an
+ * in-memory container. One decrypted frame is cached so sequential reads within
+ * a frame don't re-fetch.
+ */
+class ChunkedRandomReader(
+    private val chunksStart: Long,
+    /** Total plaintext length — see [ChunkedBlob.plaintextTotalOf]. */
+    val plaintextTotal: Long,
+    /** Fetch exactly the bytes `[diskOffset, diskOffset+len)` (fewer at EOF). Blocking. */
+    private val fetchBlock: (diskOffset: Long, len: Long) -> ByteArray,
+    /** Decrypt one AES-GCM frame (`[nonce][ciphertext+tag]`) to plaintext. */
+    private val decryptFrame: (ByteArray) -> ByteArray,
+) {
+    private var cachedIdx: Long = -1
+    private var cached: ByteArray = ByteArray(0)
+
+    /**
+     * Copy up to [length] plaintext bytes starting at [position] into [dst] at
+     * [dstOffset]; returns the number copied (always ≥ 1 when in range) or `-1`
+     * at/after end-of-media. Serves from a single frame per call — the caller
+     * loops for more, exactly like an [okhttp3.ResponseBody] stream read.
+     */
+    fun readInto(position: Long, dst: ByteArray, dstOffset: Int, length: Int): Int {
+        require(position >= 0) { "negative position $position" }
+        if (position >= plaintextTotal || length <= 0) return -1
+        val idx = position / ChunkedBlob.CHUNK_SIZE
+        if (idx != cachedIdx) {
+            val diskOff = chunksStart + idx * ChunkedBlob.FULL_FRAME_DISK_SIZE
+            val block = fetchBlock(diskOff, ChunkedBlob.FULL_FRAME_DISK_SIZE)
+            if (block.size < 4) throw IOException("chunk $idx: short length prefix (${block.size}B)")
+            val frameLen = ChunkedBlob.readU32BE(block, 0)
+            if (block.size < 4 + frameLen) {
+                throw IOException("chunk $idx: truncated frame (have ${block.size}, need ${4 + frameLen})")
+            }
+            cached = decryptFrame(block.copyOfRange(4, 4 + frameLen))
+            cachedIdx = idx
+        }
+        val frameStart = idx * ChunkedBlob.CHUNK_SIZE
+        val within = (position - frameStart).toInt()
+        val avail = cached.size - within
+        if (avail <= 0) return -1
+        val n = minOf(length.toLong(), avail.toLong(), plaintextTotal - position).toInt()
+        System.arraycopy(cached, within, dst, dstOffset, n)
+        return n
     }
 }

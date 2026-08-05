@@ -1,6 +1,6 @@
 [package]
 name = "simple-photos-server"
-version = "1.5.1"
+version = "1.7.1"
 edition = "2021"
 description = "Self-hosted, end-to-end encrypted photo & video library server"
 license = "MIT"
@@ -24,6 +24,7 @@ bcrypt = "0.15"
 totp-rs = { version = "5", features = ["gen_secret", "otpauth"] }
 uuid = { version = "1", features = ["v4", "v7"] }
 sha2 = "0.10"
+hmac = "0.12"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"

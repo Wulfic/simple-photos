@@ -59,6 +59,9 @@ export interface ProgressBannerProps {
   pct?: number;
   /** When provided, renders a dismiss button wired to this handler. */
   onDismiss?: () => void;
+  /** Optional inline action (e.g. "Reset" for a stuck job, #18). Rendered as a
+   *  small underlined button beneath the label. `busy` disables it + relabels. */
+  action?: { label: string; busyLabel?: string; busy?: boolean; onClick: () => void };
 }
 
 export function ProgressBanner({
@@ -69,12 +72,13 @@ export function ProgressBanner({
   eta,
   pct,
   onDismiss,
+  action,
 }: ProgressBannerProps) {
   const t = TONE[tone];
 
   return (
     <BannerSlot id={id} priority={BANNERS[id]}>
-      <div className="card shadow-card-hover pointer-events-auto max-w-md mx-auto flex items-center gap-3 px-4 py-3">
+      <div className="card shadow-card-hover pointer-events-auto w-full max-w-md mx-auto flex items-center gap-3 px-4 py-3">
         <div
           className={`w-5 h-5 border-2 border-edge-strong ${t.spinner} rounded-full animate-spin flex-shrink-0`}
         />
@@ -89,6 +93,15 @@ export function ProgressBanner({
           </div>
           {description && (
             <p className="text-xs text-fg-muted mt-0.5">{description}</p>
+          )}
+          {action && (
+            <button
+              onClick={action.onClick}
+              disabled={action.busy}
+              className="text-xs text-accent-600 dark:text-accent-400 underline underline-offset-2 mt-0.5 disabled:opacity-60 disabled:no-underline"
+            >
+              {action.busy ? action.busyLabel ?? action.label : action.label}
+            </button>
           )}
           {pct !== undefined && (
             <div className="mt-1.5 h-1.5 bg-edge rounded-full overflow-hidden">

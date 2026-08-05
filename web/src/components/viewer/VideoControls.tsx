@@ -5,21 +5,28 @@
  */
 import { useState, useEffect, useRef, useCallback } from "react";
 import { castVideoControl } from "../../utils/cast";
+import { formatTimecode } from "../../utils/formatters";
+import {
+  formatRenditionLabel,
+  shouldOfferPicker,
+  type Rendition,
+} from "../../gallery/renditionChoice";
 
 interface VideoControlsProps {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   /** Controls visibility — tied to the viewer's overlay toggle */
   visible: boolean;
-}
-
-function formatTime(seconds: number): string {
-  if (!isFinite(seconds) || seconds < 0) return "0:00";
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
-  if (h > 0)
-    return `${h}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
-  return `${m}:${s.toString().padStart(2, "0")}`;
+  /**
+   * Resolution ladder (#49). Omitted, or fewer than two entries, means this
+   * video has exactly one quality — the normal case — and no gear icon is
+   * drawn. A one-entry menu advertises a choice the user does not have.
+   */
+  renditions?: Rendition[];
+  /** Selected rung; undefined while playing the original. */
+  selectedRendition?: Rendition;
+  /** True while a chosen rung is downloading. */
+  switchingRendition?: boolean;
+  onSelectRendition?: (r: Rendition) => void;
 }
 
 /**
@@ -29,7 +36,14 @@ function formatTime(seconds: number): string {
  * to the video element doesn't rotate the UI controls along with it.
  * These controls sit outside the rotation wrapper.
  */
-export default function VideoControls({ videoRef, visible }: VideoControlsProps) {
+export default function VideoControls({
+  videoRef,
+  visible,
+  renditions,
+  selectedRendition,
+  switchingRendition = false,
+  onSelectRendition,
+}: VideoControlsProps) {
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -37,6 +51,21 @@ export default function VideoControls({ videoRef, visible }: VideoControlsProps)
   const seekBarRef = useRef<HTMLDivElement>(null);
   const [seeking, setSeeking] = useState(false);
   const rafRef = useRef(0);
+  const [qualityOpen, setQualityOpen] = useState(false);
+
+  const ladder = renditions ?? [];
+  // One home for "is there actually a choice here" — the hook asks the same
+  // question, and two copies of a `>= 2` literal is how they drift.
+  const hasPicker = shouldOfferPicker(ladder) && !!onSelectRendition;
+  // The original is the implicit selection, so "nothing selected" and "the
+  // source rung selected" must tick the same row.
+  const activeShortEdge = selectedRendition?.short_edge ?? ladder.find((r) => r.is_source)?.short_edge;
+
+  // Close the menu when the controls hide, otherwise it stays mounted and
+  // clickable underneath an invisible bar.
+  useEffect(() => {
+    if (!visible) setQualityOpen(false);
+  }, [visible]);
 
   // ── Sync state with the <video> element ──────────────────────────────────
   useEffect(() => {
@@ -132,7 +161,9 @@ export default function VideoControls({ videoRef, visible }: VideoControlsProps)
       }`}
       onClick={(e) => e.stopPropagation()}
     >
-      <div className="bg-gradient-to-t from-black/80 via-black/50 to-transparent pt-10 pb-3 px-4">
+      {/* safe-pb-3 replaces pb-3 and safe-px clears the landscape notch (#50) —
+          landscape is the orientation video is actually watched in. */}
+      <div className="bg-gradient-to-t from-black/80 via-black/50 to-transparent pt-10 safe-pb-3 px-4 safe-px">
         {/* Seek bar */}
         <div
           ref={seekBarRef}
@@ -179,10 +210,81 @@ export default function VideoControls({ videoRef, visible }: VideoControlsProps)
 
           {/* Time */}
           <span className="text-white/80 text-xs font-mono select-none min-w-[5.5rem]">
-            {formatTime(currentTime)} / {formatTime(duration)}
+            {formatTimecode(currentTime)} / {formatTimecode(duration)}
           </span>
 
           <div className="flex-1" />
+
+          {/* Quality picker (#49) — only when a real choice exists */}
+          {hasPicker && (
+            <div className="relative">
+              {qualityOpen && (
+                <>
+                  {/* Click-away catcher. Sits below the menu but above the
+                      page so a tap outside closes rather than seeking. */}
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => setQualityOpen(false)}
+                    aria-hidden="true"
+                  />
+                  <div
+                    role="menu"
+                    aria-label="Playback quality"
+                    className="absolute bottom-full right-0 mb-2 z-50 min-w-[10rem] rounded-lg bg-black/90 backdrop-blur-sm border border-white/10 shadow-lg py-1"
+                  >
+                    {ladder.map((r) => {
+                      const active = r.short_edge === activeShortEdge;
+                      return (
+                        <button
+                          key={r.short_edge}
+                          role="menuitemradio"
+                          aria-checked={active}
+                          onClick={() => {
+                            onSelectRendition?.(r);
+                            setQualityOpen(false);
+                          }}
+                          className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 transition-colors ${
+                            active ? "text-accent-400" : "text-white/80 hover:bg-white/10"
+                          }`}
+                        >
+                          <span className="w-4 shrink-0">
+                            {active && (
+                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="m5 13 4 4L19 7" />
+                              </svg>
+                            )}
+                          </span>
+                          {formatRenditionLabel(r)}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+              <button
+                onClick={() => setQualityOpen((o) => !o)}
+                className="text-white/70 hover:text-white transition-colors relative"
+                aria-label="Playback quality"
+                aria-haspopup="menu"
+                aria-expanded={qualityOpen}
+              >
+                <svg
+                  className={`w-5 h-5 ${switchingRendition ? "animate-spin" : ""}`}
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 0 0-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 0 0-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 0 0-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 0 0-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 0 0 1.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065Z"
+                  />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+                </svg>
+              </button>
+            </div>
+          )}
 
           {/* Mute / Unmute */}
           <button

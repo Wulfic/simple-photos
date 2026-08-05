@@ -15,8 +15,12 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Slider
@@ -38,7 +42,25 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import com.simplephotos.data.media.Rendition
+import com.simplephotos.data.media.chooseDefaultRendition
+import com.simplephotos.data.media.formatRenditionLabel
+import com.simplephotos.data.media.offerableRenditions
+import com.simplephotos.data.media.shouldOfferPicker
 import kotlinx.coroutines.delay
+
+/**
+ * Playback state carried across a media-source swap (#49).
+ *
+ * A quality change re-prepares the player, which otherwise restarts from zero
+ * and — because the load path sets `playWhenReady = true` — silently resumes a
+ * video the user had deliberately paused. Both directions must be restored, so
+ * this carries the play state as well as the playhead.
+ *
+ * Null at a call site means "fresh load": start at the beginning and play,
+ * which is what opening a new video should do.
+ */
+data class VideoResume(val positionMs: Long, val playing: Boolean)
 
 // ---------------------------------------------------------------------------
 // Video/Audio page — renders the shared ExoPlayer's PlayerView when this
@@ -54,8 +76,15 @@ internal fun VideoPlayerPage(
     activeVideoUri: Uri?,
     isActivePage: Boolean,
     filename: String,
-    onVideoUriReady: (Uri, String) -> Unit,
+    onVideoUriReady: (Uri, String, VideoResume?) -> Unit,
     onDurationKnown: ((Float) -> Unit)? = null,
+    /**
+     * The #49 resolution ladder for this video, or empty for the normal
+     * one-quality case (which draws no gear icon at all).
+     */
+    renditions: List<Rendition> = emptyList(),
+    /** Whether to default to a reduced quality — see [rememberQualityConstrained]. */
+    qualityConstrained: Boolean = false,
     // Trim boundaries (seconds) — applied during playback
     trimStart: Float = 0f,
     trimEnd: Float = 0f,
@@ -78,11 +107,72 @@ internal fun VideoPlayerPage(
     // in-player controls, so the chrome is reachable on video pages too.
     onToggleControls: () -> Unit = {}
 ) {
+    // ── Resolution ladder (#49) ─────────────────────────────────────────────
+    // Keyed on `uri` so navigating to another video resets the choice: a
+    // different photo has a different ladder, and carrying a selection across
+    // would point at another video's rung.
+    //
+    // Android's swap is far simpler than web's and it is worth saying why, so
+    // nobody "fixes" it by porting web's machinery. Web downloads and decrypts
+    // a whole blob into an object URL, which forces it to worry about caching
+    // the rendition under the original's key and about revoking a URL somebody
+    // else owns. Here every quality is just `spblob://<blobId>` streamed
+    // lazily by MediaBlobDataSource over range requests — no download, no
+    // cache keyed by blob id, no URL to own. Switching quality is only ever a
+    // change of URI.
+    var selectedRendition by remember(uri) { mutableStateOf<Rendition?>(null) }
+    var pendingResume by remember(uri) { mutableStateOf<VideoResume?>(null) }
+    var defaultApplied by remember(uri) { mutableStateOf(false) }
+
+    // Editing must operate on the original: a crop or trim saved while a 1080p
+    // rung is on screen would re-encode the DOWNSCALE over the user's 4K
+    // master. Reverting the selection rather than merely hiding the gear icon
+    // is the point — hiding a control does not change what is playing.
+    val pickerEnabled = !editMode
+    LaunchedEffect(editMode) {
+        if (editMode && selectedRendition != null) {
+            pendingResume = VideoResume(sharedPlayer.currentPosition, sharedPlayer.isPlaying)
+            selectedRendition = null
+        }
+    }
+
+    val offerable = remember(renditions) { offerableRenditions(renditions) }
+    val hasPicker = pickerEnabled && shouldOfferPicker(renditions)
+
+    // The URI actually handed to the player. The SOURCE rung's blobId is the
+    // photo's own encrypted blob — a second reference to bytes the photo
+    // already owns, not a copy (which is why migration 037 had to stop the
+    // orphan trigger queueing it). So selecting "Original" resolves to exactly
+    // the URI already loaded, and PhotoViewerScreen's `uri != activeVideoUri`
+    // guard turns it into a genuine no-op rather than a re-prepare.
+    val effectiveUri = remember(uri, selectedRendition) {
+        val r = selectedRendition
+        if (r == null || r.isSource || r.blobId == null) uri
+        else MediaBlobDataSource.uriFor(r.blobId)
+    }
+
+    // Default to a capped rung on a metered link, once per video, and only
+    // when a genuine choice exists. On an unmetered link the default is the
+    // source — the URI already loaded — so the common case costs nothing.
+    LaunchedEffect(isActivePage, hasPicker, qualityConstrained) {
+        if (!isActivePage || !hasPicker || defaultApplied) return@LaunchedEffect
+        defaultApplied = true
+        // `offerable`, not the raw list — defaulting to a rung the picker
+        // refuses to show would leave the menu ticking nothing and no way back.
+        val preferred = chooseDefaultRendition(offerable, qualityConstrained)
+        // A source default costs nothing: it is the URI already loaded.
+        if (preferred != null && !preferred.isSource) {
+            selectedRendition = preferred
+        }
+    }
+
     // When this page becomes active, notify the screen to load our URI
     // into the shared player.
-    LaunchedEffect(isActivePage, uri) {
+    LaunchedEffect(isActivePage, effectiveUri) {
         if (isActivePage) {
-            onVideoUriReady(uri, filename)
+            val resume = pendingResume
+            pendingResume = null
+            onVideoUriReady(effectiveUri, filename, resume)
         }
     }
 
@@ -123,8 +213,9 @@ internal fun VideoPlayerPage(
     }
 
     // Enforce trim boundaries during playback — seek to trimStart when
-    // playback begins, pause when trimEnd is reached.
-    LaunchedEffect(isActivePage, trimStart, trimEnd) {
+    // playback begins, and at trimEnd either pause (edit mode, so the user can
+    // scrub the boundary) or loop back to trimStart (normal viewing, #22).
+    LaunchedEffect(isActivePage, trimStart, trimEnd, editMode) {
         if (!isActivePage) return@LaunchedEffect
         val listener = object : androidx.media3.common.Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
@@ -144,8 +235,14 @@ internal fun VideoPlayerPage(
                 if (trimEnd > 0.01f) {
                     val currentMs = sharedPlayer.currentPosition
                     if (currentMs >= (trimEnd * 1000).toLong()) {
-                        sharedPlayer.playWhenReady = false
-                        sharedPlayer.seekTo((trimEnd * 1000).toLong())
+                        if (editMode) {
+                            // Editing the trim: stop at the boundary so it can be scrubbed.
+                            sharedPlayer.playWhenReady = false
+                            sharedPlayer.seekTo((trimEnd * 1000).toLong())
+                        } else {
+                            // Normal viewing: loop within the trimmed range.
+                            sharedPlayer.seekTo((trimStart * 1000).toLong())
+                        }
                     }
                 }
             }
@@ -398,7 +495,30 @@ internal fun VideoPlayerPage(
             VideoControlsOverlay(
                 player = sharedPlayer,
                 visible = showControls,
-                modifier = Modifier.align(Alignment.BottomCenter)
+                modifier = Modifier.align(Alignment.BottomCenter),
+                renditions = if (hasPicker) offerable else emptyList(),
+                selectedRendition = selectedRendition,
+                onSelectRendition = { target ->
+                    val alreadyOnSource = selectedRendition == null && target.isSource
+                    val alreadyOnTarget = target.shortEdge == selectedRendition?.shortEdge
+                    // Re-picking what is already playing must be a no-op, and
+                    // the source case is the one that bites: selecting
+                    // "Original" while it is already playing leaves
+                    // `effectiveUri` unchanged, so the swap effect never fires
+                    // and a resume snapshot captured here would sit stale until
+                    // some LATER quality change consumed it — seeking the video
+                    // back to wherever the user happened to be at this tap.
+                    if (!alreadyOnSource && !alreadyOnTarget) {
+                        // Capture the playhead BEFORE the URI changes. Read
+                        // after the swap it would already be 0, and the video
+                        // would restart from the beginning every time.
+                        pendingResume = VideoResume(
+                            sharedPlayer.currentPosition,
+                            sharedPlayer.isPlaying,
+                        )
+                        selectedRendition = if (target.isSource) null else target
+                    }
+                }
             )
         }
     } else {
@@ -420,7 +540,12 @@ internal fun VideoPlayerPage(
 internal fun VideoControlsOverlay(
     player: ExoPlayer,
     visible: Boolean,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** Qualities to offer, highest first. Empty ⇒ no gear icon (#49). */
+    renditions: List<Rendition> = emptyList(),
+    /** Null means the source rung — the photo's own blob — is playing. */
+    selectedRendition: Rendition? = null,
+    onSelectRendition: (Rendition) -> Unit = {},
 ) {
     // ── Reactive player state ──────────────────────────────────────────────
     var isPlaying by remember { mutableStateOf(player.isPlaying) }
@@ -469,6 +594,15 @@ internal fun VideoControlsOverlay(
                         colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f))
                     )
                 )
+                // Clear the navigation bar (#50). An 8dp bottom margin put
+                // play/pause/mute directly under a 48dp 3-button nav bar.
+                //
+                // Placed AFTER .background on purpose: the gradient is sized
+                // before this inset, so it keeps painting behind the nav bar
+                // instead of cutting off in a hard line above it. Only the
+                // controls move up. Same ordering as ViewerEditPanel /
+                // ViewerTagPanel / ViewerInfoPanel.
+                .navigationBarsPadding()
                 // Consume taps within the controls area so they don't toggle visibility
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
@@ -521,6 +655,52 @@ internal fun VideoControlsOverlay(
                 )
 
                 Spacer(Modifier.weight(1f))
+
+                // Quality picker (#49) — drawn only when there is a genuine
+                // choice. A one-entry menu implies a choice the user does not
+                // have, and one quality is the normal case for the great
+                // majority of the library.
+                if (renditions.size >= 2) {
+                    var menuOpen by remember { mutableStateOf(false) }
+                    Box {
+                        IconButton(onClick = { menuOpen = true }) {
+                            Icon(
+                                imageVector = Icons.Filled.Settings,
+                                contentDescription = "Video quality",
+                                tint = Color.White.copy(alpha = 0.7f),
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = menuOpen,
+                            onDismissRequest = { menuOpen = false }
+                        ) {
+                            renditions.forEach { r ->
+                                // Null selection means the source rung is
+                                // playing, so the tick belongs on the source
+                                // entry — not on nothing.
+                                val isSelected = if (selectedRendition == null) r.isSource
+                                else r.shortEdge == selectedRendition.shortEdge
+                                DropdownMenuItem(
+                                    text = { Text(formatRenditionLabel(r)) },
+                                    onClick = {
+                                        menuOpen = false
+                                        onSelectRendition(r)
+                                    },
+                                    trailingIcon = {
+                                        if (isSelected) {
+                                            Icon(
+                                                imageVector = Icons.Filled.Check,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
 
                 // Mute / unmute
                 IconButton(onClick = {

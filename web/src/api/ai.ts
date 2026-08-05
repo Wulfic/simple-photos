@@ -24,6 +24,12 @@ export interface FaceCluster {
   label: string | null;
   photo_count: number;
   representative: string | null;
+  /** Representative face bbox (normalised 0–1) for cropping the People tile.
+   *  Null when the server couldn't resolve a detection for the representative. */
+  rep_bbox_x: number | null;
+  rep_bbox_y: number | null;
+  rep_bbox_w: number | null;
+  rep_bbox_h: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -38,6 +44,18 @@ export interface FaceDetectionRecord {
   bbox_h: number;
   confidence: number;
   created_at: string;
+}
+
+/** One face detected in a specific photo, with its current person label. */
+export interface PhotoFace {
+  id: number;
+  cluster_id: number | null;
+  cluster_label: string | null;
+  bbox_x: number;
+  bbox_y: number;
+  bbox_w: number;
+  bbox_h: number;
+  confidence: number;
 }
 
 export interface ObjectClassSummary {
@@ -64,6 +82,13 @@ export interface PetCluster {
   species: string;
   photo_count: number;
   representative: string | null;
+  /** Representative animal bbox (normalised 0–1) for framing the Pets tile.
+   *  Same contract as FaceCluster's — null when the photo predates the box
+   *  being stored (migration 039) or no detection resolved. */
+  rep_bbox_x: number | null;
+  rep_bbox_y: number | null;
+  rep_bbox_w: number | null;
+  rep_bbox_h: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -123,6 +148,20 @@ export const aiApi = {
       {
         method: "POST",
         body: JSON.stringify({ detection_ids: detectionIds }),
+      }
+    ),
+
+  /** List the faces detected in one photo (with current person labels) */
+  listPhotoFaces: (photoId: string) =>
+    request<PhotoFace[]>(`/ai/photos/${encodeURIComponent(photoId)}/faces`),
+
+  /** Manually reassign a face detection to a person (cluster) */
+  assignFace: (detectionId: number, clusterId: number) =>
+    request<{ detection_id: number; cluster_id: number; photo_id: string }>(
+      "/ai/faces/assign",
+      {
+        method: "POST",
+        body: JSON.stringify({ detection_id: detectionId, cluster_id: clusterId }),
       }
     ),
 

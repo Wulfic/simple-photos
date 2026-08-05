@@ -29,13 +29,18 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
+import com.simplephotos.ui.components.AlbumPickerDialog
 import com.simplephotos.ui.components.CloudBackupBadge
 import com.simplephotos.ui.components.TileSelectionCircle
 import com.simplephotos.ui.components.rememberThumbnailRequest
+import com.simplephotos.ui.navigation.DetailNavBar
+import com.simplephotos.data.album.AlbumSortDir
+import com.simplephotos.data.album.AlbumSortField
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.local.entities.SyncStatus
 import java.io.File
@@ -52,9 +57,14 @@ fun AlbumDetailScreen(
     viewModel: AlbumDetailViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
+    var menuExpanded by remember { mutableStateOf(false) }
+    var sortMenuExpanded by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
+          Column {
+            // Persistent main navbar across the albums section (#35).
+            DetailNavBar()
             if (viewModel.isSelectionMode) {
                 // ── Selection mode top bar ─────────────────────────
                 Surface(
@@ -65,12 +75,18 @@ fun AlbumDetailScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .statusBarsPadding()
+                            // AppHeader (DetailNavBar) above already consumed the
+                            // status-bar inset, so no statusBarsPadding here (#35).
                             .padding(horizontal = 12.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        // weight(1f) so a large count truncates instead of shoving
+                        // the Remove button off-screen (#36).
+                        Row(
+                            modifier = Modifier.weight(1f),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                             IconButton(onClick = { viewModel.clearSelection() }, modifier = Modifier.size(32.dp)) {
                                 Icon(Icons.Default.Close, contentDescription = "Cancel", modifier = Modifier.size(20.dp))
                             }
@@ -78,22 +94,50 @@ fun AlbumDetailScreen(
                             Text(
                                 "${viewModel.selectedIds.size} selected",
                                 style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.Medium
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false)
                             )
                             Spacer(Modifier.width(8.dp))
                             TextButton(
                                 onClick = { viewModel.selectAll() },
                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                             ) {
-                                Text("Select All", fontSize = 12.sp)
+                                Text("Select All", fontSize = 12.sp, maxLines = 1)
                             }
                         }
+                        Spacer(Modifier.width(8.dp))
+                        // Z1: the header offered a Remove and nothing else — no
+                        // way to file the selection into another album, which is
+                        // the divergence the report names from the regular side.
+                        // Hidden for smart albums, which have no manifest to add
+                        // to (and no other album to add *from*).
+                        if (!viewModel.isSmartAlbum) {
+                            OutlinedButton(
+                                onClick = { viewModel.showAddToAlbum = true },
+                                enabled = viewModel.selectedIds.isNotEmpty(),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                            ) {
+                                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Add to album", fontSize = 12.sp, maxLines = 1)
+                            }
+                            Spacer(Modifier.width(8.dp))
+                        }
                         Button(
-                            onClick = { viewModel.removeSelectedFromAlbum() },
+                            // Confirms now (Z1). It also un-files rather than
+                            // deletes, which is what the dialog body says — the
+                            // trash icon alone would make it look destructive.
+                            onClick = { viewModel.showRemoveConfirm = true },
                             enabled = viewModel.selectedIds.isNotEmpty(),
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                         ) {
-                            Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Icon(
+                                Icons.Default.Delete,
+                                contentDescription = "Remove from album",
+                                modifier = Modifier.size(16.dp)
+                            )
                             Spacer(Modifier.width(4.dp))
                             Text("Remove", fontSize = 12.sp)
                         }
@@ -112,23 +156,100 @@ fun AlbumDetailScreen(
                             Icon(
                                 painter = painterResource(R.drawable.ic_back_arrow),
                                 contentDescription = "Back",
-                                modifier = Modifier.size(12.dp)
+                                // 24dp = standard Material action-icon glyph. Was
+                                // 12dp, which rendered a tiny, hard-to-hit icon.
+                                modifier = Modifier.size(24.dp)
                             )
                         }
                     },
+                    // Add-items `+` and a ⋮ overflow menu (Rename · Delete),
+                    // replacing the standalone trashcan (#35).
                     actions = {
-                        if (!viewModel.isSmartAlbum) {
-                            IconButton(onClick = { viewModel.showDeleteConfirm = true }) {
-                                Icon(
-                                    painter = painterResource(R.drawable.ic_trashcan),
-                                    contentDescription = "Delete album",
-                                    modifier = Modifier.size(12.dp)
+                        // Sort control (#52) — shown for every album kind. The menu
+                        // stays open on tap so a second tap on the active field
+                        // reverses its direction (mirrors web's toggle); dismiss by
+                        // tapping outside.
+                        Box {
+                            val d = viewModel.displaySort
+                            TextButton(onClick = { sortMenuExpanded = true }) {
+                                Text(
+                                    (if (d.field == AlbumSortField.DATE) "Date" else "Name") +
+                                        (if (d.dir == AlbumSortDir.ASC) " ↑" else " ↓")
                                 )
                             }
+                            DropdownMenu(
+                                expanded = sortMenuExpanded,
+                                onDismissRequest = { sortMenuExpanded = false }
+                            ) {
+                                listOf(
+                                    AlbumSortField.DATE to "Date",
+                                    AlbumSortField.NAME to "Name",
+                                ).forEach { (field, label) ->
+                                    val active = d.field == field
+                                    val arrow = if (d.dir == AlbumSortDir.ASC) " ↑" else " ↓"
+                                    DropdownMenuItem(
+                                        text = { Text(label + if (active) arrow else "") },
+                                        onClick = { viewModel.selectSortField(field) },
+                                        trailingIcon = if (active) {
+                                            { Icon(Icons.Default.Check, contentDescription = null) }
+                                        } else null,
+                                    )
+                                }
+                            }
                         }
-                    }
+                        if (!viewModel.isSmartAlbum) {
+                            IconButton(onClick = { viewModel.openAddPanel() }) {
+                                Icon(
+                                    Icons.Default.Add,
+                                    contentDescription = "Add photos",
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+                            Box {
+                                IconButton(onClick = { menuExpanded = true }) {
+                                    Icon(
+                                        Icons.Default.MoreVert,
+                                        contentDescription = "More options",
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
+                                DropdownMenu(
+                                    expanded = menuExpanded,
+                                    onDismissRequest = { menuExpanded = false }
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text("Rename") },
+                                        onClick = {
+                                            menuExpanded = false
+                                            viewModel.showRenameDialog = true
+                                        },
+                                        leadingIcon = {
+                                            Icon(Icons.Default.Edit, contentDescription = null)
+                                        },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                                        onClick = {
+                                            menuExpanded = false
+                                            viewModel.showDeleteConfirm = true
+                                        },
+                                        leadingIcon = {
+                                            Icon(
+                                                Icons.Default.Delete,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.error,
+                                            )
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    },
+                    // AppHeader above already consumed the status-bar inset.
+                    windowInsets = WindowInsets(0),
                 )
             }
+          } // end Column (navbar + album/selection bar)
         }
     ) { padding ->
         Box(modifier = Modifier.padding(padding).fillMaxSize()) {
@@ -152,7 +273,12 @@ fun AlbumDetailScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                // weight(1f) so a large count truncates instead of shoving
+                                // the Add button off-screen (#36).
+                                Row(
+                                    modifier = Modifier.weight(1f),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
                                     IconButton(onClick = { viewModel.showAddPanel = false }, modifier = Modifier.size(32.dp)) {
                                         Icon(Icons.Default.Close, contentDescription = "Cancel", modifier = Modifier.size(20.dp))
                                     }
@@ -160,16 +286,20 @@ fun AlbumDetailScreen(
                                     Text(
                                         "${viewModel.selectedToAdd.size} selected",
                                         style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.Medium
+                                        fontWeight = FontWeight.Medium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f, fill = false)
                                     )
                                     Spacer(Modifier.width(8.dp))
                                     TextButton(
                                         onClick = { viewModel.selectAllAvailable() },
                                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                                     ) {
-                                        Text("Select All", fontSize = 12.sp)
+                                        Text("Select All", fontSize = 12.sp, maxLines = 1)
                                     }
                                 }
+                                Spacer(Modifier.width(8.dp))
                                 Button(
                                     onClick = { viewModel.confirmAdd() },
                                     enabled = viewModel.selectedToAdd.isNotEmpty(),
@@ -241,35 +371,8 @@ fun AlbumDetailScreen(
                 }
                 else -> {
                     Column(modifier = Modifier.fillMaxSize()) {
-                        // Add photos button at top of page (not for smart albums)
-                        if (!viewModel.isSmartAlbum) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    "${viewModel.photos.size} photo${if (viewModel.photos.size != 1) "s" else ""}",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                OutlinedButton(onClick = { viewModel.openAddPanel() }) {
-                                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(Modifier.width(4.dp))
-                                    Text("Add Photos", fontSize = 13.sp)
-                                }
-                            }
-                        } else {
-                            // Just show photo count for smart albums
-                            Text(
-                                "${viewModel.photos.size} item${if (viewModel.photos.size != 1) "s" else ""}",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-                            )
-                        }
+                        // #35: the photo-count text and the separate Add-Photos
+                        // header row are gone — adding is the header `+`.
 
                         // Justified grid matches the main gallery layout so
                         // albums look the same as the Photos page.
@@ -308,6 +411,72 @@ fun AlbumDetailScreen(
                 }
             }
         }
+    }
+
+    // Rename album dialog (#35)
+    if (viewModel.showRenameDialog) {
+        var name by remember(viewModel.album?.localId) {
+            mutableStateOf(viewModel.album?.name ?: "")
+        }
+        AlertDialog(
+            onDismissRequest = { viewModel.showRenameDialog = false },
+            title = { Text("Rename Album") },
+            text = {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    singleLine = true,
+                    label = { Text("Name") },
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { viewModel.renameAlbum(name) },
+                    enabled = name.trim().isNotEmpty(),
+                ) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.showRenameDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    // Remove-from-album confirmation (Z1). The wording is shared with the secure
+    // side and with web via [AlbumRemoval] — the second sentence is the one that
+    // earns the dialog, because "Remove" behind a trash icon reads as a delete
+    // and this un-files the photo without deleting anything.
+    if (viewModel.showRemoveConfirm && viewModel.selectedIds.isNotEmpty()) {
+        val prompt = AlbumRemoval.albumRemovalPrompt(
+            viewModel.selectedIds.size,
+            if (viewModel.isSmartAlbum) viewModel.smartAlbumLabel else viewModel.album?.name,
+        )
+        AlertDialog(
+            onDismissRequest = { viewModel.showRemoveConfirm = false },
+            title = { Text(prompt.title) },
+            text = { Text(prompt.body) },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.showRemoveConfirm = false
+                    viewModel.removeSelectedFromAlbum()
+                }) { Text("Remove") }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.showRemoveConfirm = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    // "+ Add to album" for the current selection (Z1). The photos stay in THIS
+    // album — the picker merges into the target's manifest and touches no other.
+    if (viewModel.showAddToAlbum && viewModel.selectedIds.isNotEmpty()) {
+        AlbumPickerDialog(
+            albums = viewModel.addToAlbumTargets,
+            subtitle = "${if (viewModel.selectedIds.size != 1) "They stay" else "It stays"} in " +
+                "\"${viewModel.album?.name ?: "this album"}\" as well.",
+            onDismiss = { viewModel.showAddToAlbum = false },
+            onAlbumSelected = { viewModel.addSelectedToAlbum(it) },
+            onCreateAlbum = { viewModel.createAlbumAndAddSelected(it) },
+        )
     }
 
     // Delete album confirmation

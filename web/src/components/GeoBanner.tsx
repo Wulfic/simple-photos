@@ -165,7 +165,7 @@ export default function GeoBanner() {
   if (unavailable) {
     return (
       <BannerSlot id="geo" priority={BANNERS.geo}>
-        <div className="card shadow-card-hover border-amber-300 dark:border-amber-700 pointer-events-auto max-w-md mx-auto flex items-center gap-3 px-4 py-3">
+        <div className="card shadow-card-hover border-amber-300 dark:border-amber-700 pointer-events-auto w-full max-w-md mx-auto flex items-center gap-3 px-4 py-3">
           <svg className="w-5 h-5 text-amber-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
           </svg>

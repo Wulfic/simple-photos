@@ -14,6 +14,7 @@ import { useAppNavigate } from "../hooks/useAppNavigate";
 import { useScrollMemory } from "../hooks/useScrollMemory";
 import { api } from "../api/client";
 import { type CachedPhoto, ACCEPTED_MIME_TYPES, db } from "../db";
+import { deleteThumbs, resolveThumb } from "../db/thumbs";
 import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
 import AddToAlbumModal from "../components/AddToAlbumModal";
@@ -29,7 +30,7 @@ import { useAuthStore } from "../store/auth";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
 import { toast } from "../store/toast";
 import { useSecureAdd } from "../store/secureAdd";
-import { addPhotosToSecureGallery } from "../utils/secureAdd";
+import { addPhotosToSecureGallery, secureAddResultMessage } from "../utils/secureAdd";
 import { getErrorMessage } from "../utils/formatters";
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -200,13 +201,16 @@ export default function Gallery() {
             takenAt: cached.takenAt,
             deletedAt: Date.now(),
             expiresAt: result.expires_at,
-            thumbnailData: cached.thumbnailData,
+            // The trash row keeps its own bytes — the photo row and its thumbs
+            // entry are about to go.
+            thumbnailData: (await resolveThumb(cached))?.data,
             duration: cached.duration,
             albumIds: cached.albumIds ?? [],
           });
         }
         // Remove immediately from local IDB so the gallery updates at once
         await db.photos.delete(id);
+        await deleteThumbs([id]);
       }
       await loadEncryptedPhotos();
     } catch (err: unknown) {
@@ -221,13 +225,19 @@ export default function Gallery() {
     if (!secureAddTarget || selectedIds.size === 0 || addingSecure) return;
     setAddingSecure(true);
     try {
-      const count = await addPhotosToSecureGallery(secureAddTarget.galleryId, Array.from(selectedIds));
-      toast.success(`Added ${count} photo${count !== 1 ? "s" : ""} to ${secureAddTarget.galleryName}`);
-      const target = secureAddTarget.galleryId;
-      clearSelection();
-      cancelSecureAdd();
-      await loadEncryptedPhotos();
-      navigate(`/secure-gallery?album=${target}`);
+      const result = await addPhotosToSecureGallery(secureAddTarget.galleryId, Array.from(selectedIds));
+      const msg = secureAddResultMessage(result, secureAddTarget.galleryName);
+      if (msg.success) toast.success(msg.success);
+      if (msg.error) toast.error(msg.error);
+      // Only leave for the secure album once something moved; if the whole batch
+      // failed, keep the selection so the user can retry.
+      if (result.added > 0) {
+        const target = secureAddTarget.galleryId;
+        clearSelection();
+        cancelSecureAdd();
+        await loadEncryptedPhotos();
+        navigate(`/secure-gallery?album=${target}`);
+      }
     } catch (err: unknown) {
       toast.error(getErrorMessage(err));
     } finally {
@@ -425,7 +435,7 @@ export default function Gallery() {
             inputs gate only on local `uploading`, never on server-side
             conversion, so manual upload stays available during background work. */}
         {!isBackupView && !isBackupServer && (
-        <div className="fixed bottom-6 right-6 z-[60]">
+        <div className="fixed safe-bottom-6 right-6 z-[60]">
           {/* Upload menu popover */}
           {showUploadMenu && (
             <>
@@ -682,7 +692,6 @@ export default function Gallery() {
                     storageBlobId: photo.storageBlobId,
                     serverPhotoId: photo.serverPhotoId,
                     serverSide: photo.serverSide,
-                    thumbnailData: photo.thumbnailData,
                     thumbnailMimeType: photo.thumbnailMimeType,
                     encryptedThumbBlobId: photo.thumbnailBlobId,
                   };

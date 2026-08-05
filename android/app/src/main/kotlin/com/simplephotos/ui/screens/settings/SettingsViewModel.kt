@@ -20,6 +20,7 @@ import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_BIOMETRIC_ENABL
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_DIAGNOSTIC_LOGGING
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_SERVER_URL
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_THUMBNAIL_SIZE
+import com.simplephotos.ui.screens.viewer.KEY_CELLULAR_DATA_SAVER
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_USERNAME
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -98,6 +99,10 @@ class SettingsViewModel @Inject constructor(
     var scanning by mutableStateOf(false)
     var scanResult by mutableStateOf<String?>(null)
 
+    /** #49 — cap video quality at 1080p on a metered link. */
+    var cellularDataSaver by mutableStateOf(true)
+        private set
+
     init {
         viewModelScope.launch {
             val prefs = dataStore.data.first()
@@ -106,6 +111,9 @@ class SettingsViewModel @Inject constructor(
             diagnosticLogging = prefs[KEY_DIAGNOSTIC_LOGGING] ?: false
             biometricEnabled = prefs[KEY_BIOMETRIC_ENABLED] ?: false
             thumbnailSize = prefs[KEY_THUMBNAIL_SIZE] ?: "normal"
+            // Defaults ON — see KEY_CELLULAR_DATA_SAVER for why the asymmetry
+            // favours not spending someone's mobile data by surprise.
+            cellularDataSaver = prefs[KEY_CELLULAR_DATA_SAVER] ?: true
 
             // Sync diagnostic logging toggle with server config (best-effort)
             syncDiagnosticsFromServer()
@@ -276,6 +284,21 @@ class SettingsViewModel @Inject constructor(
         thumbnailSize = next
         viewModelScope.launch {
             dataStore.edit { it[KEY_THUMBNAIL_SIZE] = next }
+        }
+    }
+
+    /**
+     * Toggle the #49 cellular data saver.
+     *
+     * The viewer reads this straight from DataStore rather than through this
+     * ViewModel, so the change reaches an already-open player without any
+     * plumbing between the two screens.
+     */
+    fun toggleCellularDataSaver() {
+        val next = !cellularDataSaver
+        cellularDataSaver = next
+        viewModelScope.launch {
+            dataStore.edit { it[KEY_CELLULAR_DATA_SAVER] = next }
         }
     }
 

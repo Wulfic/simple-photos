@@ -85,11 +85,181 @@ data class EncryptedSyncRecord(
     @SerializedName("photo_subtype") val photoSubtype: String? = null,
     @SerializedName("burst_id") val burstId: String? = null,
     @SerializedName("motion_video_blob_id") val motionVideoBlobId: String? = null,
+    /**
+     * The video resolution ladder (#49), highest quality first, `is_source`
+     * marking the untouched original.
+     *
+     * Null means the server predates #49; an **empty list is the normal case**
+     * and means "one quality, draw no picker". Those two states are deliberately
+     * collapsed by `renditionsEqual` rather than distinguished — see
+     * [com.simplephotos.data.media.renditionsEqual].
+     *
+     * Gson has silently ignored this field since the server started sending it,
+     * which is why `8564636` broke neither client.
+     */
+    val renditions: List<RenditionDto>? = null,
 )
+
+/**
+ * One playable quality of a video (#49).
+ *
+ * `file_path` is deliberately absent from the wire shape — it is a server-side
+ * storage path no client can fetch — so [shortEdge] doubles as the selector for
+ * the `?rendition=` form used on unencrypted installs.
+ */
+data class RenditionDto(
+    @SerializedName("short_edge") val shortEdge: Int,
+    val width: Int,
+    val height: Int,
+    @SerializedName("is_source") val isSource: Boolean = false,
+    /**
+     * Encrypted mode: stream as `spblob://<blob_id>`.
+     *
+     * Null on an unencrypted install, where the bytes live behind
+     * `GET /api/photos/{id}/file?rendition={short_edge}`. This client has no
+     * plaintext playback branch, so such rungs are filtered out of the picker.
+     */
+    @SerializedName("blob_id") val blobId: String? = null,
+    val codec: String? = null,
+    @SerializedName("size_bytes") val sizeBytes: Long = 0,
+)
+
+/**
+ * Wire shape → the domain model the picker and Room both use.
+ *
+ * Null collapses to empty deliberately: a pre-#49 server sends no field at all
+ * and a #49 server sends `[]` for the ~600 videos needing no rung, and nothing
+ * downstream can act on the difference between them.
+ */
+fun List<RenditionDto>?.toDomain(): List<com.simplephotos.data.media.Rendition> =
+    this.orEmpty().map {
+        com.simplephotos.data.media.Rendition(
+            shortEdge = it.shortEdge,
+            width = it.width,
+            height = it.height,
+            isSource = it.isSource,
+            blobId = it.blobId,
+            codec = it.codec,
+            sizeBytes = it.sizeBytes,
+        )
+    }
 
 data class EncryptedSyncResponse(
     val photos: List<EncryptedSyncRecord>,
-    @SerializedName("next_cursor") val nextCursor: String?
+    @SerializedName("next_cursor") val nextCursor: String?,
+    /**
+     * Photo ids that have LEFT the eligible feed — deleted outright, or claimed
+     * by a secure gallery. The client treats both identically (#38).
+     *
+     * The nullability is the protocol handshake, not defensiveness. On a delta
+     * the server sends this **empty rather than absent**; a server predating #38
+     * ignores the unknown `since` parameter and replies with a full walk, whose
+     * `photos` are indistinguishable from a delta's. Null therefore means "this
+     * server does not speak `since`" and forces the full path — see
+     * [com.simplephotos.data.sync.isDeltaFeed]. Gson leaves an absent field at
+     * its default, so null here really is "the key was not in the JSON".
+     */
+    val deleted: List<String>? = null,
+    /**
+     * The change log's head at the moment this page was computed.
+     *
+     * Persist the **first** page's value, never the last: a change committed
+     * while a multi-page walk is in flight lands above the first page's head, so
+     * keeping the first re-delivers it next pass while keeping the last steps
+     * over it and loses it permanently.
+     *
+     * Null on a pre-#38 server, which keeps this client on full walks — correct,
+     * just not fast.
+     */
+    @SerializedName("head_seq") val headSeq: Long? = null,
+)
+
+// ── Precomputed gallery count summary (Issue 3, revised by #42) ──────────────
+// GET /api/photos/summary — cheap server-side aggregate, and the AUTHORITATIVE
+// source for smart-album badges. The Room mirror only holds rows that carry an
+// encrypted blob, so counting it under-reports the library by the whole
+// pending-encryption backlog (measured live: 2,494 of 14,874 rows).
+//
+// Two families of number, NOT interchangeable — mirrors `PhotoSummary` in
+// server/src/gallery/summary.rs:
+//   - total/photos/gifs/videos/audio/favorites are raw media-type ROW counts.
+//   - smart* are TILE counts: the smart-album filter applied first, burst
+//     frames collapsed second. Badges must use these.
+// `smartPhotos` counts photos AND gifs, because the "Photos" smart album is
+// defined that way on both clients.
+//
+// Defaults of -1 on the smart* fields are load-bearing: Gson leaves absent
+// fields at their default, so a server on a pre-#42 binary is detectable via
+// `hasTileCounts` rather than silently reporting zero photos.
+
+data class PhotoSummaryDto(
+    val total: Long = 0,
+    @SerializedName("collapsed_total") val collapsedTotal: Long = 0,
+    val photos: Long = 0,
+    val gifs: Long = 0,
+    val videos: Long = 0,
+    val audio: Long = 0,
+    val favorites: Long = 0,
+    @SerializedName("smart_photos") val smartPhotos: Long = -1,
+    @SerializedName("smart_gifs") val smartGifs: Long = -1,
+    @SerializedName("smart_videos") val smartVideos: Long = -1,
+    @SerializedName("smart_audio") val smartAudio: Long = -1,
+    @SerializedName("smart_favorites") val smartFavorites: Long = -1,
+    @SerializedName("smart_recent") val smartRecent: Long = -1,
+    /**
+     * The photo change log's current head (#38).
+     *
+     * Deliberately NOT served from the summary's TTL cache on the server — a
+     * stale head here would make a client skip real changes, which is exactly
+     * the busywork the delta protocol removes. Null on a pre-#38 server, which
+     * costs the skip shortcut and nothing else.
+     */
+    @SerializedName("head_seq") val headSeq: Long? = null,
+) {
+    /** False when the server predates #42 and sent no tile counts, in which
+     *  case the caller must fall back to local mirror counts rather than
+     *  rendering -1 (or 0) into every badge. */
+    val hasTileCounts: Boolean get() = smartPhotos >= 0
+}
+
+// ── Authoritative Takeout source albums (Issue 2) ────────────────────────────
+// GET /api/photos/source-albums — album membership captured at import time,
+// keyed by photo id (survives filename collisions and `-edited` dedup). Used to
+// rebuild album manifests deterministically and cross-platform.
+
+data class SourceAlbumDto(
+    /**
+     * The Takeout folder name — the album's identity (the deterministic album id
+     * derives from it), so it stays stable even though Google mangles it on
+     * export ("Mum & Dad's 40th" ships as "Mum _ Dad_s 40th").
+     */
+    val name: String,
+    /**
+     * The album's real Google Photos title, read server-side from the album
+     * folder's `metadata.json`. Display this in preference to [name]; null on
+     * older exports that carry no album metadata — then fall back to [name].
+     */
+    val title: String? = null,
+    val source: String,
+    @SerializedName("photo_ids") val photoIds: List<String>,
+)
+
+data class SourceAlbumsResponse(
+    val albums: List<SourceAlbumDto>
+)
+
+// POST /api/photos/source-albums/dismiss — tombstone a reconstructed album the
+// user deleted, so reconstruction stops recreating it on every device. Keyed by
+// the local album id; the server resolves it back to the album identity.
+
+data class DismissSourceAlbumRequest(
+    @SerializedName("album_id") val albumId: String,
+)
+
+data class DismissSourceAlbumResponse(
+    /** False when the id wasn't a source album (an ordinary user album). */
+    val dismissed: Boolean,
+    val name: String? = null,
 )
 
 // ── Crop-metadata sync (lightweight delta for non-destructive edits) ─────────
@@ -324,7 +494,9 @@ data class SslStatusResponse(
 data class ConversionStatusResponse(
     val active: Boolean,
     val total: Int,
-    val done: Int
+    val done: Int,
+    /** Server-authoritative seconds remaining, null until throughput is known (TODO #4/#5). */
+    @SerializedName("eta_seconds") val etaSeconds: Double? = null,
 )
 
 // ── Batch dimension update ───────────────────────────────────────────────────

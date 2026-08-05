@@ -246,6 +246,10 @@ fn import_routes() -> Router<AppState> {
             post(crate::import::takeout::import_takeout),
         )
         .route(
+            "/admin/import/google-photos/backfill-albums",
+            post(crate::import::takeout::backfill_takeout_albums),
+        )
+        .route(
             "/photos/{id}/metadata",
             get(crate::import::handlers::get_photo_metadata),
         )
@@ -263,6 +267,18 @@ fn photo_routes() -> Router<AppState> {
         .route(
             "/photos/encrypted-sync",
             get(crate::gallery::sync::encrypted_sync),
+        )
+        .route(
+            "/photos/source-albums",
+            get(crate::import::takeout::list_source_albums),
+        )
+        .route(
+            "/photos/source-albums/dismiss",
+            post(crate::import::takeout::dismiss_source_album),
+        )
+        .route(
+            "/photos/summary",
+            get(crate::gallery::summary::photos_summary),
         )
         .route(
             "/photos/register",
@@ -360,6 +376,16 @@ fn photo_routes() -> Router<AppState> {
             "/admin/conversion-batch/end",
             post(crate::conversion::conversion_batch_end),
         )
+        // Manual stuck-conversion recovery (watchdog escape hatch, #18)
+        .route(
+            "/admin/conversion/reset",
+            post(crate::conversion::conversion_reset),
+        )
+        // Re-admit files retired by the three-strike conversion cap (#40)
+        .route(
+            "/admin/conversion/retry-failed",
+            post(crate::conversion::conversion_retry_failed),
+        )
         // Transcode GPU status
         .route(
             "/transcode/status",
@@ -369,6 +395,13 @@ fn photo_routes() -> Router<AppState> {
         .route(
             "/admin/encryption/store-key",
             post(crate::photos::encryption::store_encryption_key),
+        )
+        // Re-admit photos abandoned by the encryption attempt cap (B3a). The
+        // counterpart to /admin/conversion/retry-failed above — and the more
+        // urgent of the two, since a parked photo is plaintext at rest.
+        .route(
+            "/admin/encryption/retry-parked",
+            post(crate::photos::encryption::retry_parked_encryption),
         )
         // Storage stats
         .route(
@@ -411,6 +444,10 @@ fn gallery_routes() -> Router<AppState> {
             get(crate::gallery::secure::list_secure_blob_ids),
         )
         .route(
+            "/galleries/secure/items",
+            get(crate::gallery::secure::list_all_gallery_items),
+        )
+        .route(
             "/galleries/secure/{id}",
             delete(crate::gallery::secure::delete_secure_gallery),
         )
@@ -425,6 +462,14 @@ fn gallery_routes() -> Router<AppState> {
         .route(
             "/galleries/secure/{id}/items/{item_id}",
             delete(crate::gallery::secure::remove_gallery_item),
+        )
+        .route(
+            "/galleries/secure/{id}/items/{item_id}/move",
+            post(crate::gallery::secure::move_gallery_item),
+        )
+        .route(
+            "/galleries/secure/{id}/items/{item_id}/crop",
+            put(crate::gallery::secure::set_gallery_item_crop),
         )
 }
 
@@ -689,6 +734,18 @@ fn client_log_routes() -> Router<AppState> {
             "/status/activity",
             get(crate::health::handlers::activity_status),
         )
+        // Server-authoritative encryption progress — single source of truth for
+        // the encryption banner on every client (item #1).
+        .route("/status/encryption", get(crate::status::encryption_status))
+        // Clients report their own queued-upload counts so the server total
+        // reflects work it can't see yet, e.g. Android local backup (item #2).
+        .route(
+            "/status/encryption/contribute",
+            post(crate::status::contribute),
+        )
+        // Real-time album/gallery change stream (SSE) so clients refetch within
+        // seconds instead of waiting for the next periodic sync (item #11).
+        .route("/sync/events", get(crate::health::handlers::sync_events))
 }
 
 // ── Server diagnostics & audit ───────────────────────────────────────
@@ -775,6 +832,13 @@ fn ai_routes() -> Router<AppState> {
             "/ai/faces/split",
             post(crate::ai::handlers::split_face_cluster),
         )
+        // Manual per-photo face correction: list a photo's faces and reassign
+        // one to a chosen person.
+        .route(
+            "/ai/photos/{photo_id}/faces",
+            get(crate::ai::handlers::list_photo_faces),
+        )
+        .route("/ai/faces/assign", post(crate::ai::handlers::assign_face))
         .route(
             "/ai/faces/{cluster_id}/photos",
             get(crate::ai::handlers::list_cluster_photos),
@@ -843,6 +907,13 @@ fn geo_routes() -> Router<AppState> {
         .route(
             "/geo/trips/{trip_id}/photos",
             get(crate::geo::handlers::list_trip_photos),
+        )
+        // Home location (manual override + inferred); excluded from trips
+        .route(
+            "/geo/home",
+            get(crate::geo::handlers::get_home)
+                .put(crate::geo::handlers::set_home)
+                .delete(crate::geo::handlers::clear_home),
         )
         // Scrub
         .route("/geo/scrub", post(crate::geo::handlers::scrub_geo_data))

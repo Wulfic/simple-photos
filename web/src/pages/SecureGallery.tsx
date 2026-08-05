@@ -9,12 +9,22 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useAppNavigate } from "../hooks/useAppNavigate";
 import { useScrollMemory } from "../hooks/useScrollMemory";
+import { usePhotoSelection } from "../hooks/usePhotoSelection";
 import { api } from "../api/client";
 import { db } from "../db";
 import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
 import JustifiedGrid from "../components/gallery/JustifiedGrid";
 import { getErrorMessage } from "../utils/formatters";
+import { getEffectiveAspectRatio } from "../utils/thumbnailCss";
+import {
+  otherSecureAlbumItems,
+  resolveSecureMoves,
+  expandSecureSelection,
+  planSecureAddsToTarget,
+  secureMoveTargets,
+} from "../gallery/secureMovePicker";
+import { isConflict } from "../api/core";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
 import { useAuthStore } from "../store/auth";
 import {
@@ -25,8 +35,25 @@ import {
   isGalleryTokenRejection,
 } from "../utils/galleryToken";
 import { useSecureAdd } from "../store/secureAdd";
-import { SecureGalleryItem, SecureAlbumCover } from "../gallery";
+import {
+  SecureGalleryItem,
+  SecureAlbumCover,
+  SecureSmartAlbumCover,
+} from "../gallery";
+import {
+  computeSecureSmartAlbums,
+  filterSecureSmartAlbum,
+  isSecureSmartAlbum,
+  type SecureSmartAlbum,
+} from "../gallery/secureSmartAlbums";
+import type { SecureGalleryItem as SecureItem } from "../api/galleries";
 import { GallerySkeleton, AlbumGridSkeleton } from "../components/skeletons";
+import { ConfirmDialog } from "../components/ui";
+import {
+  otherSecureAlbumCount,
+  secureRemovalPrompt,
+  type SecureRemovalVerdict,
+} from "../gallery/albumRemoval";
 
 interface Gallery {
   id: string;
@@ -35,18 +62,13 @@ interface Gallery {
   item_count: number;
 }
 
-interface GalleryItem {
-  id: string;
-  blob_id: string;
-  added_at: string;
-  encrypted_thumb_blob_id?: string | null;
-  width?: number | null;
-  height?: number | null;
-  media_type?: string | null;
-  photo_subtype?: string | null;
-  burst_id?: string | null;
-  duration_secs?: number | null;
-  motion_video_blob_id?: string | null;
+// Item shape from the secure-gallery API (per-album and aggregate). `gallery_id`
+// is always present; `gallery_name` only on the aggregate feed.
+type GalleryItem = SecureItem;
+
+/** Synthesize a Gallery card from a computed secure smart album. */
+function smartToGallery(sa: SecureSmartAlbum): Gallery {
+  return { id: sa.id, name: sa.label, created_at: "", item_count: sa.count };
 }
 
 /**
@@ -89,6 +111,17 @@ export default function SecureGallery() {
   const [items, setItems] = useState<GalleryItem[]>([]);
   const [itemsLoading, setItemsLoading] = useState(false);
 
+  // Aggregate feed across ALL secure galleries — drives the built-in secure
+  // smart albums (Secure Gallery / Photos / GIFs / Videos / Audio). Fetched
+  // once after unlock and refreshed on every mutation (create/delete/remove).
+  const [allItems, setAllItems] = useState<GalleryItem[]>([]);
+  const [allItemsLoading, setAllItemsLoading] = useState(false);
+
+  // Visible secure smart albums (non-empty types only), recomputed as the feed
+  // changes. Cheap pure derivation — no memo needed. Declared here so the
+  // ?album restore effect (below) can reference it.
+  const smartAlbums = computeSecureSmartAlbums(allItems);
+
   // Preserve scroll position per secure album when opening a photo and
   // returning. Keyed by the selected gallery so each album restores its own.
   useScrollMemory(`secure-gallery:${selectedGallery?.id ?? ""}`, items.length > 0);
@@ -98,9 +131,44 @@ export default function SecureGallery() {
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
 
+  // Cross-secure-album picker (#31): MOVE items INTO the open album from the
+  // user's OTHER secure albums. Deliberately still a move: "bring these here"
+  // is what this picker means, and Z1 only removed the constraint that forced
+  // it to be one — it did not make every transfer a copy.
+  const [showMovePicker, setShowMovePicker] = useState(false);
+  const [moveSelected, setMoveSelected] = useState<Set<string>>(new Set());
+  const [moving, setMoving] = useState(false);
+
+  // Push direction (#43): select items in the OPEN album and ADD them to another
+  // secure album (Z1) — they stay here too. This was a move until Z1, which is
+  // the bug Z1 was filed for: a "+"-shaped control that silently un-filed the
+  // photo from the album you were looking at.
+  // Reuses the shared multi-select hook so behaviour matches every other grid.
+  const pushSelect = usePhotoSelection();
+  const [showMoveTarget, setShowMoveTarget] = useState(false);
+  const [movingPush, setMovingPush] = useState(false);
+
   // Error / success
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+
+  // Pending single-item removal (Z1d). Held as state rather than run inline
+  // behind `confirm()`, because the question is now conditional: what removal
+  // does depends on how many OTHER secure albums hold the photo, and one of the
+  // three answers is "we don't know, so don't ask".
+  const [pendingRemoval, setPendingRemoval] = useState<{
+    item: GalleryItem;
+    owningGalleryId: string;
+    /** How many other secure albums hold it; `undefined` = unknown. */
+    otherAlbums: number | undefined;
+    verdict: SecureRemovalVerdict;
+  } | null>(null);
+  const [removing, setRemoving] = useState(false);
+
+  // Pending album deletion — the other prompt on this page that used to be a
+  // `window.confirm`.
+  const [pendingDelete, setPendingDelete] = useState<Gallery | null>(null);
+  const [deletingAlbum, setDeletingAlbum] = useState(false);
 
   // A ref so the URL-sync effect can read the current gallery without being
   // in its dependency array (avoids infinite-loop risk).
@@ -143,11 +211,19 @@ export default function SecureGallery() {
   // album).
   useEffect(() => {
     const albumId = searchParams.get("album");
-    if (authenticated && albumId && !selectedGallery && galleries.length > 0) {
+    if (!authenticated || !albumId || selectedGallery) return;
+    // Smart album: synthesize the selection from the aggregate feed once loaded.
+    // Fixes return-from-viewer landing back INSIDE a smart album.
+    if (isSecureSmartAlbum(albumId)) {
+      const sa = smartAlbums.find((s) => s.id === albumId);
+      if (sa) setSelectedGallery(smartToGallery(sa));
+      return;
+    }
+    if (galleries.length > 0) {
       const g = galleries.find((x) => x.id === albumId);
       if (g) setSelectedGallery(g);
     }
-  }, [authenticated, searchParams, galleries, selectedGallery]);
+  }, [authenticated, searchParams, galleries, selectedGallery, smartAlbums]);
 
   // Load galleries after auth
   const loadGalleries = useCallback(async () => {
@@ -165,6 +241,30 @@ export default function SecureGallery() {
   useEffect(() => {
     if (authenticated) loadGalleries();
   }, [authenticated, loadGalleries]);
+
+  // Load the aggregate item feed for the secure smart albums. Token-gated like
+  // per-album items — a rejected token means the session lapsed → back to gate.
+  const loadAllItems = useCallback(async () => {
+    if (!galleryToken) return;
+    setAllItemsLoading(true);
+    try {
+      const res = await api.secureGalleries.listAllItems(galleryToken);
+      setAllItems(res.items);
+    } catch (err: unknown) {
+      if (isGalleryTokenRejection(err)) {
+        lock("Your secure session expired. Enter your password to continue.");
+      } else {
+        console.error("[SecureGallery] Failed to load aggregate items", err);
+        setError("Failed to load secure albums.");
+      }
+    } finally {
+      setAllItemsLoading(false);
+    }
+  }, [galleryToken, lock]);
+
+  useEffect(() => {
+    if (authenticated) loadAllItems();
+  }, [authenticated, loadAllItems]);
 
   // Load items for selected gallery
   const loadItems = useCallback(
@@ -189,9 +289,26 @@ export default function SecureGallery() {
     [galleryToken, lock]
   );
 
+  // Real album → fetch its items with the gallery token. Smart album → derive
+  // items from the already-loaded aggregate feed (no per-gallery request).
   useEffect(() => {
-    if (selectedGallery) loadItems(selectedGallery.id);
+    if (selectedGallery && !isSecureSmartAlbum(selectedGallery.id)) {
+      loadItems(selectedGallery.id);
+    }
   }, [selectedGallery, loadItems]);
+
+  useEffect(() => {
+    if (selectedGallery && isSecureSmartAlbum(selectedGallery.id)) {
+      setItems(filterSecureSmartAlbum(allItems, selectedGallery.id));
+    }
+  }, [selectedGallery, allItems]);
+
+  // Reset the push selection whenever the open album changes (or we return to
+  // the list) so a selection never carries across albums or lingers on Back.
+  useEffect(() => {
+    pushSelect.clear();
+    setShowMoveTarget(false);
+  }, [selectedGallery?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Handle password auth
   async function handleUnlock(e: React.FormEvent) {
@@ -226,6 +343,7 @@ export default function SecureGallery() {
       setNewName("");
       setShowCreate(false);
       await loadGalleries();
+      await loadAllItems();
     } catch (err: unknown) {
       setError(getErrorMessage(err));
     } finally {
@@ -233,10 +351,17 @@ export default function SecureGallery() {
     }
   }
 
-  // Delete album
+  // Delete album. Genuinely destructive — unlike removing one item, this can
+  // drop the last reference to a clone and take its bytes with it — so it is the
+  // one prompt on this page that earns `tone="danger"`.
   async function handleDelete(gallery: Gallery) {
-    if (!confirm(`Delete secure album "${gallery.name}"? All items inside will be removed.`))
-      return;
+    setPendingDelete(gallery);
+  }
+
+  async function confirmDeleteAlbum() {
+    const gallery = pendingDelete;
+    if (!gallery || deletingAlbum) return;
+    setDeletingAlbum(true);
     try {
       await api.secureGalleries.delete(gallery.id);
       setSuccess(`Album "${gallery.name}" deleted.`);
@@ -245,32 +370,206 @@ export default function SecureGallery() {
         setItems([]);
       }
       await loadGalleries();
+      await loadAllItems();
     } catch (err: unknown) {
       setError(getErrorMessage(err));
+    } finally {
+      setDeletingAlbum(false);
+      setPendingDelete(null);
     }
   }
 
-  // Remove a single item from the current secure album.
-  // The cloned blob is deleted server-side and the original photo becomes
-  // visible again in the regular gallery (the server's
-  // `/galleries/secure/blob-ids` endpoint will stop reporting its id, so
-  // the next gallery refresh unhides it automatically).
-  async function handleRemoveItem(item: GalleryItem) {
+  // Ask about removing a single item from the current secure album.
+  //
+  // Since Z1 a photo may live in several secure albums, so removal has two
+  // genuinely different outcomes — the photo returns to the regular gallery, or
+  // it stays hidden because another secure album still holds it — and the user
+  // is entitled to know which one they are agreeing to BEFORE agreeing. The
+  // verdict is resolved here, from the `galleries` array the feed publishes, and
+  // rendered by the dialog below.
+  function requestRemoveItem(item: GalleryItem) {
     if (!selectedGallery) return;
-    if (!confirm("Remove this photo from the secure album? It will return to your regular gallery."))
+    // In a smart view the selected "gallery" is synthetic — route removal to
+    // the item's REAL owning album. `gallery_id` is always present on both the
+    // per-album and aggregate feeds.
+    const smartView = isSecureSmartAlbum(selectedGallery.id);
+    const owningGalleryId = smartView ? item.gallery_id : selectedGallery.id;
+    if (!owningGalleryId) {
+      setError("Could not determine which album this photo belongs to.");
       return;
+    }
+    // The album NAME must come from the owning album, not from the open view: in
+    // a smart view `selectedGallery.name` is "Videos", and naming that as the
+    // thing being removed from is wrong in the one dialog whose job is accuracy.
+    const owningName = smartView
+      ? (item.gallery_name ?? galleries.find((g) => g.id === owningGalleryId)?.name)
+      : selectedGallery.name;
+    const otherAlbums = otherSecureAlbumCount(item.galleries, owningGalleryId);
+    setPendingRemoval({
+      item,
+      owningGalleryId,
+      otherAlbums,
+      verdict: secureRemovalPrompt(1, owningName, otherAlbums),
+    });
+  }
+
+  // Perform the removal the dialog just described.
+  // The cloned blob is deleted server-side. Whether the original photo becomes
+  // visible again in the regular gallery depends on whether this was its LAST
+  // secure membership — the server drops only the membership row, and
+  // `/galleries/secure/blob-ids` stops reporting the id only once none remain.
+  async function confirmRemoveItem() {
+    if (!pendingRemoval || removing) return;
+    const { item, owningGalleryId, otherAlbums } = pendingRemoval;
+    if (!selectedGallery) return;
+    const smartView = isSecureSmartAlbum(selectedGallery.id);
+    setRemoving(true);
     try {
-      await api.secureGalleries.removeItem(selectedGallery.id, item.id);
+      await api.secureGalleries.removeItem(owningGalleryId, item.id);
       // Drop the local IDB clone entry that `handleAddSelectedPhotos`
       // created at add time, so the secure album view stays consistent
       // even before the next reload.
       try { await db.photos.delete(item.blob_id); } catch { /* non-fatal */ }
-      setSuccess("Photo returned to your gallery.");
-      await loadItems(selectedGallery.id);
+      // The toast reports what actually happened, for the same reason the
+      // prompt does. "Photo returned to your gallery" was unconditional and was
+      // false whenever another secure album still held it — a user told that
+      // believes they have un-secured something they have not.
+      setSuccess(
+        otherAlbums && otherAlbums > 0
+          ? "Removed. The photo stays secured in your other secure albums."
+          : "Photo returned to your gallery.",
+      );
+      setPendingRemoval(null);
+      // Refresh the aggregate feed (smart items re-derive from it via effect)
+      // and the album list; real albums also re-fetch their own items.
+      await loadAllItems();
       await loadGalleries();
+      if (!smartView) await loadItems(selectedGallery.id);
     } catch (err: unknown) {
       setError(getErrorMessage(err));
+      setPendingRemoval(null);
+    } finally {
+      setRemoving(false);
     }
+  }
+
+  // Recovery path for the `blocked` verdict: re-fetch the feeds, which is the
+  // only thing that can turn "unknown membership" into a real answer. Without
+  // this the refusal would be a dead end, and a dead end is how a fail-closed
+  // guard gets deleted by the next person who hits it.
+  async function refreshForRemoval() {
+    if (!selectedGallery) return;
+    setPendingRemoval(null);
+    await loadAllItems();
+    await loadGalleries();
+    if (!isSecureSmartAlbum(selectedGallery.id)) await loadItems(selectedGallery.id);
+  }
+
+  // Items in the user's OTHER secure albums — the source pool for the
+  // cross-secure-album move picker. Excludes the open album's own items.
+  const otherSecureItems = selectedGallery
+    ? otherSecureAlbumItems(allItems, selectedGallery.id)
+    : [];
+
+  // Real secure albums the current selection can be pushed INTO (#43). Excludes
+  // the open album; for a smart view its synthetic id matches nothing, so every
+  // real album is offered.
+  const moveTargets = selectedGallery
+    ? secureMoveTargets(galleries, selectedGallery.id)
+    : [];
+
+  function toggleMoveSelect(itemId: string) {
+    setMoveSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(itemId)) next.delete(itemId);
+      else next.add(itemId);
+      return next;
+    });
+  }
+
+  // Move the picked items from their current secure albums into the open album.
+  async function handleMoveSelected() {
+    if (!selectedGallery || moveSelected.size === 0 || moving) return;
+    setMoving(true);
+    let moved = 0;
+    let failed = 0;
+    // Resolve each selected item to its owning gallery, then reassign it. Each
+    // is isolated so one failure never aborts the rest (mirrors secure-add).
+    const moves = resolveSecureMoves(otherSecureItems, moveSelected);
+    failed += moveSelected.size - moves.length; // selections we couldn't route
+    for (const mv of moves) {
+      try {
+        await api.secureGalleries.moveItem(mv.sourceGalleryId, mv.itemId, selectedGallery.id);
+        moved++;
+      } catch (err) {
+        console.error("[SecureGallery] move item failed", err); // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
+        failed++;
+      }
+    }
+    if (moved > 0) setSuccess(`Moved ${moved} item${moved !== 1 ? "s" : ""} into "${selectedGallery.name}".`);
+    if (failed > 0) setError(`${failed} item${failed !== 1 ? "s" : ""} couldn't be moved.`);
+    setMoveSelected(new Set());
+    setShowMovePicker(false);
+    setMoving(false);
+    // Refresh: aggregate feed re-derives, the open album re-fetches, counts update.
+    await loadAllItems();
+    await loadGalleries();
+    await loadItems(selectedGallery.id);
+  }
+
+  // Push (#43, now an ADD under Z1): file the items selected in the OPEN album
+  // into `targetGalleryId` **without removing them from here**.
+  //
+  // This used to call `moveItem`, which is why filing a secure photo into a
+  // second album silently emptied it out of the first. The affordance was always
+  // a "+", so the operation is what was wrong, not the button.
+  async function addSelectedTo(targetGalleryId: string) {
+    if (!selectedGallery || pushSelect.selectedIds.size === 0 || movingPush) return;
+    setMovingPush(true);
+    setError("");
+    setSuccess("");
+    // A burst tile stands in for every frame, so the add must carry them all
+    // (mirrors secure-add) or a burst is split across two albums.
+    const expanded = expandSecureSelection(items, pushSelect.selectedIds);
+    const adds = planSecureAddsToTarget(items, expanded);
+    const targetName = galleries.find((g) => g.id === targetGalleryId)?.name ?? "the album";
+    let added = 0;
+    let already = 0;
+    let failed = 0;
+    // Each add is isolated so one failure never aborts the rest (mirrors the
+    // pull picker and secure-add).
+    for (const ad of adds) {
+      try {
+        await api.secureGalleries.addItem(targetGalleryId, ad.blobId);
+        added++;
+      } catch (err) {
+        // 409 = already in the target album. That is the server answering the
+        // membership question authoritatively rather than the client guessing
+        // it from a feed that cannot see the target — it is a no-op, not a
+        // failure, and must not be reported as one.
+        if (isConflict(err)) {
+          already++;
+        } else {
+          console.error("[SecureGallery] push add failed", err); // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
+          failed++;
+        }
+      }
+    }
+    if (added > 0)
+      setSuccess(
+        `Added ${added} item${added !== 1 ? "s" : ""} to "${targetName}". ` +
+          `${added !== 1 ? "They stay" : "It stays"} in "${selectedGallery.name}" too.`,
+      );
+    else if (already > 0 && failed === 0)
+      setSuccess(`Those photos are already in "${targetName}".`);
+    if (failed > 0) setError(`${failed} item${failed !== 1 ? "s" : ""} couldn't be added.`);
+    pushSelect.clear();
+    setShowMoveTarget(false);
+    setMovingPush(false);
+    // Refresh: aggregate feed re-derives smart views; a real album re-fetches.
+    await loadAllItems();
+    await loadGalleries();
+    if (!isSecureSmartAlbum(selectedGallery.id)) await loadItems(selectedGallery.id);
   }
 
   // Collapse burst stacks → one tile / viewer page per burst (the album still
@@ -379,26 +678,136 @@ export default function SecureGallery() {
               </h2>
               <span className="text-fg-muted text-sm">{displayItems.length} items</span>
             </div>
-            {!isBackupServer && (
+            {!isBackupServer && !pushSelect.selectionMode && (
               <div className="flex gap-2">
-                <button
-                  onClick={() => {
-                    // Browse your regular/smart albums to pick photos, instead
-                    // of scrolling one giant flat master list. The secure-add
-                    // session lets every album grid offer an "Add to 🔒" action.
-                    startSecureAdd(selectedGallery.id, selectedGallery.name);
-                    navigate("/albums");
-                  }}
-                  className="btn btn-primary btn-md inline-flex items-center"
-                >
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-                  </svg>
-                  Add Photos
-                </button>
+                {/* Select items to push OUT to another secure album (#43). Works
+                    in real AND smart albums, whenever there's a target to move
+                    into. */}
+                {items.length > 0 && moveTargets.length > 0 && (
+                  <button
+                    onClick={() => pushSelect.enterEmpty()}
+                    className="btn btn-secondary btn-md inline-flex items-center"
+                    title="Select photos to move to another secure album"
+                  >
+                    Select
+                  </button>
+                )}
+                {!isSecureSmartAlbum(selectedGallery.id) && (
+                  <>
+                    {/* Move media in from the user's OTHER secure albums (#31).
+                        Only offered when there's somewhere to pull from. */}
+                    {otherSecureItems.length > 0 && (
+                      <button
+                        onClick={() => { setShowMovePicker((v) => !v); setMoveSelected(new Set()); }}
+                        className={`btn btn-md inline-flex items-center ${showMovePicker ? "btn-primary" : "btn-secondary"}`}
+                        title="Move photos in from your other secure albums"
+                      >
+                        <span className="mr-1">🔒</span>
+                        {showMovePicker ? "Done" : "From secure albums"}
+                      </button>
+                    )}
+                    <button
+                      onClick={() => {
+                        // Browse your regular/smart albums to pick photos, instead
+                        // of scrolling one giant flat master list. The secure-add
+                        // session lets every album grid offer an "Add to 🔒" action.
+                        startSecureAdd(selectedGallery.id, selectedGallery.name);
+                        navigate("/albums");
+                      }}
+                      className="btn btn-primary btn-md inline-flex items-center"
+                    >
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                      </svg>
+                      Add Photos
+                    </button>
+                  </>
+                )}
               </div>
             )}
           </div>
+
+          {/* Push selection bar (#43): move the selected items OUT to another
+              secure album. Mirrors the main gallery's selection bar. */}
+          {pushSelect.selectionMode && (
+            <div className="flex items-center justify-between gap-3 mb-4 p-3 bg-accent-50 dark:bg-accent-900/30 rounded-lg">
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => pushSelect.clear()}
+                  className="text-fg-muted hover:text-fg"
+                  aria-label="Cancel selection"
+                >
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+                <span className="text-sm font-medium tabular-nums">
+                  {pushSelect.selectedIds.size} selected
+                </span>
+                <button
+                  onClick={() =>
+                    pushSelect.selectedIds.size === displayItems.length
+                      ? pushSelect.clear()
+                      : pushSelect.setAll(displayItems.map((i) => i.id))
+                  }
+                  className="text-accent-600 dark:text-accent-400 text-sm hover:underline"
+                >
+                  {displayItems.length > 0 && pushSelect.selectedIds.size === displayItems.length
+                    ? "Deselect All"
+                    : "Select All"}
+                </button>
+              </div>
+              <button
+                onClick={() => setShowMoveTarget(true)}
+                disabled={pushSelect.selectedIds.size === 0 || movingPush}
+                className="btn btn-primary btn-md inline-flex items-center gap-1.5"
+                title="Add selected photos to another secure album — they stay in this one too"
+              >
+                <span>🔒</span>
+                {`Add to album (${pushSelect.selectedIds.size})`}
+              </button>
+            </div>
+          )}
+
+          {/* Cross-secure-album move picker (#31) */}
+          {showMovePicker && !isBackupServer && !isSecureSmartAlbum(selectedGallery.id) && (
+            <div className="card p-4 mb-6">
+              <div className="flex items-center justify-between mb-3 gap-3">
+                <h3 className="text-sm font-semibold text-fg-muted min-w-0 truncate">
+                  Move from your other secure albums
+                  <span className="tabular-nums"> ({moveSelected.size} selected)</span>
+                </h3>
+                <button
+                  onClick={handleMoveSelected}
+                  disabled={moveSelected.size === 0 || moving}
+                  className="btn btn-primary btn-md shrink-0 whitespace-nowrap"
+                >
+                  {moving ? "Moving…" : `Move here (${moveSelected.size})`}
+                </button>
+              </div>
+              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-2">
+                {otherSecureItems.map((it) => {
+                  const selected = moveSelected.has(it.id);
+                  return (
+                    <div
+                      key={it.id}
+                      className={`relative aspect-square rounded overflow-hidden cursor-pointer ${selected ? "ring-2 ring-accent-500" : ""}`}
+                      onClick={() => toggleMoveSelect(it.id)}
+                    >
+                      <SecureGalleryItem item={it} onClick={() => toggleMoveSelect(it.id)} />
+                      {selected && (
+                        <div className="absolute top-1 right-1 w-5 h-5 rounded-full bg-green-500 flex items-center justify-center z-10 pointer-events-none">
+                          <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                          </svg>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {error && (
             <p className="text-red-600 dark:text-red-400 text-sm mb-4 p-3 bg-red-50 dark:bg-red-900/30 rounded">
@@ -411,13 +820,13 @@ export default function SecureGallery() {
             </p>
           )}
 
-          {itemsLoading ? (
+          {(isSecureSmartAlbum(selectedGallery.id) ? allItemsLoading : itemsLoading) ? (
             <GallerySkeleton />
           ) : items.length === 0 ? (
             <div className="text-center py-16 border-2 border-dashed border-edge rounded-lg">
               <span className="text-4xl mb-3 block">🖼️</span>
               <p className="text-fg-muted text-sm mb-3">This album is empty.</p>
-              {!isBackupServer && (
+              {!isBackupServer && !isSecureSmartAlbum(selectedGallery.id) && (
               <button
                 onClick={() => {
                   startSecureAdd(selectedGallery.id, selectedGallery.name);
@@ -432,15 +841,25 @@ export default function SecureGallery() {
           ) : (
             <JustifiedGrid
               items={displayItems}
-              getAspectRatio={(item) => (item.width && item.height) ? item.width / item.height : 1}
+              getAspectRatio={(item) =>
+                getEffectiveAspectRatio(item.width, item.height, item.crop_metadata)
+              }
               getKey={(item) => item.id}
-              renderItem={(item, idx) => (
-                <div className="group relative w-full h-full">
+              renderItem={(item, idx) => {
+                const pushSelected = pushSelect.selectedIds.has(item.id);
+                return (
+                <div
+                  className={`group relative w-full h-full ${
+                    pushSelect.selectionMode && pushSelected ? "ring-2 ring-accent-500 rounded" : ""
+                  }`}
+                >
                   <SecureGalleryItem
                     item={item}
                     burstCount={item.burst_id ? secureBurstCounts.get(item.burst_id) : undefined}
                     onClick={() =>
-                      navigate(`/photo/${item.blob_id}`, {
+                      pushSelect.selectionMode
+                        ? pushSelect.toggle(item.id)
+                        : navigate(`/photo/${item.blob_id}`, {
                         state: {
                           photoIds: displayItems.map((i) => i.blob_id),
                           currentIndex: idx,
@@ -457,19 +876,109 @@ export default function SecureGallery() {
                       })
                     }
                   />
-                  {!isBackupServer && (
+                  {pushSelect.selectionMode && pushSelected && (
+                    <div className="absolute top-1 right-1 w-5 h-5 rounded-full bg-green-500 flex items-center justify-center z-10 pointer-events-none">
+                      <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                      </svg>
+                    </div>
+                  )}
+                  {!isBackupServer && !pushSelect.selectionMode && (
                     <button
-                      onClick={(e) => { e.stopPropagation(); handleRemoveItem(item); }}
+                      onClick={(e) => { e.stopPropagation(); requestRemoveItem(item); }}
                       className="absolute top-1 right-1 hidden group-hover:flex items-center justify-center w-7 h-7 bg-black/60 hover:bg-red-600 text-white rounded-full transition-colors z-10"
-                      title="Remove from secure album (returns to regular gallery)"
+                      // No outcome claim here (Z1d). This tooltip used to
+                      // promise the photo went back to the main gallery, which
+                      // is false whenever another secure album still holds it —
+                      // and a tooltip cannot be conditional on a per-item
+                      // membership lookup the way the dialog is. The dialog
+                      // states the outcome; the tooltip names the action.
+                      title="Remove from secure album"
                       aria-label="Remove from secure album"
                     >
                       <AppIcon name="trashcan" size="w-4 h-4" />
                     </button>
                   )}
                 </div>
-              )}
+                );
+              }}
             />
+          )}
+
+          {/* Removal confirmation (Z1d). Two verdicts render here: `confirm`
+              asks the question with an accurate body, `blocked` refuses and
+              offers the refresh that can resolve the unknown. Neither is a
+              `window.confirm`, which could not have said either thing. */}
+          {pendingRemoval && pendingRemoval.verdict.kind === "confirm" && (
+            <ConfirmDialog
+              title={pendingRemoval.verdict.title}
+              body={pendingRemoval.verdict.body}
+              confirmLabel="Remove"
+              cancelLabel="Cancel"
+              busy={removing}
+              busyLabel="Removing…"
+              onConfirm={confirmRemoveItem}
+              onCancel={() => setPendingRemoval(null)}
+            />
+          )}
+          {pendingRemoval && pendingRemoval.verdict.kind === "blocked" && (
+            <ConfirmDialog
+              title={pendingRemoval.verdict.title}
+              body={pendingRemoval.verdict.body}
+              confirmLabel="Refresh"
+              cancelLabel="Cancel"
+              onConfirm={refreshForRemoval}
+              onCancel={() => setPendingRemoval(null)}
+            />
+          )}
+
+          {/* Target-album picker (#43): pick which secure album to move the
+              selection into. */}
+          {showMoveTarget && (
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+              onClick={() => { if (!movingPush) setShowMoveTarget(false); }}
+            >
+              <div className="card p-5 w-full max-w-sm" onClick={(e) => e.stopPropagation()}>
+                <h3 className="text-base font-semibold text-fg mb-3 flex items-center gap-2">
+                  <span>🔒</span>
+                  Add {pushSelect.selectedIds.size} item{pushSelect.selectedIds.size !== 1 ? "s" : ""} to
+                </h3>
+                {/* Z1: this ADDS. Said plainly, because the same control used to
+                    move, and a user who learned the old behaviour will otherwise
+                    assume this empties the current album. */}
+                <p className="text-xs text-fg-muted mb-3">
+                  {pushSelect.selectedIds.size !== 1 ? "They stay" : "It stays"} in “
+                  {selectedGallery?.name ?? "this album"}” as well.
+                </p>
+                {moveTargets.length === 0 ? (
+                  <p className="text-sm text-fg-muted">No other secure albums to add to.</p>
+                ) : (
+                  <div className="space-y-1 max-h-72 overflow-y-auto">
+                    {moveTargets.map((t) => (
+                      <button
+                        key={t.id}
+                        onClick={() => addSelectedTo(t.id)}
+                        disabled={movingPush}
+                        className="w-full text-left px-3 py-2 rounded-md hover:bg-surface-raised flex items-center gap-2 disabled:opacity-50"
+                      >
+                        <span className="shrink-0">🔒</span>
+                        <span className="truncate">{t.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <div className="flex justify-end mt-4">
+                  <button
+                    onClick={() => setShowMoveTarget(false)}
+                    disabled={movingPush}
+                    className="btn btn-secondary btn-md"
+                  >
+                    {movingPush ? "Moving…" : "Cancel"}
+                  </button>
+                </div>
+              </div>
+            </div>
           )}
         </main>
       </div>
@@ -564,6 +1073,37 @@ export default function SecureGallery() {
           </form>
         )}
 
+        {/* Smart albums — built-in, media-type derived; only non-empty types.
+            Read-only: no delete affordance, no create. */}
+        {smartAlbums.length > 0 && (
+          <div className="mb-8">
+            <h3 className="text-sm font-semibold text-fg-muted mb-3">Smart albums</h3>
+            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-3">
+              {smartAlbums.map((sa) => (
+                <div
+                  key={sa.id}
+                  className="card card-interactive p-2 cursor-pointer relative"
+                  onClick={() => {
+                    setSelectedGallery(smartToGallery(sa));
+                    navigate(`/secure-gallery?album=${sa.id}`);
+                  }}
+                >
+                  <div className="aspect-square bg-surface-raised rounded mb-1.5 flex items-center justify-center overflow-hidden">
+                    <SecureSmartAlbumCover item={sa.coverItem} />
+                  </div>
+                  <p className="font-medium text-sm truncate flex items-center gap-1">
+                    <span className="shrink-0">🔒</span>
+                    <span className="truncate">{sa.label}</span>
+                  </p>
+                  <p className="text-xs text-fg-muted">
+                    {sa.count} item{sa.count !== 1 ? "s" : ""}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Album list */}
         {galleriesLoading ? (
           <AlbumGridSkeleton />
@@ -634,6 +1174,27 @@ export default function SecureGallery() {
           </div>
         )}
       </main>
+
+      {/* Album deletion. Rendered at the page root rather than inside the album
+          list, so it survives the list re-rendering underneath it. `danger`
+          because this one really can destroy bytes — see `handleDelete`. */}
+      {pendingDelete && (
+        <ConfirmDialog
+          title={`Delete secure album “${pendingDelete.name}”?`}
+          body={
+            `Every photo in this album will be removed from it. Photos that are ` +
+            `also in another secure album stay secured there; the rest return to ` +
+            `your regular gallery. The album itself is deleted.`
+          }
+          confirmLabel="Delete album"
+          cancelLabel="Cancel"
+          tone="danger"
+          busy={deletingAlbum}
+          busyLabel="Deleting…"
+          onConfirm={confirmDeleteAlbum}
+          onCancel={() => setPendingDelete(null)}
+        />
+      )}
     </div>
   );
 }

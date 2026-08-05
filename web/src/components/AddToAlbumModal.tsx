@@ -1,12 +1,11 @@
 /**
  * AddToAlbumModal — modal that lists the user's local (encrypted) albums and
- * lets them pick one to add the currently-selected blob IDs to. Reuses the
- * same manifest re-upload pattern as `AlbumDetail.addPhotos`.
+ * lets them pick one to add the currently-selected blob IDs to. Manifest writes
+ * go through the shared `utils/albumManifest.ts`, as everywhere else.
  */
 import { useEffect, useRef, useState } from "react";
 import { db, type CachedAlbum } from "../db";
-import { encrypt, sha256Hex } from "../crypto/crypto";
-import { api } from "../api/client";
+import { saveAlbumManifest } from "../utils/albumManifest";
 import { randomUuid } from "../utils/uuid";
 import { expandBurstSelection } from "../utils/burstExpand";
 import { Modal } from "./ui";
@@ -55,25 +54,7 @@ export default function AddToAlbumModal({ blobIds, onClose, onAdded }: AddToAlbu
         coverPhotoBlobId: cover,
       };
 
-      // Delete old manifest (best-effort)
-      if (updated.manifestBlobId) {
-        try { await api.blobs.delete(updated.manifestBlobId); } catch { /* already gone */ }
-      }
-
-      const payload = JSON.stringify({
-        v: 1,
-        album_id: updated.albumId,
-        name: updated.name,
-        created_at: new Date(updated.createdAt).toISOString(),
-        cover_photo_blob_id: updated.coverPhotoBlobId || null,
-        photo_blob_ids: updated.photoBlobIds,
-      });
-      const encrypted = await encrypt(new TextEncoder().encode(payload));
-      const hash = await sha256Hex(new Uint8Array(encrypted));
-      const res = await api.blobs.upload(encrypted, "album_manifest", hash);
-
-      const stored: CachedAlbum = { ...updated, manifestBlobId: res.blob_id };
-      await db.albums.put(stored);
+      const stored = await saveAlbumManifest(updated);
       onAdded(stored, addedCount);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to add to album");
@@ -95,27 +76,15 @@ export default function AddToAlbumModal({ blobIds, onClose, onAdded }: AddToAlbu
       const photoBlobIds = [...new Set(await expandBurstSelection(blobIds))];
       const coverPhotoBlobId = photoBlobIds[0] || undefined;
 
-      const payload = JSON.stringify({
-        v: 1,
-        album_id: albumId,
-        name,
-        created_at: new Date(createdAt).toISOString(),
-        cover_photo_blob_id: coverPhotoBlobId || null,
-        photo_blob_ids: photoBlobIds,
-      });
-      const encrypted = await encrypt(new TextEncoder().encode(payload));
-      const hash = await sha256Hex(new Uint8Array(encrypted));
-      const res = await api.blobs.upload(encrypted, "album_manifest", hash);
-
-      const stored: CachedAlbum = {
+      // No previous manifest to replace, so this is a plain upload + persist.
+      const stored = await saveAlbumManifest({
         albumId,
-        manifestBlobId: res.blob_id,
+        manifestBlobId: "",
         name,
         createdAt,
         coverPhotoBlobId,
         photoBlobIds,
-      };
-      await db.albums.put(stored);
+      });
       onAdded(stored, photoBlobIds.length);
     } catch (err: unknown) {
       console.error("[AddToAlbumModal] create-and-add failed", err);

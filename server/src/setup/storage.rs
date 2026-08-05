@@ -981,7 +981,7 @@ async fn locate_sentinel_file(filename: &str) -> Result<String, AppError> {
     // below bounds the worst case.
     let ps = format!(
         r#"
-$name = '{name}'
+$name = '{filename}'
 $roots = New-Object System.Collections.Generic.List[string]
 if ($env:USERPROFILE) {{ [void]$roots.Add($env:USERPROFILE) }}
 foreach ($d in [System.IO.DriveInfo]::GetDrives()) {{
@@ -993,8 +993,7 @@ foreach ($root in $roots) {{
   if ($hit) {{ [Console]::Out.Write($hit.FullName); exit 0 }}
 }}
 exit 1
-"#,
-        name = filename
+"#
     );
 
     let output = tokio::time::timeout(

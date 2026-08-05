@@ -1,0 +1,14 @@
+-- Preserve the original capture-timezone offset for imported photos.
+--
+-- `photos.taken_at` is always stored as a UTC ISO-8601 instant so text-based
+-- `ORDER BY` sorts chronologically. But EXIF `DateTimeOriginal` is local
+-- wall-clock time with no zone, and the old importer stamped it "Z" blindly —
+-- treating local time as UTC and shifting every non-UTC photo's timeline slot
+-- by its offset (the Google Takeout "wrong dates" bug, todo #15).
+--
+-- The importer now reads EXIF `OffsetTimeOriginal`/`OffsetTime` to convert
+-- `taken_at` to a correct UTC instant, and records the original offset here
+-- (e.g. "+09:00", "-08:00") so a future display layer can reconstruct the
+-- local capture time. NULL means the source never recorded a zone (older
+-- phones, or Google sidecar epochs, which are already true UTC instants).
+ALTER TABLE photos ADD COLUMN taken_at_offset TEXT;

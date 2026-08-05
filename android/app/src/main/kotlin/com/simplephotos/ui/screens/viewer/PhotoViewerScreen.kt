@@ -28,6 +28,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.*
@@ -48,6 +49,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -61,7 +63,6 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
@@ -97,6 +98,7 @@ private data class CropCorners(
 @Composable
 fun PhotoViewerScreen(
     onBack: () -> Unit,
+    onSelectPerson: (photoId: String, detectionId: Long) -> Unit = { _, _ -> },
     viewModel: PhotoViewerViewModel = hiltViewModel()
 ) {
     // Wait for the photo list before creating pager state
@@ -115,7 +117,19 @@ fun PhotoViewerScreen(
             modifier = Modifier.fillMaxSize().background(Color.Black),
             contentAlignment = Alignment.Center
         ) {
-            Text("Photo not found", color = Color.White)
+            // An empty list has two causes and they are not interchangeable.
+            // "Photo not found" is the E3 answer: the id genuinely is not on
+            // this surface (secured, collapsed away, not synced). A resolver
+            // FAILURE — the secure filter being unknown (B5) — also lands here
+            // with an empty list, and reporting that as "not found" would blame
+            // the user's photo for a server problem, and hide the real cause
+            // from anyone reading a bug report.
+            Text(
+                viewModel.error ?: "Photo not found",
+                color = Color.White,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(horizontal = 32.dp),
+            )
         }
         return
     }
@@ -157,10 +171,12 @@ fun PhotoViewerScreen(
     // This mirrors how the web browser works: download first, play local.
     val sharedPlayer = remember {
         run {
-            // Local-only data source — handles file:// and content:// URIs.
-            // No network data source needed; download is handled separately.
+            // Data source that streams encrypted video blobs (spblob:// URIs) by
+            // fetching + decrypting only the frames ExoPlayer reads (issue #17),
+            // and delegates local file://, content:// (originals, motion trailers)
+            // to the default source. Replaces the old download-whole-file-first path.
             val mediaSourceFactory = DefaultMediaSourceFactory(
-                DefaultDataSource.Factory(context)
+                MediaBlobDataSource.Factory(context, viewModel.encryptedBlobStream)
             )
 
             // ── Minimal in-memory buffer ─────────────────────────────
@@ -195,6 +211,11 @@ fun PhotoViewerScreen(
                 .build()
                 .apply {
                     playWhenReady = false
+                    // Loop videos instead of stopping after one play (#22).
+                    // Trimmed videos never reach the natural end (the trim
+                    // handler loops them within [trimStart, trimEnd]); this
+                    // covers every untrimmed video.
+                    repeatMode = androidx.media3.common.Player.REPEAT_MODE_ONE
                     videoChangeFrameRateStrategy =
                         C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF
                 }
@@ -212,6 +233,10 @@ fun PhotoViewerScreen(
     var activeVideoUri by remember { mutableStateOf<Uri?>(null) }
     // Track player errors at this level so the page can display them
     var sharedPlayerError by remember { mutableStateOf<String?>(null) }
+    // Default video quality on a metered link (#49). Read once here rather than
+    // per page: the pager keeps several pages composed, and each would register
+    // its own ConnectivityManager callback.
+    val qualityConstrained = rememberQualityConstrained()
     DisposableEffect(sharedPlayer) {
         val listener = object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
@@ -241,7 +266,12 @@ fun PhotoViewerScreen(
     // Controls overlay visibility — starts hidden so the photo is the focus.
     // Single tap toggles; when shown, auto-hide after 3 s of inactivity.
     var showOverlay by remember { mutableStateOf(false) }
-    LaunchedEffect(showOverlay) {
+    // Bumped whenever the user interacts with a control (e.g. favoriting). Keyed
+    // into the auto-hide effect so each interaction restarts the 3 s countdown —
+    // otherwise rapid consecutive favorites let the timer fire mid-interaction and
+    // the top bar vanished while still in use, taking seconds to tap back (#19).
+    var overlayInteraction by remember { mutableIntStateOf(0) }
+    LaunchedEffect(showOverlay, overlayInteraction) {
         if (showOverlay) {
             kotlinx.coroutines.delay(3_000)
             showOverlay = false
@@ -258,13 +288,234 @@ fun PhotoViewerScreen(
     // pano consumes its own pan axis). See android-pano-pending-2026-06-20 #3.
     var liveVerticalDragActive by remember { mutableStateOf(false) }
 
+    // True while the active page is zoomed in (scale > 1×). Gates the
+    // screen-level swipe-to-dismiss / swipe-to-info detector so that panning a
+    // zoomed photo moves the image instead of closing it or opening the info
+    // panel. Reported up from PhotoPageContent. (#9)
+    var photoZoomed by remember { mutableStateOf(false) }
+
     // ── Info panel state ─────────────────────────────────────────────
     var showInfoPanel by remember { mutableStateOf(false) }
     var showTagPanel by remember { mutableStateOf(false) }
+    // Top-bar overflow (⋮) menu: tags · download · delete/remove (todo1 #3).
+    var showOverflow by remember { mutableStateOf(false) }
 
     // ── Download state ───────────────────────────────────────────────
     val scope = rememberCoroutineScope()
     var downloadMessage by remember { mutableStateOf<String?>(null) }
+    // Non-null when the converted file has a retained pre-conversion original,
+    // so the user is prompted to pick which one to save.
+    var showDownloadChoice by remember { mutableStateOf<PhotoEntity?>(null) }
+
+    // Save the CONVERTED (browser-native) file to the device Downloads folder.
+    val runConvertedDownload: (PhotoEntity) -> Unit = { photo ->
+        scope.launch {
+            try {
+                // AVIF/HEIC/HEIF have poor cross-app support; transcode to
+                // JPEG on download so the saved file opens in any gallery
+                // app (the "convert AVIF to JPEG" ask). Falls back to saving
+                // the original bytes if decode isn't available on this device.
+                val srcExt = photo.filename.substringAfterLast('.', "").lowercase()
+                if (srcExt == "avif" || srcExt == "heic" || srcExt == "heif") {
+                    val tempFile = java.io.File.createTempFile("save_", ".$srcExt", context.cacheDir)
+                    val staged = try {
+                        if (photo.localPath != null) {
+                            context.contentResolver.openInputStream(Uri.parse(photo.localPath))?.use { input ->
+                                tempFile.outputStream().use { input.copyTo(it) }
+                            }
+                            tempFile.length() > 0
+                        } else {
+                            viewModel.downloadPhotoToFile(photo, tempFile)
+                        }
+                    } catch (_: Exception) { false }
+                    if (!staged) {
+                        tempFile.delete(); downloadMessage = "Download failed"; return@launch
+                    }
+                    val jpegBytes = viewModel.transcodeToJpegIfNeeded(tempFile, photo.filename)
+                    val baseName = if (photo.filename.contains('.'))
+                        photo.filename.substringBeforeLast('.') else photo.filename
+                    val outName = baseName + if (jpegBytes != null) ".jpg" else ".$srcExt"
+                    val outMime = when {
+                        jpegBytes != null -> "image/jpeg"
+                        srcExt == "avif" -> "image/avif"
+                        else -> "image/heif"
+                    }
+                    val values = ContentValues().apply {
+                        put(MediaStore.MediaColumns.DISPLAY_NAME, outName)
+                        put(MediaStore.MediaColumns.MIME_TYPE, outMime)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                        }
+                    }
+                    val collectionUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+                        MediaStore.Downloads.EXTERNAL_CONTENT_URI
+                    else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                    val destUri = context.contentResolver.insert(collectionUri, values)
+                    if (destUri == null) {
+                        tempFile.delete(); downloadMessage = "Download failed"; return@launch
+                    }
+                    val ok = try {
+                        context.contentResolver.openOutputStream(destUri)?.use { output ->
+                            if (jpegBytes != null) output.write(jpegBytes)
+                            else tempFile.inputStream().buffered().use { it.copyTo(output) }
+                        }
+                        true
+                    } catch (_: Exception) { false }
+                    tempFile.delete()
+                    downloadMessage = if (ok) "Saved to Downloads" else "Download failed"
+                    return@launch
+                }
+
+                val values = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, photo.filename)
+                    put(MediaStore.MediaColumns.MIME_TYPE, when {
+                        photo.filename.endsWith(".png", true) -> "image/png"
+                        photo.filename.endsWith(".gif", true) -> "image/gif"
+                        photo.filename.endsWith(".mp4", true) -> "video/mp4"
+                        photo.filename.endsWith(".webm", true) -> "video/webm"
+                        else -> "image/jpeg"
+                    })
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                    }
+                }
+                // MediaStore.Downloads.EXTERNAL_CONTENT_URI requires API 29 (Q).
+                // On older API levels (26-28) fall back to the per-type Media
+                // collections, which are available since API 1.
+                val isVideo = photo.filename.endsWith(".mp4", true) ||
+                    photo.filename.endsWith(".webm", true)
+                val collectionUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    MediaStore.Downloads.EXTERNAL_CONTENT_URI
+                } else if (isVideo) {
+                    MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                } else {
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                }
+                val destUri = context.contentResolver.insert(
+                    collectionUri, values
+                )
+                if (destUri == null) {
+                    downloadMessage = "Download failed"
+                    return@launch
+                }
+
+                val saved = when {
+                    // Local files: stream from content resolver
+                    photo.localPath != null -> {
+                        try {
+                            context.contentResolver.openInputStream(Uri.parse(photo.localPath))?.use { input ->
+                                context.contentResolver.openOutputStream(destUri)?.use { output ->
+                                    input.copyTo(output)
+                                }
+                            }
+                            true
+                        } catch (_: Exception) { false }
+                    }
+                    // Server files: stream download → temp file → MediaStore
+                    // Uses downloadPhotoToFile() which streams to disk with
+                    // constant ~8 KB heap — safe for large videos.
+                    else -> {
+                        val tempFile = java.io.File.createTempFile("save_", ".tmp", context.cacheDir)
+                        try {
+                            val ok = viewModel.downloadPhotoToFile(photo, tempFile)
+                            if (ok) {
+                                tempFile.inputStream().buffered().use { input ->
+                                    context.contentResolver.openOutputStream(destUri)?.use { output ->
+                                        input.copyTo(output)
+                                    }
+                                }
+                            }
+                            ok
+                        } finally {
+                            tempFile.delete()
+                        }
+                    }
+                }
+
+                downloadMessage = if (saved) "Saved to Downloads" else "Download failed"
+            } catch (e: Exception) {
+                downloadMessage = "Download failed: ${e.message}"
+            }
+        }
+        Unit
+    }
+
+    // Save the ORIGINAL, unconverted source file (the retained pre-conversion
+    // original) to the device Downloads folder.
+    val runOriginalDownload: (PhotoEntity) -> Unit = { photo ->
+        val serverId = photo.serverPhotoId
+        if (serverId == null) {
+            downloadMessage = "Original not available"
+        } else {
+            scope.launch {
+                try {
+                    // Recover the original filename/extension from the source path.
+                    val srcName = photo.sourcePath
+                        ?.substringAfterLast('/')?.substringAfterLast('\\')
+                        ?.takeIf { it.isNotBlank() } ?: photo.filename
+                    val ext = srcName.substringAfterLast('.', "").lowercase()
+                    val mime = when (ext) {
+                        "heic", "heif" -> "image/heic"
+                        "png" -> "image/png"
+                        "gif" -> "image/gif"
+                        "webp" -> "image/webp"
+                        "tiff", "tif" -> "image/tiff"
+                        "bmp" -> "image/bmp"
+                        "mp4" -> "video/mp4"
+                        "mkv" -> "video/x-matroska"
+                        "avi" -> "video/x-msvideo"
+                        "mov" -> "video/quicktime"
+                        "webm" -> "video/webm"
+                        "wmv" -> "video/x-ms-wmv"
+                        "flac" -> "audio/flac"
+                        "wav" -> "audio/wav"
+                        "ogg" -> "audio/ogg"
+                        "mp3" -> "audio/mpeg"
+                        else -> "application/octet-stream"
+                    }
+                    val isVideo = mime.startsWith("video/")
+                    val isAudio = mime.startsWith("audio/")
+                    val tempFile = java.io.File.createTempFile("orig_", ".$ext", context.cacheDir)
+                    try {
+                        val ok = viewModel.downloadSourceToFile(serverId, tempFile)
+                        if (!ok) { downloadMessage = "Download failed"; return@launch }
+                        val values = ContentValues().apply {
+                            put(MediaStore.MediaColumns.DISPLAY_NAME, srcName)
+                            put(MediaStore.MediaColumns.MIME_TYPE, mime)
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                            }
+                        }
+                        val collectionUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            MediaStore.Downloads.EXTERNAL_CONTENT_URI
+                        } else if (isVideo) {
+                            MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                        } else if (isAudio) {
+                            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+                        } else {
+                            MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                        }
+                        val destUri = context.contentResolver.insert(collectionUri, values)
+                        if (destUri == null) { downloadMessage = "Download failed"; return@launch }
+                        val saved = try {
+                            tempFile.inputStream().buffered().use { input ->
+                                context.contentResolver.openOutputStream(destUri)?.use { output ->
+                                    input.copyTo(output)
+                                }
+                            }
+                            true
+                        } catch (_: Exception) { false }
+                        downloadMessage = if (saved) "Saved original to Downloads" else "Download failed"
+                    } finally {
+                        tempFile.delete()
+                    }
+                } catch (e: Exception) {
+                    downloadMessage = "Download failed: ${e.message}"
+                }
+            }
+        }
+        Unit
+    }
 
     // ── Edit mode state ──────────────────────────────────────────────
     var editMode by remember { mutableStateOf(false) }
@@ -309,8 +560,12 @@ fun PhotoViewerScreen(
     // changes while open. Cleared on photo change so stale EXIF never lingers.
     LaunchedEffect(currentPhoto?.serverPhotoId, showInfoPanel) {
         viewModel.clearFullMetadata()
+        viewModel.clearPhotoFaces()
         if (showInfoPanel) {
-            currentPhoto?.serverPhotoId?.let { viewModel.loadFullMetadata(it) }
+            currentPhoto?.serverPhotoId?.let {
+                viewModel.loadFullMetadata(it)
+                viewModel.loadPhotoFaces(it)
+            }
         }
     }
 
@@ -371,23 +626,33 @@ fun PhotoViewerScreen(
             (mediaDuration <= 0f || kotlin.math.abs(trimEnd - mediaDuration) < 0.5f)
         val allDefault = isDefaultCrop && isDefaultBrightness && isDefaultRotate && isDefaultTrim
 
-        if (allDefault) {
-            viewModel.saveCropMetadata(photo, null)
-        } else {
-            val meta = JSONObject().apply {
-                put("x", c.x.toDouble().coerceIn(0.0, 1.0))
-                put("y", c.y.toDouble().coerceIn(0.0, 1.0))
-                put("width", c.w.toDouble().coerceIn(0.05, 1.0))
-                put("height", c.h.toDouble().coerceIn(0.05, 1.0))
-                put("rotate", rotateValue)
-                put("brightness", brightnessValue.toDouble())
-                if (!isDefaultTrim) {
-                    put("trimStart", trimStart.toDouble())
-                    put("trimEnd", trimEnd.toDouble())
-                }
-            }.toString()
-            viewModel.saveCropMetadata(photo, meta)
+        val meta = if (allDefault) null else JSONObject().apply {
+            put("x", c.x.toDouble().coerceIn(0.0, 1.0))
+            put("y", c.y.toDouble().coerceIn(0.0, 1.0))
+            put("width", c.w.toDouble().coerceIn(0.05, 1.0))
+            put("height", c.h.toDouble().coerceIn(0.05, 1.0))
+            put("rotate", rotateValue)
+            put("brightness", brightnessValue.toDouble())
+            if (!isDefaultTrim) {
+                put("trimStart", trimStart.toDouble())
+                put("trimEnd", trimEnd.toDouble())
+            }
+        }.toString()
+
+        // GIFs have no in-place metadata Save (issue #18): a metadata-only save
+        // can't re-bake the animated-GIF thumbnail (Coil's animated drawable
+        // ignores the graphicsLayer tile transform), so the thumbnail keeps the
+        // unedited frame. Route real GIF edits through the server duplicate
+        // render, which re-encodes the GIF via ffmpeg AND regenerates a cropped
+        // thumbnail. Defensive: the GIF Save button is already hidden — this
+        // guards any other in-place-save entry point. A reset (meta == null)
+        // still clears the metadata below.
+        if (photo.mediaType == "gif" && meta != null) {
+            viewModel.duplicatePhoto(photo, meta) { editMode = false }
+            return
         }
+
+        viewModel.saveCropMetadata(photo, meta)
         editMode = false
     }
 
@@ -452,7 +717,7 @@ fun PhotoViewerScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
-            .pointerInput(editMode, liveVerticalDragActive, showInfoPanel) {
+            .pointerInput(editMode, liveVerticalDragActive, showInfoPanel, photoZoomed) {
                 // Detect vertical swipes: up → info panel, down → close viewer
                 // Only at the top level so it doesn't conflict with zoom panning.
                 //
@@ -470,7 +735,10 @@ fun PhotoViewerScreen(
                 // vertical scroll drags (the long Edit Metadata form could not be
                 // scrolled). The panel has its own ✕ to close. See
                 // android-scroll-in-capped-column-2026-06-21.
-                if (editMode || liveVerticalDragActive || showInfoPanel) return@pointerInput
+                // ALSO disabled while the active photo is zoomed in: the per-page
+                // handler owns single-finger pans then, and reading them here on
+                // the Initial pass would steal the pan and dismiss/open-info. (#9)
+                if (editMode || liveVerticalDragActive || showInfoPanel || photoZoomed) return@pointerInput
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                     var totalY = 0f
@@ -575,7 +843,11 @@ fun PhotoViewerScreen(
                             liveVerticalDragActive = live && usesVert
                         }
                     },
-                    onVideoUriReady = { uri, filename ->
+                    // Only the active page may drive the screen-level zoom gate,
+                    // so an adjacent page resetting its zoom can't clobber it. (#9)
+                    onZoomChange = { z -> if (pagerState.currentPage == page) photoZoomed = z },
+                    qualityConstrained = qualityConstrained,
+                    onVideoUriReady = { uri, filename, resume ->
                         // Load the new media item into the shared player.
                         // Only swap if the URI actually changed (avoids re-prepare
                         // on every recomposition).
@@ -601,9 +873,28 @@ fun PhotoViewerScreen(
                             // causing a transient peak that triggers OOM.
                             // setMediaItem + prepare reuses the codec if the format
                             // is compatible (e.g., both H.264 MP4).
-                            sharedPlayer.setMediaItem(MediaItem.fromUri(uri))
-                            sharedPlayer.prepare()
-                            sharedPlayer.playWhenReady = true
+                            //
+                            // A non-null `resume` means this is a #49 quality
+                            // swap rather than a new video, so the playhead and
+                            // play/pause state carry across. The start position
+                            // goes through setMediaItem rather than a seekTo
+                            // after prepare(): seeking afterwards makes the
+                            // player visibly start at zero and jump, and a
+                            // rendition has the same duration as its source so
+                            // the position transfers directly.
+                            if (resume != null) {
+                                sharedPlayer.setMediaItem(MediaItem.fromUri(uri), resume.positionMs)
+                                sharedPlayer.prepare()
+                                // Restore BOTH directions: the fresh-load path
+                                // below always plays, so without this a video
+                                // the user had paused would silently resume on
+                                // every quality change.
+                                sharedPlayer.playWhenReady = resume.playing
+                            } else {
+                                sharedPlayer.setMediaItem(MediaItem.fromUri(uri))
+                                sharedPlayer.prepare()
+                                sharedPlayer.playWhenReady = true
+                            }
                         }
                     },
                     onDurationKnown = { dur ->
@@ -800,7 +1091,12 @@ fun PhotoViewerScreen(
                     Spacer(Modifier.weight(1f))
                     if (currentPhoto != null) {
                         if (currentPhoto.serverPhotoId != null) {
-                            IconButton(onClick = { viewModel.toggleFavorite(currentPhoto.serverPhotoId!!) }, modifier = Modifier.size(40.dp)) {
+                            IconButton(onClick = {
+                                // Keep the top bar alive: rapid consecutive favorites
+                                // must restart the auto-hide countdown, not race it (#19).
+                                overlayInteraction++
+                                viewModel.toggleFavorite(currentPhoto.serverPhotoId!!)
+                            }, modifier = Modifier.size(40.dp)) {
                                 Icon(
                                     imageVector = if (viewModel.isFavorite) Icons.Filled.Star else Icons.Filled.StarBorder,
                                     contentDescription = if (viewModel.isFavorite) "Unfavorite" else "Favorite",
@@ -809,33 +1105,8 @@ fun PhotoViewerScreen(
                                 )
                             }
                         }
-                        // Info button
-                        IconButton(onClick = { showInfoPanel = !showInfoPanel }, modifier = Modifier.size(40.dp)) {
-                            Icon(
-                                imageVector = Icons.Default.Info,
-                                contentDescription = "Info",
-                                tint = if (showInfoPanel) Violet.v400 else Color.White,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                        // Tag button
-                        if (currentPhoto.serverPhotoId != null) {
-                            IconButton(onClick = {
-                                showTagPanel = !showTagPanel
-                                if (showTagPanel) {
-                                    viewModel.loadTagsForPhoto(currentPhoto.serverPhotoId)
-                                }
-                            }, modifier = Modifier.size(40.dp)) {
-                                Icon(
-                                    painter = painterResource(R.drawable.ic_tag),
-                                    contentDescription = "Tags",
-                                    tint = if (showTagPanel) Violet.v400 else Color.White,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        }
-                        // Edit button — available for photos, videos, and audio
-                        if (currentPhoto.mediaType == "photo" || currentPhoto.mediaType == "video" || currentPhoto.mediaType == "audio") {
+                        // Edit button — available for photos, GIFs, videos, and audio
+                        if (currentPhoto.mediaType == "photo" || currentPhoto.mediaType == "gif" || currentPhoto.mediaType == "video" || currentPhoto.mediaType == "audio") {
                             TextButton(
                                 onClick = {
                                     if (editMode) {
@@ -854,164 +1125,131 @@ fun PhotoViewerScreen(
                                 )
                             }
                         }
-                        // Download button
-                        IconButton(modifier = Modifier.size(40.dp), onClick = {
-                            val photo = currentPhoto ?: return@IconButton
-                            scope.launch {
-                                try {
-                                    // AVIF/HEIC/HEIF have poor cross-app support; transcode to
-                                    // JPEG on download so the saved file opens in any gallery
-                                    // app (the "convert AVIF to JPEG" ask). Falls back to saving
-                                    // the original bytes if decode isn't available on this device.
-                                    val srcExt = photo.filename.substringAfterLast('.', "").lowercase()
-                                    if (srcExt == "avif" || srcExt == "heic" || srcExt == "heif") {
-                                        val tempFile = java.io.File.createTempFile("save_", ".$srcExt", context.cacheDir)
-                                        val staged = try {
-                                            if (photo.localPath != null) {
-                                                context.contentResolver.openInputStream(Uri.parse(photo.localPath))?.use { input ->
-                                                    tempFile.outputStream().use { input.copyTo(it) }
-                                                }
-                                                tempFile.length() > 0
-                                            } else {
-                                                viewModel.downloadPhotoToFile(photo, tempFile)
-                                            }
-                                        } catch (_: Exception) { false }
-                                        if (!staged) {
-                                            tempFile.delete(); downloadMessage = "Download failed"; return@launch
-                                        }
-                                        val jpegBytes = viewModel.transcodeToJpegIfNeeded(tempFile, photo.filename)
-                                        val baseName = if (photo.filename.contains('.'))
-                                            photo.filename.substringBeforeLast('.') else photo.filename
-                                        val outName = baseName + if (jpegBytes != null) ".jpg" else ".$srcExt"
-                                        val outMime = when {
-                                            jpegBytes != null -> "image/jpeg"
-                                            srcExt == "avif" -> "image/avif"
-                                            else -> "image/heif"
-                                        }
-                                        val values = ContentValues().apply {
-                                            put(MediaStore.MediaColumns.DISPLAY_NAME, outName)
-                                            put(MediaStore.MediaColumns.MIME_TYPE, outMime)
-                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                                                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-                                            }
-                                        }
-                                        val collectionUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
-                                            MediaStore.Downloads.EXTERNAL_CONTENT_URI
-                                        else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-                                        val destUri = context.contentResolver.insert(collectionUri, values)
-                                        if (destUri == null) {
-                                            tempFile.delete(); downloadMessage = "Download failed"; return@launch
-                                        }
-                                        val ok = try {
-                                            context.contentResolver.openOutputStream(destUri)?.use { output ->
-                                                if (jpegBytes != null) output.write(jpegBytes)
-                                                else tempFile.inputStream().buffered().use { it.copyTo(output) }
-                                            }
-                                            true
-                                        } catch (_: Exception) { false }
-                                        tempFile.delete()
-                                        downloadMessage = if (ok) "Saved to Downloads" else "Download failed"
-                                        return@launch
-                                    }
-
-                                    val values = ContentValues().apply {
-                                        put(MediaStore.MediaColumns.DISPLAY_NAME, photo.filename)
-                                        put(MediaStore.MediaColumns.MIME_TYPE, when {
-                                            photo.filename.endsWith(".png", true) -> "image/png"
-                                            photo.filename.endsWith(".gif", true) -> "image/gif"
-                                            photo.filename.endsWith(".mp4", true) -> "video/mp4"
-                                            photo.filename.endsWith(".webm", true) -> "video/webm"
-                                            else -> "image/jpeg"
-                                        })
-                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                                            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-                                        }
-                                    }
-                                    // MediaStore.Downloads.EXTERNAL_CONTENT_URI requires API 29 (Q).
-                                    // On older API levels (26-28) fall back to the per-type Media
-                                    // collections, which are available since API 1.
-                                    val isVideo = photo.filename.endsWith(".mp4", true) ||
-                                        photo.filename.endsWith(".webm", true)
-                                    val collectionUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                                        MediaStore.Downloads.EXTERNAL_CONTENT_URI
-                                    } else if (isVideo) {
-                                        MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-                                    } else {
-                                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-                                    }
-                                    val destUri = context.contentResolver.insert(
-                                        collectionUri, values
-                                    )
-                                    if (destUri == null) {
-                                        downloadMessage = "Download failed"
-                                        return@launch
-                                    }
-
-                                    val saved = when {
-                                        // Local files: stream from content resolver
-                                        photo.localPath != null -> {
-                                            try {
-                                                context.contentResolver.openInputStream(Uri.parse(photo.localPath))?.use { input ->
-                                                    context.contentResolver.openOutputStream(destUri)?.use { output ->
-                                                        input.copyTo(output)
-                                                    }
-                                                }
-                                                true
-                                            } catch (_: Exception) { false }
-                                        }
-                                        // Server files: stream download → temp file → MediaStore
-                                        // Uses downloadPhotoToFile() which streams to disk with
-                                        // constant ~8 KB heap — safe for large videos.
-                                        else -> {
-                                            val tempFile = java.io.File.createTempFile("save_", ".tmp", context.cacheDir)
-                                            try {
-                                                val ok = viewModel.downloadPhotoToFile(photo, tempFile)
-                                                if (ok) {
-                                                    tempFile.inputStream().buffered().use { input ->
-                                                        context.contentResolver.openOutputStream(destUri)?.use { output ->
-                                                            input.copyTo(output)
-                                                        }
-                                                    }
-                                                }
-                                                ok
-                                            } finally {
-                                                tempFile.delete()
-                                            }
-                                        }
-                                    }
-
-                                    downloadMessage = if (saved) "Saved to Downloads" else "Download failed"
-                                } catch (e: Exception) {
-                                    downloadMessage = "Download failed: ${e.message}"
-                                }
-                            }
-                        }) {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_download),
-                                contentDescription = "Download",
-                                tint = Color.White,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                        if (viewModel.albumId != null) {
-                            // Album context: remove from album only (don't delete the photo)
-                            IconButton(onClick = { viewModel.removeFromAlbum(currentPhoto, onBack) }, modifier = Modifier.size(40.dp)) {
+                        // ── Overflow (⋮): tags · download · delete/remove ───────
+                        Box {
+                            IconButton(
+                                onClick = {
+                                    // Keep the top bar alive while the menu is open,
+                                    // same anti-race trick as favorite (#19).
+                                    overlayInteraction++
+                                    showOverflow = true
+                                },
+                                modifier = Modifier.size(40.dp)
+                            ) {
                                 Icon(
-                                    painter = painterResource(R.drawable.ic_trashcan),
-                                    contentDescription = "Remove from album",
-                                    tint = Color(0xFFFFA500),
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        } else {
-                            // Gallery context: delete the photo
-                            IconButton(onClick = { viewModel.deletePhoto(currentPhoto, onBack) }, modifier = Modifier.size(40.dp)) {
-                                Icon(
-                                    painter = painterResource(R.drawable.ic_trashcan),
-                                    contentDescription = "Delete",
+                                    imageVector = Icons.Default.MoreVert,
+                                    contentDescription = "More options",
                                     tint = Color.White,
-                                    modifier = Modifier.size(20.dp)
+                                    modifier = Modifier.size(22.dp)
                                 )
+                            }
+                            MaterialTheme(
+                                shapes = MaterialTheme.shapes.copy(extraSmall = RoundedCornerShape(16.dp))
+                            ) {
+                                DropdownMenu(
+                                    expanded = showOverflow,
+                                    onDismissRequest = { showOverflow = false }
+                                ) {
+                                    // Info lives ONLY here (#44). #30 added this entry
+                                    // and left the standalone top-bar button in place;
+                                    // the button is gone now, so this is the one way in
+                                    // (the swipe-up gesture aside).
+                                    DropdownMenuItem(
+                                        text = { Text("Info") },
+                                        onClick = {
+                                            showOverflow = false
+                                            overlayInteraction++
+                                            showInfoPanel = !showInfoPanel
+                                        },
+                                        leadingIcon = {
+                                            Icon(
+                                                imageVector = Icons.Default.Info,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    )
+                                    if (currentPhoto.serverPhotoId != null) {
+                                        DropdownMenuItem(
+                                            text = { Text("Tags") },
+                                            onClick = {
+                                                showOverflow = false
+                                                overlayInteraction++
+                                                showTagPanel = !showTagPanel
+                                                if (showTagPanel) {
+                                                    viewModel.loadTagsForPhoto(currentPhoto.serverPhotoId)
+                                                }
+                                            },
+                                            leadingIcon = {
+                                                Icon(
+                                                    painter = painterResource(R.drawable.ic_tag),
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+                                        )
+                                    }
+                                    // Download — converted files prompt original-vs-converted.
+                                    DropdownMenuItem(
+                                        text = { Text("Download") },
+                                        onClick = {
+                                            showOverflow = false
+                                            val photo = currentPhoto
+                                            // Converted files keep their pre-conversion
+                                            // original — let the user pick which to save.
+                                            // Edits download the displayed file, so only
+                                            // offer the choice outside edit mode.
+                                            if (photo.sourcePath != null && !editMode) {
+                                                showDownloadChoice = photo
+                                            } else {
+                                                runConvertedDownload(photo)
+                                            }
+                                        },
+                                        leadingIcon = {
+                                            Icon(
+                                                painter = painterResource(R.drawable.ic_download),
+                                                contentDescription = null,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    )
+                                    HorizontalDivider()
+                                    if (viewModel.albumId != null) {
+                                        // Album context: remove from album, don't delete.
+                                        DropdownMenuItem(
+                                            text = { Text("Remove from album", color = Color(0xFFFFA500)) },
+                                            onClick = {
+                                                showOverflow = false
+                                                viewModel.removeFromAlbum(currentPhoto, onBack)
+                                            },
+                                            leadingIcon = {
+                                                Icon(
+                                                    painter = painterResource(R.drawable.ic_trashcan),
+                                                    contentDescription = null,
+                                                    tint = Color(0xFFFFA500),
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+                                        )
+                                    } else {
+                                        // Gallery context: delete the photo.
+                                        DropdownMenuItem(
+                                            text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                                            onClick = {
+                                                showOverflow = false
+                                                viewModel.deletePhoto(currentPhoto, onBack)
+                                            },
+                                            leadingIcon = {
+                                                Icon(
+                                                    painter = painterResource(R.drawable.ic_trashcan),
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.error,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -1034,6 +1272,7 @@ fun PhotoViewerScreen(
             visible = showInfoPanel,
             photo = currentPhoto,
             fullMeta = viewModel.fullMetadata,
+            faces = viewModel.photoFaces,
             saving = viewModel.metadataSaving,
             error = viewModel.metadataError,
             onDismiss = { showInfoPanel = false },
@@ -1042,6 +1281,12 @@ fun PhotoViewerScreen(
             },
             onWriteExif = {
                 currentPhoto?.serverPhotoId?.let { viewModel.writeExif(it) }
+            },
+            onSelectPerson = { detectionId ->
+                currentPhoto?.serverPhotoId?.let { pid ->
+                    showInfoPanel = false
+                    onSelectPerson(pid, detectionId)
+                }
             },
             modifier = Modifier.align(Alignment.BottomCenter)
         )
@@ -1114,6 +1359,32 @@ fun PhotoViewerScreen(
             ) {
                 Text(msg)
             }
+        }
+
+        // ── Original-vs-converted download choice ──────────────────────
+        showDownloadChoice?.let { photo ->
+            AlertDialog(
+                onDismissRequest = { showDownloadChoice = null },
+                title = { Text("Download") },
+                text = {
+                    Text(
+                        "This file was converted on import. Download the original " +
+                            "unconverted file, or the converted copy?"
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showDownloadChoice = null
+                        runOriginalDownload(photo)
+                    }) { Text("Original") }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        showDownloadChoice = null
+                        runConvertedDownload(photo)
+                    }) { Text("Converted") }
+                }
+            )
         }
     }
 }

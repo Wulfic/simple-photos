@@ -8,13 +8,19 @@ import { useLocation } from "react-router-dom";
 import { useAppNavigate } from "../../hooks/useAppNavigate";
 import { useScrollMemory } from "../../hooks/useScrollMemory";
 import { api } from "../../api/client";
-import { encrypt, sha256Hex } from "../../crypto/crypto";
-import { db, type CachedPhoto, type CachedAlbum } from "../../db";
-import { useLiveQuery } from "dexie-react-hooks";
+import { db, type CachedAlbum } from "../../db";
+import { saveAlbumManifest } from "../../utils/albumManifest";
+import { useAlbumPhotos } from "../../hooks/useAlbumPhotos";
+import { useAlbumSort } from "../../hooks/useAlbumSort";
+import AlbumSortControl from "../../components/AlbumSortControl";
 import AppHeader from "../../components/AppHeader";
 import AppIcon from "../../components/AppIcon";
 import DetailHeader from "../../components/DetailHeader";
 import AddPhotosPanel from "../../components/AddPhotosPanel";
+import AddToAlbumModal from "../../components/AddToAlbumModal";
+import CastDialog, { CastIcon } from "../../components/CastDialog";
+import { ConfirmDialog, Modal } from "../../components/ui";
+import { albumRemovalPrompt } from "../../gallery/albumRemoval";
 import JustifiedGrid from "../../components/gallery/JustifiedGrid";
 import AlbumTile from "../../components/AlbumTile";
 import { getEffectiveAspectRatio } from "../../utils/thumbnailCss";
@@ -25,7 +31,7 @@ import { usePhotoSlideshow } from "../../hooks/useSlideshow";
 import SlideshowHost from "../../components/viewer/SlideshowHost";
 import SlideshowTriggers from "../../components/viewer/SlideshowTriggers";
 import { useSecureAdd } from "../../store/secureAdd";
-import { addPhotosToSecureGallery } from "../../utils/secureAdd";
+import { addPhotosToSecureGallery, secureAddResultMessage } from "../../utils/secureAdd";
 import type { ShareUser } from "../../types/sharing";
 import SharePickerModal from "../../components/SharePickerModal";
 
@@ -37,7 +43,13 @@ export default function RegularAlbumView({ albumId }: { albumId: string | undefi
   const [showSharePicker, setShowSharePicker] = useState(false);
   const [shareUsers, setShareUsers] = useState<ShareUser[]>([]);
   const [shareSuccess, setShareSuccess] = useState("");
-  const [secureBlobIds, setSecureBlobIds] = useState<Set<string>>(new Set());
+  // Header overflow (⋮) menu + its dialogs (#35: Rename, Share, Cast, Delete
+  // collapsed off the header; the standalone `+` handles Add Photos).
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [showRename, setShowRename] = useState(false);
+  const [renameInput, setRenameInput] = useState("");
+  const [castOpen, setCastOpen] = useState(false);
 
   // Surface errors as a dismissible toast popup instead of an under-navbar bar
   // (#8). e.g. sharing an album to yourself ("Cannot add yourself as a member").
@@ -54,42 +66,46 @@ export default function RegularAlbumView({ albumId }: { albumId: string | undefi
     }
   }, [shareSuccess]);
 
-  // Fetch secure blob IDs so secure photos are excluded from regular albums
+  // Close the overflow menu on outside click or Escape (same pattern as the
+  // AppHeader / viewer overflow menus).
   useEffect(() => {
-    api.secureGalleries.secureBlobIds()
-      .then((res) => setSecureBlobIds(new Set(res.blob_ids)))
-      .catch((err: unknown) => {
-        // 404 = secure galleries feature not available — expected
-        const status = (err as { status?: number })?.status;
-        if (status !== 404) {
-          console.error("Failed to fetch secure blob IDs:", err);
-        }
-      });
-  }, []);
+    if (!menuOpen) return;
+    function onClick(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setMenuOpen(false);
+    }
+    document.addEventListener("mousedown", onClick);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onClick);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [menuOpen]);
 
-  const album = useLiveQuery(
-    () => (albumId ? db.albums.get(albumId) : undefined),
-    [albumId]
-  );
-
-  const allPhotos = useLiveQuery(() =>
-    db.photos.orderBy("takenAt").reverse().toArray()
-  );
+  // Unified album resolution: membership, secure-exclusion and the count all
+  // come from one source, so the header badge can no longer diverge from the
+  // rendered grid (#12 missing counts, #20 count flicker). `album` is the
+  // manifest used by the CRUD handlers below.
+  const { sort, displaySort, selectField } = useAlbumSort(albumId);
+  const {
+    photos: albumPhotos,
+    album,
+    allPhotos,
+    secureBlobIds,
+  } = useAlbumPhotos(albumId, sort);
 
   // Preserve scroll position when opening a photo and returning to the album.
   const { pathname } = useLocation();
-  // Photos that belong to this album (excluding any in secure galleries)
-  const albumPhotos = useMemo(() => {
-    if (!album || !allPhotos) return [];
-    const idSet = new Set(album.photoBlobIds);
-    return allPhotos.filter((p) => idSet.has(p.blobId) && !secureBlobIds.has(p.blobId));
-  }, [album, allPhotos, secureBlobIds]);
 
   useScrollMemory(pathname, albumPhotos.length > 0);
 
   // Photos NOT in this album (for "add photos" view), also excluding secure photos
   const availablePhotos = useMemo(() => {
-    if (!album || !allPhotos) return [];
+    if (!album) return [];
     const idSet = new Set(album.photoBlobIds);
     return allPhotos.filter((p) => !idSet.has(p.blobId) && !secureBlobIds.has(p.blobId));
   }, [album, allPhotos, secureBlobIds]);
@@ -106,6 +122,15 @@ export default function RegularAlbumView({ albumId }: { albumId: string | undefi
   const secureAddTarget = useSecureAdd((s) => s.target);
   const cancelSecureAdd = useSecureAdd((s) => s.cancel);
   const [addingSecure, setAddingSecure] = useState(false);
+
+  // "+ Add to album" (Z1): file the selection into ANOTHER album without
+  // unfiling it here. The album grid had a Remove but no way to add — the only
+  // add affordance was the album's own "Add Photos" panel, which pulls FROM the
+  // gallery INTO this album, never the other way.
+  const [showAddToAlbum, setShowAddToAlbum] = useState(false);
+  // Remove is now confirmed (Z1). It sits behind a trash icon, and a trash icon
+  // on an un-filing action has to say so or it reads as a delete.
+  const [confirmRemove, setConfirmRemove] = useState(false);
 
   if (!albumId) {
     return <p className="p-4 text-red-600 dark:text-red-400">Invalid album ID</p>;
@@ -125,12 +150,18 @@ export default function RegularAlbumView({ albumId }: { albumId: string | undefi
     if (!secureAddTarget || selectedIds.size === 0 || addingSecure) return;
     setAddingSecure(true);
     try {
-      const count = await addPhotosToSecureGallery(secureAddTarget.galleryId, [...selectedIds]);
-      toast.success(`Added ${count} photo${count !== 1 ? "s" : ""} to ${secureAddTarget.galleryName}`);
-      clearSelection();
-      const target = secureAddTarget.galleryId;
-      cancelSecureAdd();
-      navigate(`/secure-gallery?album=${target}`);
+      const result = await addPhotosToSecureGallery(secureAddTarget.galleryId, [...selectedIds]);
+      const msg = secureAddResultMessage(result, secureAddTarget.galleryName);
+      if (msg.success) toast.success(msg.success);
+      if (msg.error) toast.error(msg.error);
+      // Only leave the album / end the secure-add session once something moved;
+      // if the whole batch failed, keep the selection so the user can retry.
+      if (result.added > 0) {
+        clearSelection();
+        const target = secureAddTarget.galleryId;
+        cancelSecureAdd();
+        navigate(`/secure-gallery?album=${target}`);
+      }
     } catch (err: unknown) {
       setError(getErrorMessage(err));
     } finally {
@@ -209,34 +240,7 @@ export default function RegularAlbumView({ albumId }: { albumId: string | undefi
   }
 
   async function updateAlbumManifest(updatedAlbum: CachedAlbum) {
-    // Delete the old manifest blob on the server
-    if (updatedAlbum.manifestBlobId) {
-      try {
-        await api.blobs.delete(updatedAlbum.manifestBlobId);
-      } catch {
-        // Old manifest may already be deleted — continue
-      }
-    }
-
-    // Upload new manifest
-    const payload = JSON.stringify({
-      v: 1,
-      album_id: updatedAlbum.albumId,
-      name: updatedAlbum.name,
-      created_at: new Date(updatedAlbum.createdAt).toISOString(),
-      cover_photo_blob_id: updatedAlbum.coverPhotoBlobId || null,
-      photo_blob_ids: updatedAlbum.photoBlobIds,
-    });
-
-    const encrypted = await encrypt(new TextEncoder().encode(payload));
-    const hash = await sha256Hex(new Uint8Array(encrypted));
-    const res = await api.blobs.upload(encrypted, "album_manifest", hash);
-
-    // Update local cache
-    await db.albums.put({
-      ...updatedAlbum,
-      manifestBlobId: res.blob_id,
-    });
+    await saveAlbumManifest(updatedAlbum);
   }
 
   async function deleteAlbum() {
@@ -244,12 +248,43 @@ export default function RegularAlbumView({ albumId }: { albumId: string | undefi
     if (!confirm(`Delete album "${album.name}"? Photos will not be deleted.`))
       return;
     try {
+      // Tombstone FIRST for a Takeout-reconstructed album. Without this the
+      // delete below is undone: the next reconstruction pass rebuilds the album
+      // from the untouched server-side membership, on every device. Doing it
+      // before the local delete means a failure here leaves the album intact
+      // rather than deleting it locally and having it silently reappear.
+      if (album.albumId.startsWith("src-")) {
+        await api.photos.dismissSourceAlbum(album.albumId);
+      }
       if (album.manifestBlobId) {
         await api.blobs.delete(album.manifestBlobId);
       }
       await db.albums.delete(album.albumId);
       navigate("/albums");
     } catch (err: unknown) {
+      console.error("[RegularAlbumView] delete album failed", err);
+      setError(getErrorMessage(err));
+    }
+  }
+
+  function openRename() {
+    if (!album) return;
+    setRenameInput(album.name);
+    setShowRename(true);
+  }
+
+  async function renameAlbum() {
+    if (!album) return;
+    const name = renameInput.trim();
+    if (!name || name === album.name) {
+      setShowRename(false);
+      return;
+    }
+    try {
+      await updateAlbumManifest({ ...album, name });
+      setShowRename(false);
+    } catch (err: unknown) {
+      console.error("[RegularAlbumView] rename album failed", err);
       setError(getErrorMessage(err));
     }
   }
@@ -301,40 +336,145 @@ export default function RegularAlbumView({ albumId }: { albumId: string | undefi
         />
       )}
 
+      {/* Rename album modal (#35) */}
+      {showRename && (
+        <Modal open onClose={() => setShowRename(false)} title="Rename album" size="sm">
+          <form
+            onSubmit={(e) => { e.preventDefault(); renameAlbum(); }}
+            className="p-4 flex flex-col gap-4"
+          >
+            <input
+              type="text"
+              value={renameInput}
+              onChange={(e) => setRenameInput(e.target.value)}
+              className="input w-full"
+              placeholder="Album name"
+              autoFocus
+              maxLength={100}
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowRename(false)}
+                className="btn btn-ghost btn-md"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={!renameInput.trim()}
+                className="btn btn-primary btn-md"
+              >
+                Save
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* Cast dialog (#35) — reuses the global browser-cast flow */}
+      <CastDialog open={castOpen} onClose={() => setCastOpen(false)} />
+
       <main className="p-4">
-        {/* Sub-header with album name */}
+        {/* Sub-header with album name. Per #35 the item-count text is gone and
+            the header actions collapse into a `+` (Add Photos) and a ⋮ overflow
+            menu (Rename · Share · Cast · Delete). */}
         <DetailHeader
           backTo="/albums"
           backTitle="Back to Albums"
           title={album.name}
-          count={`${album.photoBlobIds.length} items`}
-          actions={!isBackupServer ? (
+          actions={
             <>
-              <button
-                onClick={openSharePicker}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all duration-200 text-fg-muted bg-white dark:bg-white/10 border border-edge hover:bg-surface-sunken dark:hover:bg-white/20 shadow-sm"
-              >
-                <AppIcon name="shared" />
-                <span className="hidden sm:inline">Share</span>
-              </button>
+              {/* Sort is a read-only view preference, so it shows even on a
+                  backup server where the CRUD actions are hidden. */}
+              <AlbumSortControl sort={displaySort} onSelectField={selectField} />
+              {!isBackupServer && (
+                <>
               <button
                 onClick={() => setShowAddPhotos(!showAddPhotos)}
-                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all duration-200 shadow-sm ${
+                title={showAddPhotos ? "Done adding" : "Add photos"}
+                aria-label="Add photos"
+                className={`inline-flex items-center justify-center w-9 h-9 rounded-md transition-all duration-200 shadow-sm ${
                   showAddPhotos
                     ? "bg-accent-600 text-white border border-accent-500 hover:bg-accent-700"
                     : "text-fg-muted bg-white dark:bg-white/10 border border-edge hover:bg-surface-sunken dark:hover:bg-white/20"
                 }`}
               >
-                {showAddPhotos ? "Done" : "Add Photos"}
+                {showAddPhotos ? (
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                ) : (
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                  </svg>
+                )}
               </button>
-              <button
-                onClick={deleteAlbum}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all duration-200 text-red-600 dark:text-red-400 bg-white dark:bg-white/10 border border-edge hover:bg-red-50 dark:hover:bg-red-900/30 shadow-sm"
-              >
-                Delete
-              </button>
+
+              <div className="relative" ref={menuRef}>
+                <button
+                  onClick={() => setMenuOpen((v) => !v)}
+                  title="More options"
+                  aria-label="More options"
+                  aria-haspopup="menu"
+                  aria-expanded={menuOpen}
+                  className={`inline-flex items-center justify-center w-9 h-9 rounded-md transition-all duration-200 shadow-sm border border-edge ${
+                    menuOpen
+                      ? "bg-surface-sunken dark:bg-white/20 text-fg"
+                      : "text-fg-muted bg-white dark:bg-white/10 hover:bg-surface-sunken dark:hover:bg-white/20"
+                  }`}
+                >
+                  <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z" />
+                  </svg>
+                </button>
+                {menuOpen && (
+                  <div
+                    className="absolute right-0 top-full mt-2 w-44 bg-surface rounded-lg shadow-2xl border border-edge py-1"
+                    style={{ zIndex: 9999 }}
+                    role="menu"
+                  >
+                    <button
+                      onClick={() => { openRename(); setMenuOpen(false); }}
+                      className="w-full text-left px-4 py-2 text-sm text-fg-muted hover:bg-surface-sunken dark:hover:bg-white/10 flex items-center gap-2 transition-colors"
+                      role="menuitem"
+                    >
+                      <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                      </svg>
+                      Rename
+                    </button>
+                    <button
+                      onClick={() => { openSharePicker(); setMenuOpen(false); }}
+                      className="w-full text-left px-4 py-2 text-sm text-fg-muted hover:bg-surface-sunken dark:hover:bg-white/10 flex items-center gap-2 transition-colors"
+                      role="menuitem"
+                    >
+                      <AppIcon name="shared" />
+                      Share
+                    </button>
+                    <button
+                      onClick={() => { setCastOpen(true); setMenuOpen(false); }}
+                      className="w-full text-left px-4 py-2 text-sm text-fg-muted hover:bg-surface-sunken dark:hover:bg-white/10 flex items-center gap-2 transition-colors"
+                      role="menuitem"
+                    >
+                      <CastIcon className="w-4 h-4 shrink-0" />
+                      Cast
+                    </button>
+                    <button
+                      onClick={() => { deleteAlbum(); setMenuOpen(false); }}
+                      className="w-full text-left px-4 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 flex items-center gap-2 transition-colors"
+                      role="menuitem"
+                    >
+                      <AppIcon name="trashcan" />
+                      Delete
+                    </button>
+                  </div>
+                )}
+              </div>
+                </>
+              )}
             </>
-          ) : undefined}
+          }
         >
           <SlideshowTriggers slideshow={slideshow} />
         </DetailHeader>
@@ -350,24 +490,56 @@ export default function RegularAlbumView({ albumId }: { albumId: string | undefi
         />
       )}
 
+      {/* "+ Add to album" for the current selection (Z1). The photo stays in
+          THIS album — AddToAlbumModal merges into the target's manifest and
+          touches no other album. */}
+      {showAddToAlbum && selectedIds.size > 0 && (
+        <AddToAlbumModal
+          blobIds={[...selectedIds]}
+          onClose={() => setShowAddToAlbum(false)}
+          onAdded={(album, count) => {
+            setShowAddToAlbum(false);
+            toast.success(
+              count > 0
+                ? `Added ${count} item${count !== 1 ? "s" : ""} to ${album.name}`
+                : `Already in ${album.name}`,
+            );
+            clearSelection();
+          }}
+        />
+      )}
+
+      {/* Remove confirmation (Z1) */}
+      {confirmRemove && selectedIds.size > 0 && (
+        <ConfirmDialog
+          {...albumRemovalPrompt(selectedIds.size, album?.name)}
+          confirmLabel="Remove"
+          onCancel={() => setConfirmRemove(false)}
+          onConfirm={() => {
+            setConfirmRemove(false);
+            void removeSelected();
+          }}
+        />
+      )}
+
       {/* Album photo grid */}
       {(isSelectionMode || secureAddTarget) && (
-        <div className="flex items-center justify-between gap-3 mb-4 p-3 bg-accent-50 dark:bg-accent-900/30 rounded-lg">
-          <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-4 p-3 bg-accent-50 dark:bg-accent-900/30 rounded-lg">
+          <div className="flex items-center gap-3 min-w-0">
             <button
               onClick={clearSelection}
-              className="text-fg-muted hover:text-fg"
+              className="text-fg-muted hover:text-fg shrink-0"
             >
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
-            <span className="text-sm font-medium">
+            <span className="text-sm font-medium truncate tabular-nums">
               {secureAddTarget ? `${selectedIds.size} selected to add to 🔒 ${secureAddTarget.galleryName}` : `${selectedIds.size} selected`}
             </span>
             <button
               onClick={selectAll}
-              className="text-accent-600 dark:text-accent-400 text-sm hover:underline"
+              className="text-accent-600 dark:text-accent-400 text-sm hover:underline shrink-0 whitespace-nowrap"
             >
               Select All
             </button>
@@ -376,19 +548,40 @@ export default function RegularAlbumView({ albumId }: { albumId: string | undefi
             <button
               onClick={addSelectedToSecure}
               disabled={selectedIds.size === 0 || addingSecure}
-              className="btn btn-primary btn-md inline-flex items-center gap-1.5"
+              className="btn btn-primary btn-md inline-flex items-center gap-1.5 shrink-0 whitespace-nowrap tabular-nums"
               title={`Add to ${secureAddTarget.galleryName}`}
             >
               <span>🔒</span>
               {addingSecure ? "Adding…" : `Add to album (${selectedIds.size})`}
             </button>
           ) : (
-            <button
-              onClick={removeSelected}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium bg-orange-600 text-white hover:bg-orange-700 shadow-sm"
-            >
-              Remove ({selectedIds.size})
-            </button>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={() => setShowAddToAlbum(true)}
+                disabled={selectedIds.size === 0}
+                title="Add the selected photos to another album"
+                className="btn btn-secondary btn-md inline-flex items-center gap-1.5 whitespace-nowrap tabular-nums disabled:opacity-50"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                </svg>
+                Add to album ({selectedIds.size})
+              </button>
+              <button
+                onClick={() => setConfirmRemove(true)}
+                disabled={selectedIds.size === 0}
+                title={`Remove ${selectedIds.size} from this album`}
+                aria-label={`Remove ${selectedIds.size} from this album`}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium bg-orange-600 text-white hover:bg-orange-700 shadow-sm whitespace-nowrap tabular-nums disabled:opacity-50"
+              >
+                {/* Trash icon (Z1). Orange, not red: this un-files the photo,
+                    it does not delete it — the confirm dialog says so. */}
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+                {selectedIds.size}
+              </button>
+            </div>
           )}
         </div>
       )}

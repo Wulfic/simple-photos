@@ -1,0 +1,14 @@
+-- Non-destructive crop/edit metadata for secure-gallery items (#31).
+--
+-- Regular photos store their crop/brightness/rotate/trim as a JSON blob in
+-- photos.crop_metadata and apply it non-destructively at display time (no
+-- re-render, no re-encryption). Secure items are encrypted, independent clones
+-- that deliberately live OUTSIDE the photos table / main-gallery sync, so they
+-- had nowhere to record an edit — which is why the secure viewer was read-only.
+--
+-- This column gives a secure item its own crop metadata, kept entirely inside
+-- the secure domain: it is never surfaced in Favorites / tags / search (unlike a
+-- favorite or a tag, an edit does not re-expose the item), so enabling edit does
+-- not weaken the secure-gallery confidentiality posture. The value is the same
+-- JSON shape as photos.crop_metadata; NULL means "no edits".
+ALTER TABLE encrypted_gallery_items ADD COLUMN crop_metadata TEXT;

@@ -54,6 +54,7 @@ mod ingest;
 mod media;
 mod photos;
 mod process;
+mod progress;
 mod ratelimit;
 mod routes;
 mod sanitize;
@@ -61,6 +62,7 @@ mod security;
 mod setup;
 mod sharing;
 mod state;
+mod status;
 mod tags;
 mod tasks;
 mod transcode;
@@ -171,10 +173,13 @@ async fn main() -> anyhow::Result<()> {
 
     // Broadcast channel for real-time audit log events (SSE + backup forwarding).
     let (audit_tx, _) = tokio::sync::broadcast::channel(256);
+    // Real-time album/gallery sync notifications (item #11).
+    let (sync_tx, _) = tokio::sync::broadcast::channel(256);
 
     // Launch all background tasks (housekeeping, backup sync, auto-scan, etc.)
     let storage_available = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let ai_active = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let ai_health = Arc::new(state::AiHealth::default());
     let geo_active = Arc::new(std::sync::atomic::AtomicBool::new(false));
     // Optimistic default: assume the dataset is fine until the geo processor
     // actually tries (and possibly fails) to load it.  Avoids a spurious
@@ -184,6 +189,14 @@ async fn main() -> anyhow::Result<()> {
     // Lets handlers (settings toggle, upload) and the auto-scan task wake the
     // geo processor on demand rather than waiting for its next 5-min poll tick.
     let geo_trigger = Arc::new(tokio::sync::Notify::new());
+
+    // Restore the conversion throughput this box measured on an earlier run, so
+    // the ETA's conservative compiled-in seeds only ever govern a genuinely
+    // fresh install (#40). Awaited rather than spawned: the auto-scan task
+    // started just below can begin a conversion pass immediately, and a seed
+    // that arrives after the pass has started is a seed that did nothing.
+    conversion::load_throughput_calibration(&pool).await;
+
     tasks::spawn_all(
         &pool,
         &config,
@@ -192,6 +205,7 @@ async fn main() -> anyhow::Result<()> {
         &audit_tx,
         &storage_available,
         &ai_active,
+        &ai_health,
         &geo_active,
         &geo_dataset_available,
         &geo_dataset_downloading,
@@ -229,14 +243,21 @@ async fn main() -> anyhow::Result<()> {
         storage_root: storage_root_swap,
         scan_lock,
         audit_tx,
+        sync_tx,
         storage_available,
         hw_accel,
         ai_active,
+        ai_health,
         geo_active,
         geo_dataset_available,
         geo_dataset_downloading,
         geo_trigger,
+        summary_cache: Arc::new(crate::gallery::summary::SummaryCache::default()),
     };
+
+    // Register the broadcast sender globally so background-task audit writes
+    // (conversions, autoscan, housekeeping) stream live to the Server Logs tab.
+    crate::audit::register_broadcast(state.audit_tx.clone());
 
     let mut app = Router::new()
         .route("/health", get(health::handlers::health))
@@ -270,8 +291,20 @@ async fn main() -> anyhow::Result<()> {
         // Binary blob endpoints explicitly set `Content-Encoding: identity`
         // to bypass this layer — encrypted bytes are incompressible and the
         // compression attempt itself is CPU-expensive.
+        //
+        // `media_compression_predicate` extends that bypass to `video/*` and
+        // `audio/*` by content type, because `photos/serve.rs` never set the
+        // `identity` header this comment claims every binary endpoint sets. The
+        // saving is not the point: a compressed body loses `Content-Length` and
+        // `Accept-Ranges: bytes`, so every video was advertising no seek
+        // support. See the predicate's own doc.
         // Placed outermost so it wraps all responses after other middleware.
-        .layer(CompressionLayer::new().gzip(true).br(true))
+        .layer(
+            CompressionLayer::new()
+                .gzip(true)
+                .br(true)
+                .compress_when(crate::http_utils::media_compression_predicate()),
+        )
         .with_state(state);
 
     // Serve static web frontend if configured

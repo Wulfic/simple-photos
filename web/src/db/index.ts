@@ -6,6 +6,7 @@
  * Data is per-device and can be safely cleared without data loss.
  */
 import Dexie, { type Table } from "dexie";
+import type { Rendition } from "../gallery/renditionChoice";
 
 /** Discriminated union for the four media categories */
 export type MediaType = "photo" | "gif" | "video" | "audio";
@@ -24,9 +25,23 @@ export interface CachedPhoto {
   latitude?: number;
   longitude?: number;
   albumIds: string[];
+  /**
+   * @deprecated Legacy home for thumbnail bytes — never write it. Thumbnail
+   * bytes live in the `thumbs` table now ({@link CachedThumb} explains why);
+   * read them via `resolveThumb`/`getThumb`, which still find the bytes here for
+   * rows the background backfill hasn't moved yet.
+   */
   thumbnailData?: ArrayBuffer;
-  /** MIME type of the thumbnail data (e.g. "image/gif" for animated GIF thumbnails).
-   *  Defaults to "image/jpeg" when not set (backwards compatibility). */
+  /**
+   * MIME type of the thumbnail (e.g. "image/gif" for animated GIF thumbnails).
+   * Defaults to "image/jpeg" when not set.
+   *
+   * Deliberately kept on the row even though the bytes moved out: it is a short
+   * string, not a payload, and a tile has to know whether its thumbnail is an
+   * animated GIF on the *first* render to decide whether to load the full GIF.
+   * Reading that from the async `thumbs` table would make every animated-thumb
+   * GIF download its full blob before the answer arrived.
+   */
   thumbnailMimeType?: string;
   /** Duration in seconds for video blobs (undefined for photos/GIFs) */
   duration?: number;
@@ -59,6 +74,21 @@ export interface CachedPhoto {
   burstId?: string;
   /** Blob ID of the extracted motion video (motion photos only) */
   motionVideoBlobId?: string;
+  /**
+   * Playable qualities for this video, highest first (#49) — the resolution
+   * ladder behind the viewer's gear icon.
+   *
+   * Mirrored from the sync record rather than fetched per video: the server's
+   * change-log triggers nominate a photo whenever its *playable* rendition set
+   * changes, so the ladder rides the sync feed and is already local by the time
+   * the viewer opens. A per-video request would put a round trip in front of
+   * every video *and* make those triggers dead weight.
+   *
+   * Undefined (pre-#49 server, or a still) and empty (one quality) both mean
+   * "draw no picker" — see `gallery/renditionChoice.ts`. Not indexed: nothing
+   * queries by it, so it needs no Dexie version bump.
+   */
+  renditions?: Rendition[];
 }
 
 export interface CachedAlbum {
@@ -68,6 +98,34 @@ export interface CachedAlbum {
   createdAt: number;
   coverPhotoBlobId?: string;
   photoBlobIds: string[];
+  /**
+   * Last computed visible member count (manifest ∩ mirror − secure).
+   *
+   * Purely a render hint: album tiles show it the instant they mount and
+   * reconcile in the background, instead of making every navigation re-derive
+   * an integer from the whole photo mirror. Never authoritative — the live
+   * resolution in `useAlbumPhotos` always wins once it lands.
+   */
+  cachedCount?: number;
+}
+
+/**
+ * A decrypted thumbnail, keyed by its photo's blobId.
+ *
+ * Kept in its own table rather than as a field on {@link CachedPhoto} because
+ * IndexedDB deserializes whole records: with the bytes inline, *any* query over
+ * the photo mirror — including one that just wanted to count an album's members
+ * — had to structured-clone every thumbnail in the library. On a large library
+ * that is hundreds of MB of work to produce a single integer, and it was the
+ * reason opening the Albums page visibly hung.
+ */
+export interface CachedThumb {
+  /** The photo's blobId — same key space as {@link CachedPhoto.blobId}. */
+  blobId: string;
+  data: ArrayBuffer;
+  /** The bytes' own MIME type, so a thumb resolves without reading its photo.
+   *  Mirrored onto {@link CachedPhoto.thumbnailMimeType}, which explains why. */
+  mime: string;
 }
 
 /** A locally cached trash item.
@@ -123,12 +181,41 @@ export interface CachedEditCopy {
   createdAt: number;
 }
 
+/**
+ * A single piece of sync bookkeeping, keyed by name.
+ *
+ * Currently holds exactly one row — the delta-sync cursor (#38): the change-log
+ * sequence the local mirror has been brought up to date with.
+ *
+ * **This lives in IndexedDB, next to the mirror it describes, and not in
+ * localStorage — deliberately.** The cursor is only meaningful relative to the
+ * contents of `photos`; it asserts "the mirror already contains every change up
+ * to seq N". Keeping the two in separate stores lets them be wiped
+ * independently, and the failure that creates is silent and permanent: an
+ * IndexedDB eviction under storage pressure (or a devtools clear, or a future
+ * bug in `clearAllUserData`) would empty the mirror while a localStorage cursor
+ * survived, so the next sync would ask for changes *after* N, receive none, and
+ * present an empty gallery forever. Same store, same lifecycle, one eviction
+ * unit. {@link readSyncCursor} additionally refuses a cursor over an empty
+ * mirror as a belt-and-braces check.
+ */
+export interface SyncStateRow {
+  /** Bookkeeping key. Only {@link SYNC_CURSOR_KEY} is used today. */
+  key: string;
+  /** Change-log sequence the mirror is current as of. */
+  seq: number;
+  /** When this cursor was last advanced (diagnostics only). */
+  updatedAt: number;
+}
+
 class SimplePhotosDB extends Dexie {
   photos!: Table<CachedPhoto, string>;
   albums!: Table<CachedAlbum, string>;
   trash!: Table<CachedTrashItem, string>;
   fullPhotos!: Table<CachedFullPhoto, string>;
   editCopies!: Table<CachedEditCopy, string>;
+  thumbs!: Table<CachedThumb, string>;
+  syncState!: Table<SyncStateRow, string>;
 
   constructor() {
     super("simple-photos");
@@ -223,6 +310,39 @@ class SimplePhotosDB extends Dexie {
       fullPhotos: "photoId, cachedAt",
       editCopies: "copyId, photoBlobId, createdAt",
     });
+
+    // v10 — thumbnail bytes moved out of the photos rows into their own table
+    //       (see CachedThumb), and albums gained a cached member count.
+    //
+    //       Deliberately schema-only: no upgrade function. Copying every
+    //       thumbnail here would mean hundreds of MB inside one IndexedDB
+    //       upgrade transaction on a large library — blocking app start, and
+    //       leaving a DB that won't open at all if it throws part-way. The bytes
+    //       are instead moved by `backfillThumbs()`, chunked, in the background
+    //       after the DB is open; until a row's turn comes, `resolveThumb()`
+    //       still finds its bytes in the legacy field. Nothing to migrate for
+    //       `cachedCount` either — absent simply means "not counted yet".
+    this.version(10).stores({
+      photos: "blobId, takenAt, mediaType, *albumIds, contentHash, serverPhotoId, burstId",
+      albums: "albumId, name",
+      trash: "trashId, blobId, deletedAt",
+      fullPhotos: "photoId, cachedAt",
+      editCopies: "copyId, photoBlobId, createdAt",
+      thumbs: "blobId",
+    });
+
+    // v11 — delta-sync bookkeeping (#38). Schema-only: absent simply means
+    //       "no cursor yet", which is exactly the cold-start state that makes
+    //       the first pass a full walk. Nothing to migrate.
+    this.version(11).stores({
+      photos: "blobId, takenAt, mediaType, *albumIds, contentHash, serverPhotoId, burstId",
+      albums: "albumId, name",
+      trash: "trashId, blobId, deletedAt",
+      fullPhotos: "photoId, cachedAt",
+      editCopies: "copyId, photoBlobId, createdAt",
+      thumbs: "blobId",
+      syncState: "key",
+    });
   }
 }
 
@@ -235,7 +355,8 @@ export const db = new SimplePhotosDB();
  * flash of the previous user's photos when another account signs in.
  *
  * Clears:
- *  - All 5 IndexedDB tables (photos, albums, trash, fullPhotos, editCopies)
+ *  - All 7 IndexedDB tables (photos, albums, trash, fullPhotos, editCopies,
+ *    thumbs, syncState)
  *  - The Cache API thumbnail cache (sp-thumbnails-v1)
  *
  * The in-memory thumbnail Map (thumbMemoryCache) is cleared separately
@@ -248,6 +369,15 @@ export async function clearAllUserData(): Promise<void> {
     db.trash.clear(),
     db.fullPhotos.clear(),
     db.editCopies.clear(),
+    // Thumbnails are decrypted image bytes — the most obviously private thing
+    // in the cache. Missing this would flash the previous user's photos.
+    db.thumbs.clear(),
+    // The delta-sync cursor (#38) MUST die with the mirror it describes.
+    // Leaving it behind would tell the next user's first sync that a mirror we
+    // just emptied is already current, so it would request only changes *after*
+    // that sequence and render an empty gallery — permanently, since nothing
+    // would ever ask for the rows again. Not a cache miss; a silent data loss.
+    db.syncState.clear(),
   ]);
 
   // Wipe persistent thumbnail cache

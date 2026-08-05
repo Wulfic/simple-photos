@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -35,6 +37,8 @@ import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.simplephotos.R
+import com.simplephotos.ui.navigation.rememberCanOpenNewWindow
+import com.simplephotos.ui.navigation.rememberNewWindowLauncher
 import com.simplephotos.ui.theme.ThemeState
 
 /**
@@ -204,7 +208,7 @@ fun AppHeader(
                     onDiagnosticsClick = navigation.onDiagnosticsClick,
                     isAdmin = navigation.isAdmin,
                     onLogout = navigation.onLogout,
-                    onToggleTheme = navigation.onToggleTheme
+                    onToggleTheme = navigation.onToggleTheme,
                 )
             }
             // Bottom border
@@ -290,6 +294,9 @@ private fun UserMenu(
     onToggleTheme: () -> Unit = {},
 ) {
     var expanded by remember { mutableStateOf(false) }
+    // "New Window" is offered from every screen with an AppHeader, so the
+    // launcher is resolved here rather than plumbed in per-screen (#21 / todo1).
+    val openNewWindow = rememberNewWindowLauncher()
 
     // Avatar gradient matching web (blue-500 → purple-600)
     val avatarGradient = Brush.linearGradient(
@@ -372,6 +379,24 @@ private fun UserMenu(
             )
             // Shared Albums are now shown inline at the bottom of the Albums
             // page (matching the web layout) rather than in this dropdown.
+            // Disabled at the two-window cap (#41) rather than failing on tap
+            // and apologising with a toast afterwards.
+            val canOpenNewWindow = rememberCanOpenNewWindow()
+            DropdownMenuItem(
+                text = { Text(if (canOpenNewWindow) "New Window" else "New Window (limit reached)") },
+                enabled = canOpenNewWindow,
+                onClick = {
+                    expanded = false
+                    openNewWindow(null)
+                },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            )
             DropdownMenuItem(
                 text = { Text("Settings") },
                 onClick = {

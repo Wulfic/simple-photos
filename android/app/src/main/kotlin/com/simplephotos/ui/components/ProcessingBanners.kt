@@ -32,10 +32,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.simplephotos.data.remote.ApiService
+import com.simplephotos.sync.EncryptionContribution
 import kotlinx.coroutines.delay
+import kotlin.math.ceil
 
 // ── Web-aligned color tokens ─────────────────────────────────────────────────
 
@@ -72,6 +75,7 @@ fun ConversionBanner(api: ApiService) {
     var active by remember { mutableStateOf(false) }
     var total by remember { mutableIntStateOf(0) }
     var done by remember { mutableIntStateOf(0) }
+    var etaLabel by remember { mutableStateOf<String?>(null) }
     var dismissed by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
@@ -81,6 +85,8 @@ fun ConversionBanner(api: ApiService) {
                 active = status.active && status.total > 0
                 total = status.total
                 done = status.done.coerceAtMost(status.total)
+                // Server-authoritative ETA (TODO #4/#5), matching the web banner.
+                etaLabel = status.etaSeconds?.let { formatEta(it) }
                 // Reset dismissal when a new batch starts
                 if (!active) dismissed = false
             } catch (_: Exception) {
@@ -108,13 +114,24 @@ fun ConversionBanner(api: ApiService) {
                 )
                 Spacer(Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        "Converting media… $done/$total",
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            fontSize = 14.sp
-                        ),
-                        color = if (dark) BannerTextDark else BannerTextLight
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "Converting media… $done/$total",
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 14.sp),
+                            color = if (dark) BannerTextDark else BannerTextLight,
+                            modifier = Modifier.weight(1f)
+                        )
+                        etaLabel?.let {
+                            Text(
+                                "$it remaining",
+                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
+                                color = if (dark) BannerTextDark else BannerTextLight
+                            )
+                        }
+                    }
                     Spacer(Modifier.height(6.dp))
                     LinearProgressIndicator(
                         progress = { progress },
@@ -140,50 +157,65 @@ fun ConversionBanner(api: ApiService) {
 // ── Encryption Banner ────────────────────────────────────────────────────────
 
 /**
- * Tracks encryption progress by polling encrypted-sync and counting items
- * without an encrypted blob. Suppressed while conversion is active.
+ * Server-authoritative encryption progress — reads `GET /api/status/encryption`
+ * (TODO #1/#5) so it shows the SAME total/done/ETA as the web banner instead of
+ * counting encrypted-sync locally. Each poll it also reports this device's
+ * queued-upload count via [reportLocalPending] so the server total folds in
+ * local backup work not yet uploaded (TODO #2). Suppressed while conversion is
+ * active, matching the web banner.
+ *
+ * @param reportLocalPending optional provider of this device's pending-upload
+ *   count; when supplied it is pushed to the server each poll for freshness.
  */
 @Composable
-fun EncryptionBanner(api: ApiService) {
-    var pending by remember { mutableIntStateOf(0) }
-    var batchTotal by remember { mutableIntStateOf(0) }
+fun EncryptionBanner(
+    api: ApiService,
+    reportLocalPending: (suspend () -> Int)? = null,
+) {
+    var total by remember { mutableIntStateOf(0) }
+    var done by remember { mutableIntStateOf(0) }
+    var etaLabel by remember { mutableStateOf<String?>(null) }
+    var active by remember { mutableStateOf(false) }
     var conversionActive by remember { mutableStateOf(false) }
     var dismissed by remember { mutableStateOf(false) }
+    val context = LocalContext.current
 
     LaunchedEffect(Unit) {
         while (true) {
             try {
-                // Check if conversion is active — suppress encryption banner during conversion
+                // Publish this device's queued-upload count first so the server
+                // total (read just below) includes it (TODO #2).
+                reportLocalPending?.let { provider ->
+                    val local = try { provider() } catch (_: Exception) { 0 }
+                    EncryptionContribution.report(api, context, local)
+                }
+
+                // Suppress the encryption banner while conversion is active — the
+                // server runs a final encryption pass after conversions finish.
                 val convStatus = try { api.getConversionStatus() } catch (_: Exception) { null }
                 conversionActive = convStatus?.active == true && (convStatus.total > 0)
 
                 if (!conversionActive) {
-                    val syncResp = api.encryptedSync(after = null, limit = 500)
-                    val unencrypted = syncResp.photos.count { it.encryptedBlobId.isNullOrEmpty() }
-                    if (unencrypted > 0 && pending == 0) {
-                        // New batch starting
-                        batchTotal = unencrypted
-                    }
-                    pending = unencrypted
-                    if (pending == 0) {
-                        batchTotal = 0
-                        dismissed = false
-                    }
+                    val status = api.getEncryptionStatus()
+                    active = status.active && status.total > 0
+                    total = status.total
+                    done = status.done.coerceAtMost(status.total)
+                    etaLabel = status.etaSeconds?.let { formatEta(it) }
+                    if (!active) dismissed = false
                 }
             } catch (_: Exception) {
-                pending = 0
+                active = false
             }
             delay(2_000)
         }
     }
 
-    val visible = pending > 0 && !conversionActive && !dismissed
-    val batchDone = (batchTotal - pending).coerceAtLeast(0)
+    val visible = active && !conversionActive && !dismissed
     val dark = isSystemInDarkTheme()
     val accent = if (dark) BlueDark else BlueLight
 
     AnimatedVisibility(visible = visible, enter = fadeIn(), exit = fadeOut()) {
-        val progress = if (batchTotal > 0) batchDone.toFloat() / batchTotal else 0f
+        val progress = if (total > 0) done.toFloat() / total else 0f
         BannerCard(dark) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -197,13 +229,24 @@ fun EncryptionBanner(api: ApiService) {
                 )
                 Spacer(Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        "Encrypting photos… $batchDone/$batchTotal",
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            fontSize = 14.sp
-                        ),
-                        color = if (dark) BannerTextDark else BannerTextLight
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "Encrypting photos… $done/$total",
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 14.sp),
+                            color = if (dark) BannerTextDark else BannerTextLight,
+                            modifier = Modifier.weight(1f)
+                        )
+                        etaLabel?.let {
+                            Text(
+                                "$it remaining",
+                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
+                                color = if (dark) BannerTextDark else BannerTextLight
+                            )
+                        }
+                    }
                     Spacer(Modifier.height(6.dp))
                     LinearProgressIndicator(
                         progress = { progress },
@@ -409,7 +452,17 @@ fun AiBanner(api: ApiService) {
     }
 }
 
-// ── Shared card wrapper ──────────────────────────────────────────────────────
+// ── Shared helpers ───────────────────────────────────────────────────────────
+
+/** Format seconds as a clamped HH:MM:SS string — matches web `formatEta`. */
+private fun formatEta(seconds: Double): String {
+    val s = ceil(seconds).toLong().coerceAtLeast(0)
+    val h = s / 3600
+    val m = (s % 3600) / 60
+    val sec = s % 60
+    return "%02d:%02d:%02d".format(h, m, sec)
+}
+
 @Composable
 private fun BannerCard(dark: Boolean, content: @Composable () -> Unit) {
     Surface(

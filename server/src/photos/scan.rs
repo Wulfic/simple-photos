@@ -18,7 +18,6 @@ use axum::extract::State;
 use axum::Json;
 use futures_util::stream::{self, StreamExt};
 use futures_util::TryStreamExt;
-use uuid::Uuid;
 
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
@@ -28,10 +27,21 @@ use crate::state::AppState;
 
 use super::metadata::{extract_media_metadata_async, extract_xmp_subtype};
 use super::thumbnail::generate_thumbnail_file;
-use super::utils::{compute_photo_hash_streaming, normalize_iso_timestamp, utc_now_iso};
+use super::utils::{compute_photo_hash_streaming, normalize_iso_timestamp};
 
-/// Maximum concurrent file processing tasks during scan.
-const SCAN_PARALLELISM: usize = 4;
+/// Concurrency for the per-file registration passes.
+///
+/// The per-file body is deliberately memory-light — header-only metadata, a
+/// streaming hash, an XMP prefix read, one `INSERT`, and a subprocess thumbnail
+/// — so throughput scales with CPU cores. The old fixed `4` throttled large
+/// (100GB+) imports to many hours. Encryption is a SEPARATE, memory-budgeted
+/// pass, so raising this does NOT add to the decode/OOM pressure the
+/// conservative value was guarding against. Clamped to `[4, 16]` so small boxes
+/// don't overcommit and large boxes don't spawn an unbounded thundering herd of
+/// `ffmpeg` thumbnail processes.
+pub(crate) fn scan_parallelism() -> usize {
+    num_cpus::get().clamp(4, 16)
+}
 
 /// For each new file: extracts EXIF metadata, generates a thumbnail, and
 /// computes a content hash for deduplication.
@@ -52,6 +62,11 @@ pub async fn scan_and_register(
 
     // Lock-free read via ArcSwap.
     let storage_root = (**state.storage_root.load()).clone();
+
+    // Panorama-detection sensitivity for this scan, resolved once (item #7):
+    // precise thresholds unless the user turned AI categorisation off.
+    let pano_sensitivity =
+        super::metadata::pano_sensitivity_for_user(&state.read_pool, &auth.user_id).await;
 
     // Build set of already-registered paths using a streaming cursor so we
     // never hold the full Vec<String> + HashSet simultaneously in memory.
@@ -78,17 +93,11 @@ pub async fn scan_and_register(
     }
 
     // ── Phase 1: Collect all unregistered native media files (fast directory walk) ──
-    struct ScanCandidate {
-        abs_path: PathBuf,
-        rel_path: String,
-        name: String,
-        mime: String,
-        media_type: &'static str,
-        size: i64,
-        modified: Option<String>,
-    }
+    // The per-file registration body is shared with the background / bulk-import
+    // autoscan through crate::photos::register (single source of truth).
+    use crate::photos::register::NativeCandidate;
 
-    let mut candidates: Vec<ScanCandidate> = Vec::new();
+    let mut candidates: Vec<NativeCandidate> = Vec::new();
     let mut queue = vec![storage_root.clone()];
 
     while let Some(dir) = queue.pop() {
@@ -96,6 +105,13 @@ pub async fn scan_and_register(
             Ok(e) => e,
             Err(_) => continue,
         };
+
+        // Candidates registered in THIS directory + the `.json` sidecars beside
+        // them, so Google Takeout metadata (capture date, GPS, album) can be
+        // paired below. A streaming walk can't look ahead to a sidecar that
+        // sorts after its media file, so we resolve once the dir is fully read.
+        let dir_start = candidates.len();
+        let mut json_names: Vec<String> = Vec::new();
 
         while let Ok(Some(entry)) = entries.next_entry().await {
             let name = entry.file_name().to_string_lossy().to_string();
@@ -106,6 +122,8 @@ pub async fn scan_and_register(
             if let Ok(ft) = entry.file_type().await {
                 if ft.is_dir() {
                     queue.push(entry.path());
+                } else if ft.is_file() && name.to_lowercase().ends_with(".json") {
+                    json_names.push(name);
                 } else if ft.is_file() && is_media_file(&name) {
                     let abs_path = entry.path();
                     let rel_path = abs_path
@@ -118,7 +136,9 @@ pub async fn scan_and_register(
                         continue;
                     }
 
-                    // Native format — determine MIME and media type directly.
+                    // Native format — determine MIME and media type directly. A
+                    // content-based GIF rescue happens later in `register_native_file`
+                    // (it reads the header once with the file already open).
                     let mime = mime_from_extension(&name).to_string();
                     let media_type: &'static str = if mime.starts_with("video/") {
                         "video"
@@ -139,7 +159,7 @@ pub async fn scan_and_register(
                         })
                     });
 
-                    candidates.push(ScanCandidate {
+                    candidates.push(NativeCandidate {
                         abs_path,
                         rel_path,
                         name,
@@ -147,8 +167,24 @@ pub async fn scan_and_register(
                         media_type,
                         size,
                         modified,
+                        sidecar_abs: None,
+                        album_name: None,
+                        album_title: None,
                     });
                 }
+            }
+        }
+
+        // Pair each of this dir's media files with its Takeout sidecar + album.
+        if !json_names.is_empty() {
+            let ctx = crate::import::sidecar::TakeoutDirContext::new(json_names, &dir);
+            let album = ctx.album_name().map(|s| s.to_string());
+            // One read per album directory, and only when this dir is an album.
+            let album_title = ctx.resolve_album_title(&dir).await;
+            for cand in &mut candidates[dir_start..] {
+                cand.sidecar_abs = ctx.resolve_sidecar(&cand.name).map(|j| dir.join(j));
+                cand.album_name = album.clone();
+                cand.album_title = album_title.clone();
             }
         }
     }
@@ -156,6 +192,48 @@ pub async fn scan_and_register(
     // Filter out audio files when the audio-backup toggle is off.
     if !super::utils::audio_backup_enabled(&state.pool).await {
         candidates.retain(|c| c.media_type != "audio");
+    }
+
+    // Google Photos Takeout dedup (#19): within each directory, drop the
+    // unedited original when its baked-in "-edited" sibling was also collected —
+    // keep the edited pixels. Same shared rule as the autoscan + ingest paths
+    // (crate::media::edited_shadowed_originals), scoped per directory because
+    // Takeout always ships the original and its edited copy side by side.
+    {
+        use std::collections::{HashMap, HashSet};
+        let mut names_by_dir: HashMap<PathBuf, Vec<String>> = HashMap::new();
+        for c in &candidates {
+            let dir = c
+                .abs_path
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_default();
+            names_by_dir.entry(dir).or_default().push(c.name.clone());
+        }
+        let mut drop_keys: HashSet<(PathBuf, String)> = HashSet::new();
+        for (dir, names) in &names_by_dir {
+            for orig in crate::media::edited_shadowed_originals(names.iter().map(|s| s.as_str())) {
+                drop_keys.insert((dir.clone(), orig));
+            }
+        }
+        if !drop_keys.is_empty() {
+            let before = candidates.len();
+            candidates.retain(|c| {
+                let dir = c
+                    .abs_path
+                    .parent()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_default();
+                !drop_keys.contains(&(dir, c.name.to_lowercase()))
+            });
+            let dropped = before - candidates.len();
+            if dropped > 0 {
+                tracing::info!(
+                    dropped,
+                    "Scan: skipped unedited Google Photos originals with an '-edited' sibling (#19)"
+                );
+            }
+        }
     }
 
     tracing::info!(
@@ -168,132 +246,53 @@ pub async fn scan_and_register(
     // than spawning one task per candidate up front; on a large library that
     // up-front fan-out was a heap spike that could OOM the process. The inner
     // spawn preserves multi-core parallelism and isolates per-file panics.
+    // Content hashes of gallery-hidden originals (secure gallery) to exclude, so
+    // `/scan` can never re-import a secure item's plaintext original — the same
+    // protection the background autoscan already applied (previously missing
+    // here, a divergence between the two hand-copied registration bodies).
+    let mut gallery_hashes = std::collections::HashSet::new();
+    {
+        let mut rows = sqlx::query_scalar::<_, String>(
+            "SELECT original_photo_hash FROM encrypted_gallery_items WHERE original_photo_hash IS NOT NULL",
+        )
+        .fetch(&state.pool);
+        while let Some(hash) = rows.try_next().await? {
+            gallery_hashes.insert(hash);
+        }
+    }
+
+    let ctx = Arc::new(crate::photos::register::RegisterContext {
+        user_id: auth.user_id.clone(),
+        pano_sensitivity,
+        gallery_hashes: Arc::new(gallery_hashes),
+    });
+
     let new_count = Arc::new(AtomicI64::new(0));
     stream::iter(candidates)
         .map(|candidate| {
             let new_count = new_count.clone();
             let pool = state.pool.clone();
             let storage_root = storage_root.clone();
-            let user_id = auth.user_id.clone();
+            let ctx = ctx.clone();
             async move {
+                // Inner spawn keeps multi-core parallelism and isolates a
+                // per-file panic from the rest of the pass.
                 let _ = tokio::spawn(async move {
-                    // Native format — register directly (no conversion needed).
-            let photo_id = Uuid::new_v4().to_string();
-            let now = utc_now_iso();
-            // GIFs get an animated GIF thumbnail; everything else gets JPEG
-            let thumb_ext = if candidate.mime == "image/gif" { "gif" } else { "jpg" };
-            let thumb_rel = format!(".thumbnails/{photo_id}.thumb.{thumb_ext}");
-
-            // Extract dimensions, camera model, GPS, and date from file
-            let (img_w, img_h, cam_model, exif_lat, exif_lon, exif_taken) =
-                extract_media_metadata_async(candidate.abs_path.clone()).await;
-
-            let final_taken_at = exif_taken
-                .map(|t| normalize_iso_timestamp(&t))
-                .or(candidate.modified);
-
-            // Compute content-based hash using streaming I/O
-            let photo_hash = compute_photo_hash_streaming(&candidate.abs_path).await;
-
-            // ── XMP subtype detection (motion, panorama, burst, HDR) ────
-            // Photos only, and only the file prefix: scanning a video's
-            // bytes for XMP is meaningless, and reading whole files here
-            // used to pull multi-GB videos into RAM four at a time.
-            let mut subtype_info = if candidate.media_type == "photo" {
-                let prefix = super::metadata::read_file_prefix(
-                    &candidate.abs_path,
-                    super::metadata::XMP_SCAN_PREFIX_BYTES,
-                )
-                .await;
-                extract_xmp_subtype(&prefix)
-            } else {
-                Default::default()
-            };
-            // Aspect-ratio fallback for panoramas / 360° photos missing XMP.
-            if candidate.media_type == "photo" {
-                super::metadata::apply_aspect_subtype_fallback(&mut subtype_info, img_w, img_h);
-            }
-
-            let insert_result = sqlx::query(
-                "INSERT OR IGNORE INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
-                 size_bytes, width, height, taken_at, latitude, longitude, camera_model, thumb_path, \
-                 created_at, photo_hash, photo_subtype, burst_id) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            )
-            .bind(&photo_id)
-            .bind(&user_id)
-            .bind(&candidate.name)
-            .bind(&candidate.rel_path)
-            .bind(&candidate.mime)
-            .bind(candidate.media_type)
-            .bind(candidate.size)
-            .bind(img_w)
-            .bind(img_h)
-            .bind(&final_taken_at)
-            .bind(exif_lat)
-            .bind(exif_lon)
-            .bind(&cam_model)
-            .bind(&thumb_rel)
-            .bind(&now)
-            .bind(&photo_hash)
-            .bind(&subtype_info.photo_subtype)
-            .bind(&subtype_info.burst_id)
-            .execute(&pool)
-            .await;
-
-            match insert_result {
-                Ok(result) if result.rows_affected() == 0 => {
-                    tracing::debug!(file = %candidate.rel_path, "Already registered (concurrent scan), skipping");
-                    return;
-                }
-                Err(e) => {
-                    tracing::error!(file = %candidate.rel_path, error = %e, "Failed to register photo");
-                    return;
-                }
-                Ok(_) => {}
-            }
-
-            // ── Extract and store motion video blob ─────────────────────
-            // Only now read the full file — motion photos are stills, so
-            // this stays bounded; videos never reach this branch.
-            if subtype_info.photo_subtype.as_deref() == Some("motion") {
-                let file_bytes = tokio::fs::read(&candidate.abs_path).await.unwrap_or_default();
-                if !file_bytes.is_empty() {
-                    super::motion::extract_and_store_motion_video(
+                    if crate::photos::register::register_native_file(
                         &pool,
                         &storage_root,
-                        &user_id,
-                        &photo_id,
-                        &file_bytes,
-                        subtype_info.motion_video_offset,
+                        &candidate,
+                        &ctx,
                     )
-                    .await;
-                }
-            }
-
-            if let Some(ref st) = subtype_info.photo_subtype {
-                tracing::info!(
-                    file = %candidate.rel_path,
-                    photo_subtype = %st,
-                    burst_id = ?subtype_info.burst_id,
-                    "Scan: special photo subtype detected"
-                );
-            }
-
-            // Generate thumbnail
-            let thumb_abs = storage_root.join(&thumb_rel);
-            if generate_thumbnail_file(&candidate.abs_path, &thumb_abs, &candidate.mime, None).await {
-                tracing::debug!(file = %candidate.rel_path, "Generated thumbnail");
-            } else {
-                tracing::warn!(file = %candidate.rel_path, "Failed to generate thumbnail");
-            }
-
-            new_count.fetch_add(1, Ordering::Relaxed);
+                    .await
+                    {
+                        new_count.fetch_add(1, Ordering::Relaxed);
+                    }
                 })
                 .await;
             }
         })
-        .buffer_unordered(SCAN_PARALLELISM)
+        .buffer_unordered(scan_parallelism())
         .for_each(|_| async {})
         .await;
 
@@ -341,7 +340,8 @@ pub async fn scan_and_register(
                     return;
                 }
                 let _ = tokio::spawn(async move {
-                let (w, h, cam, lat, lon, taken) = extract_media_metadata_async(abs.clone()).await;
+                let (w, h, cam, lat, lon, taken, taken_offset) =
+                    extract_media_metadata_async(abs.clone()).await;
                 let file_hash = compute_photo_hash_streaming(&abs).await;
 
                 if w > 0 || h > 0 || cam.is_some() || lat.is_some() || file_hash.is_some() {
@@ -362,6 +362,7 @@ pub async fn scan_and_register(
                          latitude = COALESCE(latitude, ?), \
                          longitude = COALESCE(longitude, ?), \
                          taken_at = COALESCE(taken_at, ?), \
+                         taken_at_offset = COALESCE(taken_at_offset, ?), \
                          photo_hash = COALESCE(photo_hash, ?) \
                          WHERE id = ?",
                     )
@@ -375,6 +376,7 @@ pub async fn scan_and_register(
                     .bind(lat)
                     .bind(lon)
                     .bind(&taken)
+                    .bind(&taken_offset)
                     .bind(&file_hash)
                     .bind(&pid)
                     .execute(&pool)
@@ -390,7 +392,7 @@ pub async fn scan_and_register(
                 .await;
             }
         })
-        .buffer_unordered(SCAN_PARALLELISM)
+        .buffer_unordered(scan_parallelism())
         .for_each(|_| async {})
         .await;
     let fixed_count = fixed_count.load(Ordering::Relaxed);
@@ -411,6 +413,160 @@ pub async fn scan_and_register(
         .await
         {
             tracing::warn!(error = %e, "Failed to persist video dimension repair flag");
+        }
+    }
+
+    // ── One-time canonicalization of legacy timestamps (#13) ─────────────
+    // Gallery order is a *string* `ORDER BY COALESCE(taken_at, created_at) DESC`,
+    // so every value must be the canonical `YYYY-MM-DDTHH:MM:SS.sssZ` form. Older
+    // code versions (and the pre-fix Takeout endpoint) wrote raw EXIF
+    // ("2021:06:01 12:00:00"), offset ("…+00:00"), or micros-precision strings;
+    // those sort incorrectly against canonical rows, scrambling the timeline.
+    // All current write paths already normalize, so this only rewrites the
+    // legacy stragglers, runs once per user, and is a no-op on a clean library.
+    let ts_repair_key = format!("taken_at_canonical_repair_v1:{}", auth.user_id);
+    let ts_repair_done: bool =
+        sqlx::query_scalar("SELECT value = 'true' FROM server_settings WHERE key = ?")
+            .bind(&ts_repair_key)
+            .fetch_optional(&state.pool)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or(false);
+    if !ts_repair_done {
+        let rows: Vec<(String, Option<String>, Option<String>)> =
+            sqlx::query_as("SELECT id, taken_at, created_at FROM photos WHERE user_id = ?")
+                .bind(&auth.user_id)
+                .fetch_all(&state.pool)
+                .await
+                .unwrap_or_default();
+
+        let mut repaired = 0usize;
+        for (pid, taken_at, created_at) in rows {
+            // Only a non-empty value that changes under normalization needs a write.
+            let new_taken = taken_at.as_deref().and_then(|t| {
+                let t = t.trim();
+                let n = normalize_iso_timestamp(t);
+                (!t.is_empty() && n != t).then_some(n)
+            });
+            let new_created = created_at.as_deref().and_then(|c| {
+                let c = c.trim();
+                let n = normalize_iso_timestamp(c);
+                (!c.is_empty() && n != c).then_some(n)
+            });
+            if new_taken.is_none() && new_created.is_none() {
+                continue;
+            }
+            // COALESCE keeps the untouched column unchanged.
+            if let Err(e) = sqlx::query(
+                "UPDATE photos SET taken_at = COALESCE(?, taken_at), \
+                 created_at = COALESCE(?, created_at) WHERE id = ?",
+            )
+            .bind(&new_taken)
+            .bind(&new_created)
+            .bind(&pid)
+            .execute(&state.pool)
+            .await
+            {
+                tracing::warn!(photo_id = %pid, error = %e, "Failed to canonicalize legacy timestamp");
+            } else {
+                repaired += 1;
+            }
+        }
+
+        if repaired > 0 {
+            tracing::info!(
+                repaired,
+                "Canonicalized {} legacy photo timestamps for correct ordering (#13)",
+                repaired
+            );
+        }
+        if let Err(e) = sqlx::query(
+            "INSERT INTO server_settings (key, value) VALUES (?, 'true') \
+             ON CONFLICT(key) DO UPDATE SET value = 'true'",
+        )
+        .bind(&ts_repair_key)
+        .execute(&state.pool)
+        .await
+        {
+            tracing::warn!(error = %e, "Failed to persist timestamp canonicalization flag");
+        }
+    }
+
+    // ── One-time content-based GIF re-detection for existing photos (#14) ─
+    // Earlier imports classified media purely by extension/MIME, so GIFs that
+    // arrived renamed (`funny.jpg`), with a generic MIME, or oddly exported by
+    // Takeout were tagged `photo` and never showed in the GIF smart album. Sniff
+    // the leading bytes of every `photo` row once per user and re-tag the real
+    // GIFs. Runs once (gated) and is a no-op on a library with no hidden GIFs.
+    let gif_repair_key = format!("gif_detect_repair_v1:{}", auth.user_id);
+    let gif_repair_done: bool =
+        sqlx::query_scalar("SELECT value = 'true' FROM server_settings WHERE key = ?")
+            .bind(&gif_repair_key)
+            .fetch_optional(&state.pool)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or(false);
+    if !gif_repair_done {
+        let photo_rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT id, file_path FROM photos WHERE user_id = ? AND media_type = 'photo' \
+             AND file_path != ''",
+        )
+        .bind(&auth.user_id)
+        .fetch_all(&state.pool)
+        .await
+        .unwrap_or_default();
+
+        let regif_count = Arc::new(AtomicI64::new(0));
+        stream::iter(photo_rows)
+            .map(|(pid, fpath)| {
+                let pool = state.pool.clone();
+                let regif_count = regif_count.clone();
+                let storage_root = storage_root.clone();
+                async move {
+                    let abs = storage_root.join(&fpath);
+                    let header = match crate::photos::register::read_header_bytes(&abs).await {
+                        Some(h) => h,
+                        None => return,
+                    };
+                    if crate::media::gif_override("photo", &header).is_none() {
+                        return;
+                    }
+                    if let Err(e) = sqlx::query(
+                        "UPDATE photos SET media_type = 'gif', mime_type = 'image/gif' WHERE id = ?",
+                    )
+                    .bind(&pid)
+                    .execute(&pool)
+                    .await
+                    {
+                        tracing::warn!(photo_id = %pid, error = %e, "Failed to re-tag GIF during scan (#14)");
+                    } else {
+                        regif_count.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            })
+            .buffer_unordered(scan_parallelism())
+            .for_each(|_| async {})
+            .await;
+
+        let regif_count = regif_count.load(Ordering::Relaxed);
+        if regif_count > 0 {
+            tracing::info!(
+                regif_count,
+                "Re-tagged {} misclassified GIFs from content signature (#14)",
+                regif_count
+            );
+        }
+        if let Err(e) = sqlx::query(
+            "INSERT INTO server_settings (key, value) VALUES (?, 'true') \
+             ON CONFLICT(key) DO UPDATE SET value = 'true'",
+        )
+        .bind(&gif_repair_key)
+        .execute(&state.pool)
+        .await
+        {
+            tracing::warn!(error = %e, "Failed to persist GIF detection repair flag");
         }
     }
 
@@ -462,7 +618,7 @@ pub async fn scan_and_register(
                         .and_then(|s| s.to_str())
                         .unwrap_or("")
                         .to_string();
-                    let (rw, rh, _, _, _, _) =
+                    let (rw, rh, _, _, _, _, _) =
                         super::metadata::extract_media_metadata_from_bytes_async(
                             file_bytes.clone(),
                             fname,
@@ -486,7 +642,12 @@ pub async fn scan_and_register(
 
                 // Aspect-ratio fallback for panoramas / 360° photos
                 // missing XMP markers (e.g. scanned or re-exported files).
-                super::metadata::apply_aspect_subtype_fallback(&mut sub, eff_w, eff_h);
+                super::metadata::apply_aspect_subtype_fallback_with(
+                    &mut sub,
+                    eff_w,
+                    eff_h,
+                    pano_sensitivity,
+                );
 
                 if let Some(ref subtype) = sub.photo_subtype {
                     sqlx::query(
@@ -528,7 +689,7 @@ pub async fn scan_and_register(
                 .await;
             }
         })
-        .buffer_unordered(SCAN_PARALLELISM)
+        .buffer_unordered(scan_parallelism())
         .for_each(|_| async {})
         .await;
 
@@ -569,7 +730,7 @@ pub async fn scan_and_register(
                 .await;
             }
         })
-        .buffer_unordered(SCAN_PARALLELISM)
+        .buffer_unordered(scan_parallelism())
         .for_each(|_| async {})
         .await;
 

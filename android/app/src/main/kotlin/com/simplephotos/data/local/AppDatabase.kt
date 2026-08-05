@@ -6,10 +6,12 @@ package com.simplephotos.data.local
 
 import androidx.room.Database
 import androidx.room.RoomDatabase
+import androidx.room.TypeConverters
 import com.simplephotos.data.local.dao.AlbumDao
 import com.simplephotos.data.local.dao.BackupFolderDao
 import com.simplephotos.data.local.dao.BlobQueueDao
 import com.simplephotos.data.local.dao.PhotoDao
+import com.simplephotos.data.local.dao.SyncStateDao
 import com.simplephotos.data.local.entities.*
 
 /**
@@ -20,13 +22,22 @@ import com.simplephotos.data.local.entities.*
  * changes during development wipe the cache rather than crashing.
  */
 @Database(
-    entities = [PhotoEntity::class, AlbumEntity::class, PhotoAlbumXRef::class, BlobQueueEntity::class, BackupFolderEntity::class],
-    version = 10,
+    entities = [PhotoEntity::class, AlbumEntity::class, PhotoAlbumXRef::class, BlobQueueEntity::class, BackupFolderEntity::class, SyncStateEntity::class],
+    // 12: PhotoEntity.renditions — the #49 video resolution ladder. The
+    // destructive migration drops the mirror, which the next sync rebuilds from
+    // a full walk; that is also what re-populates the ladder for every video.
+    // 13: SyncStateEntity — the #38 delta-sync cursor. It lives HERE rather than
+    // in DataStore precisely so this destructive migration takes it too: a
+    // cursor that outlives the mirror it describes claims currency over an empty
+    // gallery, and no amount of re-syncing repairs that.
+    version = 13,
     exportSchema = false
 )
+@TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun photoDao(): PhotoDao
     abstract fun albumDao(): AlbumDao
     abstract fun blobQueueDao(): BlobQueueDao
     abstract fun backupFolderDao(): BackupFolderDao
+    abstract fun syncStateDao(): SyncStateDao
 }

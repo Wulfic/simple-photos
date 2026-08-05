@@ -531,7 +531,7 @@ export default function Diagnostics() {
             ) : (
               <>
                 {activeTab === "overview" && metrics && (
-                  <OverviewTab metrics={metrics} />
+                  <OverviewTab metrics={metrics} onRefresh={fetchMetrics} />
                 )}
                 {activeTab === "server-logs" && <ServerLogsTab />}
                 {activeTab === "client-logs" && <ClientLogsTab />}

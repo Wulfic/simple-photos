@@ -36,6 +36,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
@@ -50,7 +51,12 @@ import androidx.lifecycle.viewModelScope
 import coil.compose.AsyncImage
 import com.simplephotos.ui.components.CloudBackupBadge
 import com.simplephotos.ui.components.TileSelectionCircle
+import com.simplephotos.ui.components.rememberGalleryRowHeight
 import com.simplephotos.ui.components.rememberThumbnailRequest
+import com.simplephotos.ui.components.canCompare
+import com.simplephotos.ui.components.compareTargets
+import com.simplephotos.data.collapseBursts
+import com.simplephotos.data.excludeSecure
 import com.simplephotos.data.local.AppDatabase
 import com.simplephotos.data.local.entities.AlbumEntity
 import com.simplephotos.data.local.entities.PhotoEntity
@@ -62,6 +68,7 @@ import com.simplephotos.data.repository.PhotoRepository
 import com.simplephotos.sync.DiagnosticLogger
 import com.simplephotos.sync.SyncScheduler
 import com.simplephotos.ui.components.ActiveTab
+import com.simplephotos.ui.components.AlbumPickerDialog
 import com.simplephotos.ui.components.AppHeader
 import com.simplephotos.ui.components.ConversionBanner
 import com.simplephotos.ui.components.EncryptionBanner
@@ -70,6 +77,8 @@ import com.simplephotos.ui.components.AiBanner
 import com.simplephotos.ui.components.HeaderNavigation
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_DIAGNOSTIC_LOGGING
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_USERNAME
+import com.simplephotos.ui.navigation.Screen
+import com.simplephotos.ui.navigation.rememberNewWindowLauncher
 import com.simplephotos.ui.theme.ThemeState
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
@@ -107,20 +116,23 @@ fun GalleryScreen(
     var showAlbumPicker by remember { mutableStateOf(false) }
     val isSystemDark = androidx.compose.foundation.isSystemInDarkTheme()
 
-    // Filter out photos that live in a secure gallery
+    // Split-screen (#21): a second *window* of the whole app. Shared launcher —
+    // used here for the Compare flow (opens the paired photo in the new window)
+    // and by every AppHeader's "New Window" menu item (todo1 issue 4).
+    val openWindow = rememberNewWindowLauncher()
+
+    // Filter out photos that live in a secure gallery (shared filter so the
+    // album grids/counts hide the exact same set — see #16).
     val visiblePhotos = remember(photos, viewModel.secureBlobIds) {
-        if (viewModel.secureBlobIds.isEmpty()) photos
-        else photos.filter { it.serverBlobId == null || it.serverBlobId !in viewModel.secureBlobIds }
+        photos.excludeSecure(viewModel.secureBlobIds)
     }
 
-    // Collapse burst stacks: keep only the first frame of each burstId (matches web)
-    val collapsedPhotos = remember(visiblePhotos) {
-        val seenBursts = HashSet<String>()
-        visiblePhotos.filter { p ->
-            val bid = p.burstId
-            if (bid.isNullOrEmpty()) true else seenBursts.add(bid)
-        }
-    }
+    // Collapse burst stacks: keep only the first frame of each burstId (matches
+    // web). The SHARED helper, not a fourth inline copy of it — the viewer's
+    // pager resolves the gallery list through the same `excludeSecure →
+    // collapseBursts` pair (AlbumPhotoResolver), and an inline re-implementation
+    // here is how the two drift apart again (E3).
+    val collapsedPhotos = remember(visiblePhotos) { visiblePhotos.collapseBursts() }
 
     // Burst frame counts per burstId (used by the badge stack indicator).
     val burstCounts = remember(visiblePhotos) {
@@ -176,6 +188,25 @@ fun GalleryScreen(
                             }
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            // Compare — only when exactly two photos are selected (#21).
+                            // Opens the pair as two windows: this one shows the
+                            // first photo, a second window shows the other. Each is
+                            // the real viewer, so both panes keep swiping, editing
+                            // and the info panel.
+                            if (canCompare(viewModel.selectedIds.size)) {
+                                OutlinedButton(
+                                    onClick = {
+                                        compareTargets(viewModel.selectedIds)?.let { (a, b) ->
+                                            openWindow(Screen.PhotoViewer.createRoute(b))
+                                            viewModel.clearSelection()
+                                            onPhotoClick(a)
+                                        }
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                ) {
+                                    Text("Compare", fontSize = 12.sp)
+                                }
+                            }
                             OutlinedButton(
                                 onClick = { showAlbumPicker = true },
                                 enabled = viewModel.selectedIds.isNotEmpty(),
@@ -185,14 +216,18 @@ fun GalleryScreen(
                                 Spacer(Modifier.width(4.dp))
                                 Text("Album", fontSize = 12.sp)
                             }
+                            // Icon-only so the label can't wrap to a second line when
+                            // the "N selected" count grows and squeezes this row (#23).
                             Button(
                                 onClick = { viewModel.deleteSelectedPhotos(visiblePhotos) },
                                 enabled = viewModel.selectedIds.isNotEmpty(),
                                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                             ) {
-                                Icon(painter = painterResource(R.drawable.ic_trashcan), contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text("Delete", fontSize = 12.sp)
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_trashcan),
+                                    contentDescription = "Delete",
+                                    modifier = Modifier.size(18.dp)
+                                )
                             }
                         }
                     }
@@ -262,7 +297,7 @@ fun GalleryScreen(
                     Text(err, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.bodySmall)
                 }
 
-                if (visiblePhotos.isEmpty() && !viewModel.isSyncing && viewModel.dataReady) {
+                if (visiblePhotos.isEmpty() && !viewModel.isSyncing && viewModel.gridReady) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text("No photos yet", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -270,9 +305,17 @@ fun GalleryScreen(
                             Text("Tap + to add photos or grant permissions for auto-backup", textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(horizontal = 32.dp))
                         }
                     }
-                } else if (!viewModel.dataReady || (visiblePhotos.isEmpty() && viewModel.isSyncing)) {
-                    // Show loading until the first server sync completes.
-                    // This prevents flashing stale photos from a previous user session.
+                } else if (!viewModel.gridReady || (visiblePhotos.isEmpty() && viewModel.isSyncing)) {
+                    // Show loading until the first server sync completes AND the
+                    // secure filter is known (B5).
+                    // The first half prevents flashing stale photos from a previous
+                    // user session; the second prevents drawing THIS user's secured
+                    // photos, which is what an un-answered filter used to do —
+                    // `secureBlobIds` starts empty and `excludeSecure` short-circuits
+                    // on empty, so "not fetched yet" rendered as "nothing is hidden".
+                    // The repository persists the last known set, so this gate is
+                    // cleared from disk on a cold start rather than waiting on the
+                    // network — offline browsing (#3/#8) still works.
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             CircularProgressIndicator()
@@ -281,8 +324,12 @@ fun GalleryScreen(
                         }
                     }
                 } else {
-                    // Day-grouped justified photo grid — aspect-ratio-preserving layout
-                    val targetRowHeight = if (viewModel.thumbnailSize == "large") 240.dp else 180.dp
+                    // Day-grouped justified photo grid — aspect-ratio-preserving layout.
+                    // Uses the shared REACTIVE row-height helper (TODO #14) so a
+                    // Settings → Thumbnail Size change is reflected immediately,
+                    // instead of the ViewModel's one-time-loaded `thumbnailSize`
+                    // (which only updated on ViewModel recreation).
+                    val targetRowHeight = rememberGalleryRowHeight()
 
                     // Build a map: photo localId → header info for the first photo in each day
                     val headerMap = remember(gridItems) {
@@ -339,6 +386,7 @@ fun GalleryScreen(
                             if (header != null) {
                                 DayHeader(
                                     dateLabel = header.dateLabel,
+                                    shortLabel = header.shortLabel,
                                     isSelectionMode = viewModel.isSelectionMode,
                                     allSelected = header.photoIds.all { it in viewModel.selectedIds },
                                     onSelectDay = { viewModel.selectDay(header.photoIds) }
@@ -373,10 +421,16 @@ fun GalleryScreen(
                     .zIndex(50f),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                ConversionBanner(api = viewModel.apiService)
-                EncryptionBanner(api = viewModel.apiService)
+                // Ordering mirrors the web stack (top → bottom: geo, ai,
+                // conversion, encryption) so the most important banner sits
+                // lowest, nearest the FAB (TODO #5).
                 GeoBanner(api = viewModel.apiService)
                 AiBanner(api = viewModel.apiService)
+                ConversionBanner(api = viewModel.apiService)
+                EncryptionBanner(
+                    api = viewModel.apiService,
+                    reportLocalPending = { viewModel.countPendingUploads() },
+                )
             }
         }
     }
@@ -403,6 +457,7 @@ fun GalleryScreen(
 @Composable
 private fun DayHeader(
     dateLabel: String,
+    shortLabel: String,
     isSelectionMode: Boolean,
     allSelected: Boolean,
     onSelectDay: () -> Unit
@@ -434,7 +489,9 @@ private fun DayHeader(
                 shape = RoundedCornerShape(16.dp)
             ) {
                 Text(
-                    if (allSelected) "Selected" else "Select day",
+                    // Name the day in the chip so it's clear which day is being
+                    // selected mid-scroll (todo1 #2).
+                    if (allSelected) "Selected" else "Select $shortLabel",
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Medium,
                     color = if (allSelected) Color(0xFF22C55E) else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -443,96 +500,6 @@ private fun DayHeader(
             }
         }
     }
-}
-
-// ── Album Picker Dialog ─────────────────────────────────────────────────────
-
-@Composable
-private fun AlbumPickerDialog(
-    albums: List<AlbumEntity>,
-    onDismiss: () -> Unit,
-    onAlbumSelected: (String) -> Unit,
-    onCreateAlbum: (String) -> Unit
-) {
-    var showCreateField by remember { mutableStateOf(false) }
-    var newAlbumName by remember { mutableStateOf("") }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Add to Album") },
-        text = {
-            Column(modifier = Modifier.widthIn(min = 260.dp)) {
-                if (albums.isEmpty() && !showCreateField) {
-                    Text(
-                        "No albums yet. Create one to get started.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(vertical = 8.dp)
-                    )
-                }
-
-                if (albums.isNotEmpty()) {
-                    LazyColumn(modifier = Modifier.heightIn(max = 240.dp)) {
-                        lazyItems(albums, key = { it.localId }) { album ->
-                            Surface(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { onAlbumSelected(album.localId) },
-                                shape = RoundedCornerShape(8.dp)
-                            ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 12.dp, vertical = 12.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        painter = painterResource(R.drawable.ic_folder),
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                    Spacer(Modifier.width(12.dp))
-                                    Text(album.name, style = MaterialTheme.typography.bodyLarge)
-                                }
-                            }
-                        }
-                    }
-                    Spacer(Modifier.height(8.dp))
-                }
-
-                if (showCreateField) {
-                    OutlinedTextField(
-                        value = newAlbumName,
-                        onValueChange = { newAlbumName = it },
-                        label = { Text("Album name") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                } else {
-                    TextButton(
-                        onClick = { showCreateField = true },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("Create New Album")
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            if (showCreateField) {
-                Button(
-                    onClick = { if (newAlbumName.isNotBlank()) onCreateAlbum(newAlbumName.trim()) },
-                    enabled = newAlbumName.isNotBlank()
-                ) { Text("Create & Add") }
-            }
-        },
-        dismissButton = {
-            OutlinedButton(onClick = onDismiss) { Text("Cancel") }
-        }
-    )
 }
 
 /**
@@ -596,6 +563,7 @@ private fun MediaTile(
         }
 
         if (imageModel != null) {
+            val density = LocalDensity.current
             // Parse cropMetadata for thumbnail transforms (crop rect + rotation + brightness)
             val cropMeta = remember(photo.cropMetadata) {
                 photo.cropMetadata?.let {
@@ -669,10 +637,28 @@ private fun MediaTile(
                 }
             }
 
+            // Decode-size cap (option 7 — scroll perf). Decode each thumbnail at
+            // roughly its on-screen pixel size instead of a fixed 512: small tiles
+            // in dense rows over-decoded (≈2× wasted CPU + bitmap memory), which
+            // starved the UI thread and caused dropped frames on fast scroll over a
+            // large library. Cropped tiles draw a zoomed sub-rect, so they need
+            // proportionally more source resolution to stay sharp.
+            val decodePx = remember(widthDp, heightDp, cropped, cw, ch, density) {
+                val tilePx = with(density) { maxOf(widthDp, heightDp).toPx() }
+                val cropZoom = if (cropped) (1f / minOf(cw, ch)).coerceAtMost(3f) else 1f
+                (tilePx * cropZoom).toInt().coerceIn(256, 720)
+            }
+
             AsyncImage(
                 // GIFs: no size cap — Coil's GifDecoder needs the full data to
-                // produce an animated Drawable.
-                model = rememberThumbnailRequest(data = imageModel, size = if (isGif) null else 512),
+                // produce an animated Drawable. crossfade=false on the grid: the
+                // per-tile fade-in triggered a recomposition cascade during scroll
+                // (GPU was idle at ~2ms while frames still missed vsync).
+                model = rememberThumbnailRequest(
+                    data = imageModel,
+                    size = if (isGif) null else decodePx,
+                    crossfade = false,
+                ),
                 contentDescription = photo.filename,
                 contentScale = thumbScale,
                 modifier = thumbModifier,

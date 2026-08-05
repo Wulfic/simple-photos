@@ -1,31 +1,24 @@
 /**
- * BannerSlot — fixed, bottom-anchored positioning + entrance animation for a
- * single global progress banner.
+ * BannerSlot — portals a single global progress banner into the shared,
+ * bottom-anchored flex column owned by {@link BannerHost}.
  *
- * All slots share the same bottom anchor and stack *upward* via a transformed
- * offset (`slot × STEP`), with a uniform step that leaves the cards slightly
- * overlapping — the look the previous hard-coded `bottom-*` design had, but now
- * gap-free because slots are compacted by {@link useBannerSlot}.
+ * Positioning is now pure flex layout: every banner is a full-width flex item in
+ * one `flex-col-reverse` container with a real `gap`, so cards stack vertically
+ * with consistent spacing and never overlap — regardless of card height or
+ * viewport (item #3). Vertical order is set by CSS `order` = the banner's
+ * priority; absent banners just don't render, so the column compacts with no
+ * gaps.
  *
- * Animation is pure CSS (the app uses native View Transitions + CSS, no
- * framer-motion):
- *  - On mount the banner starts a hair higher and transparent, then a rAF flips
- *    it to its settled slot — so it slides DOWN into place and fades in.
- *  - When siblings come or go, the slot index changes and the transformed
- *    offset transitions, so the whole stack glides instead of jumping.
+ * Entrance animation stays pure CSS: the item mounts a hair lower and
+ * transparent, then a rAF flips it to its settled state so it slides up and
+ * fades in. When siblings come or go, the flex reflow glides the rest.
  */
 import { useEffect, useState } from "react";
-import { BannerId, useBannerSlot } from "../store/bannerStack";
-
-/** Bottom anchor of the lowest slot (matches the old `bottom-6`). */
-const BASE_REM = 1.5;
-/** Vertical distance between adjacent slots (≈ the old 12-unit overlap step). */
-const STEP_REM = 3;
-/** Extra lift the banner starts at before sliding down into its slot. */
-const ENTER_LIFT_REM = 0.75;
+import { createPortal } from "react-dom";
+import { BannerId, useBannerContainer } from "../store/bannerStack";
 
 export function BannerSlot({
-  id,
+  id: _id,
   priority,
   children,
 }: {
@@ -33,35 +26,33 @@ export function BannerSlot({
   priority: number;
   children: React.ReactNode;
 }) {
-  const slot = useBannerSlot(id, priority);
+  const containerEl = useBannerContainer((s) => s.el);
   const [entered, setEntered] = useState(false);
 
   // Flip to the settled state on the next frame so the browser paints the
-  // initial (lifted + transparent) state first and the transition runs.
+  // initial (lower + transparent) state first and the transition runs.
   useEffect(() => {
     const raf = requestAnimationFrame(() => setEntered(true));
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  const settledOffset = slot * STEP_REM;
-  const offsetRem = entered ? settledOffset : settledOffset + ENTER_LIFT_REM;
+  // Nothing to portal into until BannerHost has mounted.
+  if (!containerEl) return null;
 
-  return (
+  return createPortal(
     <div
-      className="fixed left-4 right-4 pointer-events-none"
+      className="w-full flex justify-center"
       style={{
-        bottom: `${BASE_REM}rem`,
-        // Negative Y moves the banner up the stack from the bottom anchor.
-        transform: `translateY(-${offsetRem}rem)`,
+        // CSS order controls vertical position within the flex-col-reverse
+        // stack (lower priority → nearer the bottom anchor).
+        order: priority,
         opacity: entered ? 1 : 0,
-        // Keep the whole stack at the banners' historical z-50 ceiling so the
-        // FAB (z-60), modals and toasts still sit above it; within the stack the
-        // bottom-most slot draws in front, matching the overlap direction.
-        zIndex: 50 - slot,
+        transform: entered ? "translateY(0)" : "translateY(0.5rem)",
         transition: "transform 300ms ease-out, opacity 300ms ease-out",
       }}
     >
       {children}
-    </div>
+    </div>,
+    containerEl,
   );
 }

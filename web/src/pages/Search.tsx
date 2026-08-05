@@ -9,6 +9,7 @@ import { useScrollMemory } from "../hooks/useScrollMemory";
 import { api } from "../api/client";
 import { useAuthStore } from "../store/auth";
 import { db } from "../db";
+import { resolveThumb } from "../db/thumbs";
 import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
 import JustifiedGrid from "../components/gallery/JustifiedGrid";
@@ -238,10 +239,11 @@ export default function Search() {
 
             if (fuzzyMatch(searchableText, trimmed)) {
               let localThumbUrl: string | undefined;
-              if (photo.thumbnailData) {
-                const mime = photo.thumbnailMimeType || (photo.mediaType === "gif" ? "image/gif" : "image/jpeg");
-                const blob = new Blob([photo.thumbnailData], { type: mime });
-                localThumbUrl = URL.createObjectURL(blob);
+              const thumb = await resolveThumb(photo);
+              if (thumb) {
+                localThumbUrl = URL.createObjectURL(
+                  new Blob([thumb.data], { type: thumb.mime }),
+                );
               }
               matches.push({
                 id: photo.blobId,
@@ -709,26 +711,9 @@ function SearchResultTile({
         )}
       </div>
 
-      {/* Tag chips overlay on hover */}
-      {result.tags.length > 0 && (
-        <div className="absolute inset-x-0 top-0 p-1 opacity-0 group-hover:opacity-100 transition-opacity">
-          <div className="flex flex-wrap gap-0.5">
-            {result.tags.slice(0, 3).map((tag) => (
-              <span
-                key={tag}
-                className="bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded-full"
-              >
-                {tag}
-              </span>
-            ))}
-            {result.tags.length > 3 && (
-              <span className="bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded-full">
-                +{result.tags.length - 3}
-              </span>
-            )}
-          </div>
-        </div>
-      )}
+      {/* Tags are intentionally NOT overlaid on result tiles — they cluttered the
+          media and users don't expect their tags stamped on the thumbnail (#15).
+          Tags remain searchable and viewable in the photo's info/tag panel. */}
     </div>
   );
 }

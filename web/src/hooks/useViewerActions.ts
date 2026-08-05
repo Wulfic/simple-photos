@@ -8,10 +8,12 @@ import { useState, useCallback, useRef } from "react";
 import { useAppNavigate } from "./useAppNavigate";
 import { api } from "../api/client";
 import { db, type MediaType } from "../db";
+import { copyThumb, deleteThumbs, resolveThumb } from "../db/thumbs";
 import { useAuthStore } from "../store/auth";
 import { useBackupStore } from "../store/backup";
 import { useProcessingStore } from "../store/processing";
 import { applyEditsToImageDownload } from "../utils/media";
+import { supportsInPlaceEditSave } from "../gallery/utils/gifDetection";
 import type { CropMetadata, PreloadEntry } from "./useViewerMedia";
 
 interface ViewerLocationState {
@@ -47,6 +49,18 @@ interface UseViewerActionsParams {
   setEditMode: (v: boolean) => void;
   setError: (msg: string) => void;
   preloadCache: React.MutableRefObject<Map<string, PreloadEntry>>;
+  /**
+   * Secure-album edit context (#31). When set, the current photo is an encrypted
+   * secure item: Save / Reset persist the crop to the secure item row via the
+   * secure crop endpoint (NOT the photos table / IDB cache, which secure items
+   * are deliberately excluded from) and `onSaved` lets the viewer keep an
+   * in-session override so swiping away and back shows the fresh crop.
+   */
+  secure?: {
+    galleryId: string;
+    itemId: string;
+    onSaved: (metaJson: string | null) => void;
+  };
 }
 
 export default function useViewerActions({
@@ -75,6 +89,7 @@ export default function useViewerActions({
   setEditMode,
   setError,
   preloadCache,
+  secure,
 }: UseViewerActionsParams) {
   const navigate = useAppNavigate();
 
@@ -132,7 +147,23 @@ export default function useViewerActions({
       hasMeta: !!meta,
       metaJson,
       mediaType,
+      secure: !!secure,
     });
+    // ── Secure item: persist to the secure item row, not the photos table ──
+    // Secure clones are excluded from db.photos / server photos, so the regular
+    // save path below (which needs a serverPhotoId) silently no-ops for them.
+    if (secure) {
+      try {
+        await api.secureGalleries.setItemCrop(secure.galleryId, secure.itemId, metaJson);
+        setCropData(meta);
+        secure.onSaved(metaJson);
+      } catch (err) {
+        console.error("[EDIT:saveEdit] Secure crop save failed:", err);
+        setError(err instanceof Error ? err.message : "Save failed");
+      }
+      setEditMode(false);
+      return;
+    }
     if (!meta) {
       // All defaults — clear metadata
       try {
@@ -166,7 +197,7 @@ export default function useViewerActions({
       }
     } catch { /* non-fatal */ }
     setEditMode(false);
-  }, [id, buildEditMetadata, setCropData, setEditMode, preloadCache]);
+  }, [id, secure, buildEditMetadata, setCropData, setEditMode, setError, preloadCache]);
 
   const handleSaveCopy = useCallback(async () => {
     if (!id) return;
@@ -278,9 +309,11 @@ export default function useViewerActions({
               filename: copyFilename,
               cropData: metaJson ?? undefined,
               takenAt: original.takenAt,
-              thumbnailData: original.thumbnailData,
+              thumbnailData: undefined,
               serverPhotoId: undefined,
-            }).catch(() => { /* last resort */ });
+            })
+              .then(() => copyThumb(original, copyId))
+              .catch(() => { /* last resort */ });
           })
           .finally(() => {
             endTask("saveCopy");
@@ -296,9 +329,10 @@ export default function useViewerActions({
           filename: copyFilename,
           cropData: metaJson ?? undefined,
           takenAt: original.takenAt,
-          thumbnailData: original.thumbnailData,
+          thumbnailData: undefined,
           serverPhotoId: undefined,
         });
+        await copyThumb(original, copyId);
         console.log("[Viewer:saveCopy] Local-only copy saved to IDB:", {
           copyId, filename: copyFilename, originalBlobId: id,
         });
@@ -312,7 +346,13 @@ export default function useViewerActions({
   const handleClearCrop = useCallback(async () => {
     if (!id) return;
     try {
-      await db.photos.update(id, { cropData: undefined });
+      // Secure item: clear the crop on the secure item row too, so Reset sticks.
+      if (secure) {
+        await api.secureGalleries.setItemCrop(secure.galleryId, secure.itemId, null);
+        secure.onSaved(null);
+      } else {
+        await db.photos.update(id, { cropData: undefined });
+      }
       setCropData(null);
       setCropCorners({ x: 0, y: 0, w: 1, h: 1 });
       setBrightness(0);
@@ -320,13 +360,26 @@ export default function useViewerActions({
       setTrimStart(0);
       setTrimEnd(mediaDuration);
     } catch { /* ignore */ }
-  }, [id, setCropData, setCropCorners, setBrightness, setRotateValue, setTrimStart, setTrimEnd, mediaDuration]);
+  }, [id, secure, setCropData, setCropCorners, setBrightness, setRotateValue, setTrimStart, setTrimEnd, mediaDuration]);
 
   const handleLeaveAndSave = useCallback(async () => {
-    await handleSaveEdit();
+    // GIFs have no in-place metadata Save (issue #18): a metadata-only save
+    // can't re-bake the animated-GIF thumbnail, so the tile keeps the unedited
+    // frame. Persist real GIF edits as a rendered Save Copy instead, which
+    // re-encodes the GIF via ffmpeg AND regenerates a correctly cropped
+    // thumbnail. All-default (a reset) still falls through to the metadata clear.
+    //
+    // Secure items are the exception: there is no secure duplicate endpoint, so
+    // even a secure GIF saves as pure crop metadata (the tile applies it via CSS
+    // — animation is preserved), routed through the secure path in handleSaveEdit.
+    if (!secure && !supportsInPlaceEditSave(mediaType) && buildEditMetadata()) {
+      await handleSaveCopy();
+    } else {
+      await handleSaveEdit();
+    }
     setShowLeavePrompt(false);
     navigate(backTo);
-  }, [handleSaveEdit, navigate, backTo]);
+  }, [secure, mediaType, buildEditMetadata, handleSaveCopy, handleSaveEdit, navigate, backTo]);
 
   const handleLeaveAndDiscard = useCallback(() => {
     setEditMode(false);
@@ -379,12 +432,15 @@ export default function useViewerActions({
           takenAt: cached.takenAt,
           deletedAt: Date.now(),
           expiresAt: trashResult.expires_at,
-          thumbnailData: cached.thumbnailData,
+          // The trash row keeps its own bytes — the photo row and its thumbs
+          // entry are about to go.
+          thumbnailData: (await resolveThumb(cached))?.data,
           duration: cached.duration,
           albumIds: cached.albumIds ?? [],
         });
       }
       await db.photos.delete(id);
+      await deleteThumbs([id]);
       navigate(backTo);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Delete failed");
@@ -398,26 +454,8 @@ export default function useViewerActions({
       if (!album) return;
       const updated = album.photoBlobIds.filter((bid: string) => bid !== id);
 
-      // Delete old manifest blob
-      if (album.manifestBlobId) {
-        try { await api.blobs.delete(album.manifestBlobId); } catch { /* ok */ }
-      }
-
-      // Upload new manifest
-      const payload = JSON.stringify({
-        v: 1,
-        album_id: album.albumId,
-        name: album.name,
-        created_at: new Date(album.createdAt).toISOString(),
-        cover_photo_blob_id: album.coverPhotoBlobId || null,
-        photo_blob_ids: updated,
-      });
-      const { encrypt: enc, sha256Hex: sha } = await import("../crypto/crypto");
-      const encrypted = await enc(new TextEncoder().encode(payload));
-      const hash = await sha(new Uint8Array(encrypted));
-      const res = await api.blobs.upload(encrypted, "album_manifest", hash);
-
-      await db.albums.put({ ...album, photoBlobIds: updated, manifestBlobId: res.blob_id });
+      const { saveAlbumManifest } = await import("../utils/albumManifest");
+      await saveAlbumManifest({ ...album, photoBlobIds: updated });
 
       // Navigate to next photo or back to album
       if (photoIds && photoIds.length > 1) {
@@ -437,8 +475,12 @@ export default function useViewerActions({
   const handleDownload = useCallback(async () => {
     if (!mediaUrl) return;
 
-    const isImage = mediaType === "photo" || mediaType === "gif";
-    const isVideoOrAudio = mediaType === "video" || mediaType === "audio";
+    // Static images bake edits client-side via Canvas. GIFs must NOT — canvas
+    // would flatten the animation to a single frame — so they route through the
+    // server ffmpeg render path alongside video/audio.
+    const isImage = mediaType === "photo";
+    const isServerRendered =
+      mediaType === "video" || mediaType === "audio" || mediaType === "gif";
 
     // ── Converted file without edits: ask user which version to download ─
     if (!cropData) {
@@ -468,8 +510,8 @@ export default function useViewerActions({
       }
     }
 
-    // ── Video / Audio: send to server ffmpeg render endpoint ───────────────
-    if (cropData && isVideoOrAudio) {
+    // ── Video / Audio / GIF: send to server ffmpeg render endpoint ─────────
+    if (cropData && isServerRendered) {
       // Look up the serverPhotoId — render endpoint is keyed by photos table ID
       const cached = id ? await db.photos.get(id) : undefined;
       const serverPhotoId = cached?.serverPhotoId ?? (cached?.serverSide ? id : undefined);

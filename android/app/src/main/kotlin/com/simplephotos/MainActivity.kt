@@ -44,12 +44,13 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import com.simplephotos.data.repository.BackupFolderRepository
+import com.simplephotos.security.UnlockSession
 import com.simplephotos.ui.navigation.NavGraph
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_BIOMETRIC_ENABLED
+import com.simplephotos.ui.navigation.startRouteFromIntent
 import com.simplephotos.ui.theme.SimplePhotosTheme
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.runBlocking
 import javax.inject.Inject
 
 /**
@@ -66,15 +67,18 @@ class MainActivity : FragmentActivity() {
     @Inject
     lateinit var dataStore: DataStore<Preferences>
 
+    /** Process-scoped app-lock — shared by every window (#21). */
+    @Inject
+    lateinit var unlockSession: UnlockSession
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        // Check if biometric is enabled in settings
-        val biometricEnabled = runBlocking {
-            val prefs = dataStore.data.first()
-            prefs[KEY_BIOMETRIC_ENABLED] ?: false
-        }
+        // Deep-link for a second window opened via openInNewWindow(). Read (and
+        // validated) once here; the gates below still run first — the extra can
+        // never jump the app-lock or the login screen.
+        val startRoute = startRouteFromIntent(intent)
 
         // Allowed authenticators for the app-lock. On API 30+ we add
         // DEVICE_CREDENTIAL so a biometric lockout (after repeated failed
@@ -93,7 +97,39 @@ class MainActivity : FragmentActivity() {
 
         setContent {
             SimplePhotosTheme {
-                var authenticated by remember { mutableStateOf(!biometricEnabled || !biometricAvailable) }
+                // Read the biometric-lock preference asynchronously. Previously
+                // this was a `runBlocking { dataStore.data.first() }` in onCreate,
+                // which blocks the main thread on every cold start — a slow,
+                // contended, or corrupt DataStore read there manifests as an ANR
+                // / "app keeps stopping". `produceState` moves it off the UI
+                // thread; we show a neutral splash until it resolves.
+                val biometricEnabledState = produceState<Boolean?>(initialValue = null) {
+                    value = try {
+                        dataStore.data.first()[KEY_BIOMETRIC_ENABLED] ?: false
+                    } catch (e: Exception) {
+                        android.util.Log.e("MainActivity", "Failed to read biometric pref", e)
+                        false
+                    }
+                }
+                val biometricEnabled = biometricEnabledState.value
+
+                if (biometricEnabled == null) {
+                    // Preference still loading — neutral splash, no work on main thread.
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.background)
+                    )
+                    return@SimplePhotosTheme
+                }
+
+                // `unlockSession.isUnlocked` is what makes split-screen bearable:
+                // the second window of the same process inherits window #1's
+                // unlock instead of demanding a fingerprint again (#21). Process
+                // death clears it, so a cold start still locks.
+                var authenticated by remember {
+                    mutableStateOf(!biometricEnabled || !biometricAvailable || unlockSession.isUnlocked)
+                }
                 var authFailed by remember { mutableStateOf(false) }
 
                 if (!authenticated) {
@@ -101,7 +137,7 @@ class MainActivity : FragmentActivity() {
                     LaunchedEffect(Unit) {
                         showBiometricPrompt(
                             authenticators = lockAuthenticators,
-                            onSuccess = { authenticated = true },
+                            onSuccess = { unlockSession.markUnlocked(); authenticated = true },
                             onFail = { authFailed = true }
                         )
                     }
@@ -134,7 +170,7 @@ class MainActivity : FragmentActivity() {
                                 authFailed = false
                                 showBiometricPrompt(
                                     authenticators = lockAuthenticators,
-                                    onSuccess = { authenticated = true },
+                                    onSuccess = { unlockSession.markUnlocked(); authenticated = true },
                                     onFail = { authFailed = true }
                                 )
                             }) {
@@ -145,7 +181,7 @@ class MainActivity : FragmentActivity() {
                 } else {
                     // Gate on media permissions before entering the app
                     PermissionGate {
-                        NavGraph()
+                        NavGraph(startRoute = startRoute)
                     }
                 }
             }

@@ -6,12 +6,13 @@ import { useEffect, useState, useCallback } from "react";
 import { api } from "../api/client";
 import { useAuthStore } from "../store/auth";
 import { db, type CachedTrashItem } from "../db";
+import { putThumb } from "../db/thumbs";
 import AppHeader from "../components/AppHeader";
 import { formatBytes, getErrorMessage } from "../utils/formatters";
 import AppIcon from "../components/AppIcon";
 import JustifiedGrid from "../components/gallery/JustifiedGrid";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
-import { decrypt } from "../crypto/crypto";
+import { decryptPhotoBlob } from "../crypto/blobEnvelope";
 import { downloadRaw } from "../api/core";
 import { GallerySkeleton } from "../components/skeletons";
 import { Modal } from "../components/ui";
@@ -105,15 +106,10 @@ export default function Trash() {
             // trash thumb endpoint, decrypt and display
             try {
               const encData = await downloadRaw(api.trash.thumbUrl(item.id));
-              const plaintext = await decrypt(encData);
-              const json = JSON.parse(new TextDecoder().decode(plaintext));
-              const b64 = json.data as string;
-              if (b64) {
-                const binary = atob(b64);
-                const bytes = new Uint8Array(binary.length);
-                for (let k = 0; k < binary.length; k++) bytes[k] = binary.charCodeAt(k);
-                const mime = json.mime_type || "image/jpeg";
-                const thumbBlob = new Blob([bytes], { type: mime });
+              const { payload, bytes } = await decryptPhotoBlob(encData);
+              if (bytes.byteLength) {
+                const mime = payload.mime_type || "image/jpeg";
+                const thumbBlob = new Blob([bytes as BlobPart], { type: mime });
                 (item as TrashItem)._localThumbUrl = URL.createObjectURL(thumbBlob);
               }
             } catch (e) {
@@ -157,10 +153,19 @@ export default function Trash() {
             width: localTrash.width,
             height: localTrash.height,
             takenAt: localTrash.takenAt,
-            thumbnailData: localTrash.thumbnailData,
             duration: localTrash.duration,
             albumIds: localTrash.albumIds ?? [],
           });
+          // Photo rows never carry thumbnail bytes — restoring one has to put
+          // the trash row's copy into the thumbs table, not back onto the row.
+          if (localTrash.thumbnailData) {
+            await putThumb(
+              localTrash.blobId,
+              localTrash.thumbnailData,
+              undefined,
+              localTrash.mediaType,
+            );
+          }
           await db.trash.delete(id);
         }
         // Revoke the local thumbnail URL
@@ -246,10 +251,18 @@ export default function Trash() {
               width: localTrash.width,
               height: localTrash.height,
               takenAt: localTrash.takenAt,
-              thumbnailData: localTrash.thumbnailData,
               duration: localTrash.duration,
               albumIds: localTrash.albumIds ?? [],
             });
+            // See the single-item restore above: bytes go to the thumbs table.
+            if (localTrash.thumbnailData) {
+              await putThumb(
+                localTrash.blobId,
+                localTrash.thumbnailData,
+                undefined,
+                localTrash.mediaType,
+              );
+            }
             await db.trash.delete(id);
           }
           if (item._localThumbUrl) URL.revokeObjectURL(item._localThumbUrl);

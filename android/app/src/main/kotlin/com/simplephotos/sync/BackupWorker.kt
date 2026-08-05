@@ -4,13 +4,18 @@
  */
 package com.simplephotos.sync
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.Context
+import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.media.MediaMetadataRetriever
 import android.media.ThumbnailUtils
+import android.os.Build
 import android.util.Log
+import androidx.core.app.NotificationCompat
 import androidx.exifinterface.media.ExifInterface
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
@@ -18,6 +23,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.hilt.work.HiltWorker
 import androidx.work.CoroutineWorker
+import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
 import com.simplephotos.crypto.ChunkedBlob
 import com.simplephotos.data.local.AppDatabase
@@ -62,11 +68,88 @@ class BackupWorker @AssistedInject constructor(
         private const val TAG = "BackupWorker"
         private const val MAX_ATTEMPTS = 5
         private val EXIF_DIM_REPAIR_DONE = booleanPreferencesKey("exif_dim_repair_done")
+
+        // Foreground-service notification (TODO #9). IMPORTANCE_LOW = no sound;
+        // the notification is only to satisfy the OS FGS requirement and keep the
+        // upload alive past Doze/background limits.
+        private const val NOTIF_CHANNEL_ID = "photo_backup_progress"
+        private const val NOTIF_ID = 4711
+    }
+
+    /**
+     * Required for expedited work on API < 31 and used to promote the worker to a
+     * foreground service. Provides a minimal placeholder; the real progress text
+     * is set via [setForeground] once the batch size is known.
+     */
+    override suspend fun getForegroundInfo(): ForegroundInfo =
+        buildForegroundInfo("Preparing photo backup…")
+
+    /** Lazily create the low-importance notification channel (API 26+). */
+    private fun ensureNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val nm = applicationContext.getSystemService(NotificationManager::class.java)
+            if (nm.getNotificationChannel(NOTIF_CHANNEL_ID) == null) {
+                nm.createNotificationChannel(
+                    NotificationChannel(
+                        NOTIF_CHANNEL_ID,
+                        "Photo backup",
+                        NotificationManager.IMPORTANCE_LOW
+                    ).apply {
+                        description = "Shows progress while photos and videos are backing up"
+                        setShowBadge(false)
+                    }
+                )
+            }
+        }
+    }
+
+    /** Build the ongoing progress notification wrapped as [ForegroundInfo]. */
+    private fun buildForegroundInfo(text: String): ForegroundInfo {
+        ensureNotificationChannel()
+        val notification = NotificationCompat.Builder(applicationContext, NOTIF_CHANNEL_ID)
+            .setContentTitle("Backing up photos")
+            .setContentText(text)
+            .setSmallIcon(android.R.drawable.stat_sys_upload)
+            .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+            .build()
+        // API 34+ requires an explicit foreground-service type on the ForegroundInfo.
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ForegroundInfo(NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        } else {
+            ForegroundInfo(NOTIF_ID, notification)
+        }
+    }
+
+    /**
+     * Best-effort promotion to a foreground service. Never throws — if the OS
+     * refuses (e.g. notifications disabled, background-start restriction) the
+     * backup still runs; it just isn't protected from Doze. Guards long uploads
+     * (large videos) from being killed mid-batch (TODO #9).
+     */
+    private suspend fun promoteToForeground(text: String, diag: DiagnosticLogger) {
+        try {
+            setForeground(buildForegroundInfo(text))
+        } catch (e: Exception) {
+            diag.warn(TAG, "Could not run backup as foreground service: ${e.message}", emptyMap())
+        }
     }
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val prefs = dataStore.data.first()
-        val loggingEnabled = prefs[KEY_DIAGNOSTIC_LOGGING] ?: false
+        // The server is the authority for client diagnostics (admins toggle it
+        // centrally and SettingsViewModel mirrors it locally). Query it at backup
+        // start so diagnostics enabled server-side take effect even if the user
+        // never opened the Android Settings screen to seed the local pref.
+        // Best-effort: fall back to the last-known local pref when offline.
+        val localPref = prefs[KEY_DIAGNOSTIC_LOGGING] ?: false
+        val loggingEnabled = try {
+            api.getDiagnosticsConfig().clientDiagnosticsEnabled
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not fetch diagnostics config, using local pref: ${e.message}")
+            localPref
+        }
         val diag = DiagnosticLogger(api, loggingEnabled)
         try {
             diag.info(TAG, "Backup worker started", mapOf(
@@ -122,6 +205,19 @@ class BackupWorker @AssistedInject constructor(
                 "failedCount" to db.photoDao().getByStatus(SyncStatus.FAILED).size.toString()
             ))
 
+            // Publish this device's queued-upload count so the server's unified
+            // encryption banner total includes local backup work (TODO #2). The
+            // foreground banner keeps this fresh on its own poll; this covers the
+            // background-worker case where no banner is on screen.
+            EncryptionContribution.report(api, applicationContext, db.photoDao().countPendingUploads())
+
+            // Promote to a foreground service for the actual upload so a long
+            // batch (large videos) isn't killed under Doze / background limits
+            // (TODO #9). Only when there's real work — empty checks stay silent.
+            if (genuinelyPending.isNotEmpty()) {
+                promoteToForeground("${genuinelyPending.size} item(s) to back up", diag)
+            }
+
             // Track content hashes uploaded in this session to prevent
             // re-uploading the same content under different filenames.
             val uploadedHashes = mutableSetOf<String>()
@@ -129,6 +225,7 @@ class BackupWorker @AssistedInject constructor(
             var uploaded = 0
             var skipped = 0
             var failed = 0
+            var purged = 0
 
             for (photo in genuinelyPending) {
                 val localPath = photo.localPath
@@ -143,6 +240,31 @@ class BackupWorker @AssistedInject constructor(
 
                 try {
                     val uri = android.net.Uri.parse(localPath)
+
+                    // Pre-flight: a PENDING/FAILED row whose underlying MediaStore
+                    // item was deleted on-device can never upload. Without this it is
+                    // retried — and re-logs a FileNotFoundException — on every backup
+                    // pass forever. genuinelyPending already excludes anything with a
+                    // serverBlobId, so a "gone" row here was never uploaded; purge the
+                    // dangling reference instead of re-failing it. The serverBlobId
+                    // guard is belt-and-suspenders for a destructive delete: if the
+                    // invariant ever changes, an already-backed-up row is just settled
+                    // to SYNCED rather than deleted.
+                    if (!localMediaExists(uri)) {
+                        if (photo.serverBlobId == null) {
+                            diag.warn(TAG, "Local media deleted — purging dangling pending row", mapOf(
+                                "localId" to photo.localId,
+                                "filename" to photo.filename,
+                                "uri" to localPath
+                            ))
+                            db.photoDao().deleteById(photo.localId)
+                            purged++
+                        } else {
+                            db.photoDao().updateSyncStatus(photo.localId, SyncStatus.SYNCED)
+                            skipped++
+                        }
+                        continue
+                    }
 
                     // Decide the upload path by size BEFORE reading the file. Large
                     // media (videos, the occasional huge photo) streams as a v2
@@ -390,8 +512,14 @@ class BackupWorker @AssistedInject constructor(
                 "uploaded" to uploaded.toString(),
                 "skipped" to skipped.toString(),
                 "failed" to failed.toString(),
+                "purged" to purged.toString(),
                 "totalProcessed" to genuinelyPending.size.toString()
             ))
+
+            // Refresh the server-side contribution with whatever remains queued
+            // (typically 0, or leftover FAILED rows) so the unified banner total
+            // reflects the drained queue instead of the pre-batch count (TODO #2).
+            EncryptionContribution.report(api, applicationContext, db.photoDao().countPendingUploads())
 
             // Now that this batch's frames are all registered (with camera_model),
             // ask the server to timestamp-group bursts that carry no XMP BurstID
@@ -585,6 +713,25 @@ class BackupWorker @AssistedInject constructor(
      * Returns `-1` when the size can't be determined (caller treats that as the
      * conservative in-memory v1 path).
      */
+    /**
+     * True when the MediaStore item behind [uri] is still present. A deleted item
+     * throws [java.io.FileNotFoundException]; we treat *only* that as "gone" so a
+     * transient permission/IO error never purges a still-present photo. Used to
+     * detect dangling PENDING/FAILED rows whose underlying file the user deleted,
+     * which would otherwise re-fail (and re-log an error) on every backup pass.
+     */
+    private fun localMediaExists(uri: android.net.Uri): Boolean {
+        return try {
+            applicationContext.contentResolver.openAssetFileDescriptor(uri, "r")?.close()
+            true
+        } catch (_: java.io.FileNotFoundException) {
+            false
+        } catch (_: Exception) {
+            // Unknown/transient error — assume present; the normal path will decide.
+            true
+        }
+    }
+
     private fun querySize(uri: android.net.Uri): Long {
         try {
             applicationContext.contentResolver.query(

@@ -15,7 +15,7 @@ use crate::blobs::{chunked, storage};
 use crate::crypto;
 
 use super::thumbnail::{apply_exif_orientation_from_bytes, generate_thumbnail_file};
-use super::web_preview::{generate_web_preview_bg, needs_web_preview};
+use super::web_preview::{generate_web_preview_bg, plan_web_preview, WebPreview};
 
 // ── Data model ───────────────────────────────────────────────────────────────
 
@@ -233,8 +233,13 @@ pub async fn encrypt_one_photo(
     // benefit. In that case we build the thumbnail (which only borrows the
     // bytes), then *move* `file_data` straight into the payload, avoiding a
     // full-size redundant copy.
-    let (payload_data, payload_mime, thumb_data) = if needs_web_preview(&photo.filename).is_some() {
-        let web_preview_fut = build_web_preview(&photo, &full_path, &file_data, storage_root);
+    //
+    // The plan is resolved once, here, rather than re-derived inside
+    // `build_web_preview`: it costs an ffprobe for video containers and the two
+    // call sites must not be able to disagree about the answer.
+    let preview_plan = plan_web_preview(&full_path, &photo.filename).await;
+    let (payload_data, payload_mime, thumb_data) = if let Some(plan) = preview_plan {
+        let web_preview_fut = build_web_preview(&photo, &full_path, &file_data, storage_root, plan);
         let thumbnail_fut = build_thumbnail(&photo, &full_path, &file_data, storage_root);
         let ((payload_data, payload_mime), thumb_data) =
             tokio::join!(web_preview_fut, thumbnail_fut);
@@ -439,22 +444,23 @@ async fn encrypt_one_photo_chunked(
         None
     };
 
-    // Choose the encrypt source. Non-browser-native containers (e.g. .mov, .mkv,
-    // .tiff) get a browser-viewable preview generated to disk and encrypted in
-    // its place — exactly like the v1 path, but the preview is read from the
-    // path by FFmpeg so memory stays bounded. The content hash above still keys
-    // on the ORIGINAL file so dedup is unchanged.
+    // Choose the encrypt source. Media a browser cannot render (e.g. .tiff, .mkv,
+    // or an .mp4 that turns out to hold HEVC) gets a browser-viewable preview
+    // generated to disk and encrypted in its place — exactly like the v1 path,
+    // but the preview is read from the path by FFmpeg so memory stays bounded.
+    // The content hash above still keys on the ORIGINAL file so dedup is
+    // unchanged.
     let (encrypt_src, payload_mime): (std::path::PathBuf, String) =
-        if let Some(preview_ext) = needs_web_preview(&photo.filename) {
+        if let Some(plan) = plan_web_preview(full_path, &photo.filename).await {
             let preview_path =
-                storage_root.join(format!(".web_previews/{}.web.{}", photo.id, preview_ext));
+                storage_root.join(format!(".web_previews/{}.web.{}", photo.id, plan.ext));
             let have_preview = if tokio::fs::try_exists(&preview_path).await.unwrap_or(false) {
                 true
             } else {
-                generate_web_preview_bg(full_path, &preview_path, preview_ext).await
+                generate_web_preview_bg(full_path, &preview_path, plan).await
             };
             if have_preview {
-                let preview_mime = match preview_ext {
+                let preview_mime = match plan.ext {
                     "jpg" => "image/jpeg",
                     "png" => "image/png",
                     "mp3" => "audio/mpeg",
@@ -794,44 +800,49 @@ pub async fn repair_encrypted_thumbnail_orientation(
 // ── Internal helpers ─────────────────────────────────────────────────────────
 
 /// Build a web preview for non-browser-native formats, falling back to the
-/// original file data if no conversion is needed.
+/// original file data if the conversion fails.
+///
+/// Takes the already-resolved `plan` rather than deciding for itself: the caller
+/// needs the same answer to choose between the concurrent and the move-the-bytes
+/// path, and resolving it twice would spawn a second ffprobe for every video.
 async fn build_web_preview(
     photo: &PlainPhotoRow,
     full_path: &std::path::Path,
     file_data: &[u8],
     storage_root: &std::path::Path,
+    plan: WebPreview,
 ) -> (Vec<u8>, String) {
-    if let Some(preview_ext) = needs_web_preview(&photo.filename) {
-        let cached_preview_path =
-            storage_root.join(format!(".web_previews/{}.web.{}", photo.id, preview_ext));
+    let cached_preview_path =
+        storage_root.join(format!(".web_previews/{}.web.{}", photo.id, plan.ext));
 
-        let preview_data = if tokio::fs::try_exists(&cached_preview_path)
-            .await
-            .unwrap_or(false)
-        {
+    let preview_data = if tokio::fs::try_exists(&cached_preview_path)
+        .await
+        .unwrap_or(false)
+    {
+        tokio::fs::read(&cached_preview_path).await.ok()
+    } else {
+        tracing::info!(
+            "[SERVER_MIG] Generating web preview for {} before encryption ({:?} → {})",
+            photo.filename,
+            plan.mode,
+            plan.ext
+        );
+        if generate_web_preview_bg(full_path, &cached_preview_path, plan).await {
             tokio::fs::read(&cached_preview_path).await.ok()
         } else {
-            tracing::info!(
-                "[SERVER_MIG] Generating web preview for {} before encryption",
-                photo.filename
-            );
-            if generate_web_preview_bg(full_path, &cached_preview_path, preview_ext).await {
-                tokio::fs::read(&cached_preview_path).await.ok()
-            } else {
-                None
-            }
-        };
-
-        if let Some(data) = preview_data {
-            let preview_mime = match preview_ext {
-                "jpg" => "image/jpeg",
-                "png" => "image/png",
-                "mp3" => "audio/mpeg",
-                "mp4" => "video/mp4",
-                _ => photo.mime_type.as_str(),
-            };
-            return (data, preview_mime.to_string());
+            None
         }
+    };
+
+    if let Some(data) = preview_data {
+        let preview_mime = match plan.ext {
+            "jpg" => "image/jpeg",
+            "png" => "image/png",
+            "mp3" => "audio/mpeg",
+            "mp4" => "video/mp4",
+            _ => photo.mime_type.as_str(),
+        };
+        return (data, preview_mime.to_string());
     }
     (file_data.to_vec(), photo.mime_type.clone())
 }

@@ -9,6 +9,7 @@ import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } fr
 import { useParams, useLocation } from "react-router-dom";
 import { useAppNavigate } from "../hooks/useAppNavigate";
 import { db } from "../db";
+import { resolveThumb } from "../db/thumbs";
 import { useLiveQuery } from "dexie-react-hooks";
 import PhotoInfoPanel from "../components/viewer/PhotoInfoPanel";
 import TagPanel from "../components/viewer/TagPanel";
@@ -16,6 +17,7 @@ import ViewerEditPanel from "../components/viewer/ViewerEditPanel";
 import LeavePrompt from "../components/viewer/LeavePrompt";
 import CropOverlay from "../components/viewer/CropOverlay";
 import VideoControls from "../components/viewer/VideoControls";
+import useVideoRendition from "../hooks/useVideoRendition";
 import ViewerTopBar from "../components/viewer/ViewerTopBar";
 import DownloadChoiceModal from "../components/viewer/DownloadChoiceModal";
 import BurstStrip from "../components/viewer/BurstStrip";
@@ -35,6 +37,7 @@ import { castMedia, getCastState, subscribeCastState } from "../utils/cast";
 import { useAuthStore } from "../store/auth";
 import { appendGalleryTokenParam } from "../utils/galleryToken";
 import type { PhotoInfoData } from "../hooks/useViewerMedia";
+import type { Rendition } from "../gallery/renditionChoice";
 
 // ── Navigation context passed via location.state ─────────────────────────────
 interface ViewerLocationState {
@@ -67,6 +70,8 @@ interface ViewerLocationState {
 interface SecureGalleryItemMeta {
   id: string;
   blob_id: string;
+  /** Owning secure album — the target for the secure crop endpoint (#31). */
+  gallery_id?: string | null;
   encrypted_thumb_blob_id?: string | null;
   width?: number | null;
   height?: number | null;
@@ -75,6 +80,19 @@ interface SecureGalleryItemMeta {
   burst_id?: string | null;
   duration_secs?: number | null;
   motion_video_blob_id?: string | null;
+  /** Non-destructive crop/edit JSON stored on the secure item (#31). */
+  crop_metadata?: string | null;
+  /**
+   * The #49 resolution ladder of the video this item hides, or absent/empty when
+   * it has none. Carried here for the same reason `photo_subtype` is: secured
+   * photos never enter `db.photos`, so the IDB row the main viewer reads its
+   * ladder from always misses for them.
+   *
+   * Only videos secured *after* their rungs were generated have one — rung
+   * generation is gated on gallery eligibility, so securing first means no
+   * picker, ever. That asymmetry is the server's, and it is deliberate.
+   */
+  renditions?: Rendition[] | null;
 }
 
 // ── Viewer ────────────────────────────────────────────────────────────────────
@@ -158,6 +176,18 @@ export default function Viewer() {
     [secureGallery, secureItems, burstId],
   );
 
+  // The secure item currently open (matched by blob id). Its `id` + `gallery_id`
+  // are the target for the secure crop endpoint (#31).
+  const currentSecureItem = useMemo(
+    () => (secureGallery ? secureItems?.find((i) => i.blob_id === id) : undefined),
+    [secureGallery, secureItems, id],
+  );
+
+  // In-session crop overrides for secure items, keyed by blob id. A secure save
+  // records the fresh crop here so swiping to another frame and back re-applies
+  // it — the nav-state `secureItems` array is a stale snapshot from open time.
+  const secureCropOverrides = useRef<Map<string, string | null>>(new Map());
+
   // ── Edit state (from hook) ─────────────────────────────────────────────
   const {
     editMode, setEditMode,
@@ -222,6 +252,33 @@ export default function Viewer() {
     loadEncryptedMedia,
   } = useViewerMedia(preloadCache);
 
+  // ── Video resolution ladder (#49) ─────────────────────────────────────
+  // Live-queried rather than read once: a rung finishing its encode while the
+  // video is open should make the gear icon appear, and the sync feed writes
+  // the ladder into this row when the server's change log nominates the photo.
+  const cachedPhotoRow = useLiveQuery(() => (id ? db.photos.get(id) : undefined), [id]);
+  // Secured photos are excluded from main-gallery sync, so `db.photos` NEVER
+  // holds them — the live query above is a guaranteed miss here and the ladder
+  // has to come off the secure item, exactly like `photo_subtype` and
+  // `crop_metadata` already do below. Reading the item list rather than IDB is
+  // the whole reason securing a video used to remove its quality picker.
+  const ladder = useMemo(
+    () =>
+      secureGallery
+        ? (currentSecureItem?.renditions ?? undefined)
+        : cachedPhotoRow?.renditions,
+    [secureGallery, currentSecureItem, cachedPhotoRow],
+  );
+  // `enabled: !editMode` is a correctness gate, not a UI one — a crop or trim
+  // saved while a 1080p rung is on screen would re-encode the downscale over
+  // the user's original. It reverts the selection, not just the control.
+  const rendition = useVideoRendition({
+    renditions: ladder,
+    photoId: id,
+    videoRef,
+    enabled: !editMode,
+  });
+
   // Track cast connectivity so the effect below re-sends the current photo the
   // moment a session connects — previously it only ran on photo change, so
   // starting a cast while already viewing a photo (or switching album/gallery
@@ -282,6 +339,17 @@ export default function Viewer() {
     cropData, setCropData, setCropCorners, setBrightness, setRotateValue, setTrimStart, setTrimEnd,
     setEditMode, setError,
     preloadCache,
+    // Secure edit (#31): persist crop to the secure item row, not the photos
+    // table. Only when the item carries its owning gallery id.
+    secure: currentSecureItem?.gallery_id
+      ? {
+          galleryId: currentSecureItem.gallery_id,
+          itemId: currentSecureItem.id,
+          onSaved: (metaJson: string | null) => {
+            if (id) secureCropOverrides.current.set(id, metaJson);
+          },
+        }
+      : undefined,
   });
 
   // ── Mutually-exclusive top-bar panels (#15) ────────────────────────────────
@@ -350,6 +418,17 @@ export default function Viewer() {
               secureItem.width && secureItem.height
             ) {
               setPanoImageDims({ width: secureItem.width, height: secureItem.height });
+            }
+            // Non-destructive crop lives on the secure item row (#31). Prefer an
+            // in-session override (a save made without leaving the viewer) over
+            // the stale nav-state snapshot.
+            const cropJson = secureCropOverrides.current.has(id!)
+              ? secureCropOverrides.current.get(id!)
+              : secureItem.crop_metadata;
+            if (cropJson) {
+              try { setCropData(JSON.parse(cropJson)); } catch { setCropData(null); }
+            } else {
+              setCropData(null);
             }
           }
         } else if (navBurstId) {
@@ -430,10 +509,10 @@ export default function Viewer() {
       setLoading(true);
       setError("");
       setVideoError(false);
-      db.photos.get(id).then((dbCached) => {
-        if (dbCached?.thumbnailData) {
-          const mime = dbCached.thumbnailMimeType || (dbCached.mediaType === "gif" ? "image/gif" : "image/jpeg");
-          const url = URL.createObjectURL(new Blob([dbCached.thumbnailData], { type: mime }));
+      db.photos.get(id).then(async (dbCached) => {
+        const thumb = await resolveThumb(dbCached);
+        if (thumb) {
+          const url = URL.createObjectURL(new Blob([thumb.data], { type: thumb.mime }));
           setPreviewUrl(url);
         }
         // Use storageBlobId for copies that reference the original's server blob
@@ -524,6 +603,7 @@ export default function Viewer() {
         mediaUrl={mediaUrl}
         isFavorite={isFavorite}
         isBackupServer={isBackupServer || secureGallery}
+        allowEdit={secureGallery && !isBackupServer}
         isRenderingVideo={isRenderingVideo}
         canRemoveFromAlbum={canRemoveFromAlbum}
         onBack={() => { if (editMode) setShowLeavePrompt(true); else navigate(backTo); }}
@@ -599,7 +679,10 @@ export default function Viewer() {
              same React tree position across normal ↔ edit transitions, preventing
              blob-URL reload failures (which caused BMP blanking & alt-text filenames) */}
         {mediaUrl && (mediaType === "photo" || mediaType === "gif") && (() => {
-          const inEdit = editMode && mediaType === "photo";
+          // GIFs are editable too — the live preview applies crop/rotate/
+          // brightness via CSS, which animates fine on an <img> GIF; the bake
+          // is done server-side via ffmpeg so the animation is preserved.
+          const inEdit = editMode && (mediaType === "photo" || mediaType === "gif");
           const rot = inEdit ? ((rotateValue % 360) + 360) % 360 : 0;
           const isSwapped = rot === 90 || rot === 270;
 
@@ -740,8 +823,11 @@ export default function Viewer() {
             >
               <video
                 ref={videoRef}
-                src={mediaUrl}
-                playsInline autoPlay
+                // A selected rung replaces the source; null means the photo's
+                // own blob, which is also what the "Original" entry selects —
+                // the source rung IS this blob, so it is never re-downloaded.
+                src={rendition.renditionUrl ?? mediaUrl}
+                playsInline autoPlay loop
                 className="w-full h-full"
                 style={{
                   objectFit: 'contain' as const,
@@ -755,18 +841,30 @@ export default function Viewer() {
                   if (cropData?.trimStart && cropData.trimStart > 0) v.currentTime = cropData.trimStart;
                   // Recompute crop zoom now that video dimensions are known
                   computeCropZoom();
+                  // Restore the playhead after a quality switch, so changing
+                  // resolution does not restart the video. No-op otherwise.
+                  rendition.handleLoadedMetadata();
                 }}
                 onTimeUpdate={(e) => {
+                  // Loop back to the trim start (not natural end) when a trim is
+                  // set, so trimmed videos loop within their range. The native
+                  // `loop` attribute handles untrimmed videos.
                   if (cropData?.trimEnd && e.currentTarget.currentTime >= cropData.trimEnd) {
-                    e.currentTarget.pause();
-                    e.currentTarget.currentTime = cropData.trimEnd;
+                    e.currentTarget.currentTime = cropData?.trimStart ?? 0;
                   }
                 }}
                 onError={() => setVideoError(true)}
               />
             </div>
             {/* Custom controls — NOT rotated */}
-            <VideoControls videoRef={videoRef} visible={showOverlay} />
+            <VideoControls
+              videoRef={videoRef}
+              visible={showOverlay}
+              renditions={rendition.available}
+              selectedRendition={rendition.selected}
+              switchingRendition={rendition.switching}
+              onSelectRendition={rendition.select}
+            />
           </div>
           );
         })()}
@@ -948,7 +1046,7 @@ export default function Viewer() {
       </div>
 
       {/* Edit panel */}
-      {editMode && mediaUrl && (mediaType === "photo" || mediaType === "video" || mediaType === "audio") && (
+      {editMode && mediaUrl && (mediaType === "photo" || mediaType === "gif" || mediaType === "video" || mediaType === "audio") && (
         <ViewerEditPanel
           editTab={editTab} setEditTab={setEditTab}
           mediaType={mediaType} brightness={brightness} setBrightness={setBrightness}
@@ -957,6 +1055,7 @@ export default function Viewer() {
           setTrimStart={setTrimStart} setTrimEnd={setTrimEnd} duration={mediaDuration}
           onSave={handleSaveEdit} onSaveCopy={handleSaveCopy}
           onClear={handleClearCrop} onCancel={() => setEditMode(false)}
+          secureEdit={secureGallery}
           rootRef={editPanelRef}
         />
       )}

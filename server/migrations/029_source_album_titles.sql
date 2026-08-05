@@ -1,0 +1,16 @@
+-- Real Google Photos album titles for source-album membership.
+--
+-- `photo_source_albums.album_name` is the Takeout *folder* name, which Google
+-- mangles on export: special characters collapse to `_`, long titles are
+-- truncated, and colliding names gain a `(1)` counter. So an album that is
+-- "Mum & Dad's 40th — 2019" in Google Photos lands as "Mum _ Dad_s 40th _ 2019".
+-- The true title survives only in the album folder's own `metadata.json`
+-- ("title"), which nothing read until now.
+--
+-- The folder name stays the identity key: clients derive the deterministic album
+-- id from it (`"src-" + sha256(source + " " + album_name)`), so re-keying on the
+-- title would orphan and duplicate every album already materialized on a device.
+-- The title rides alongside as a *display* name only, and is nullable because
+-- older exports (and any album folder without a readable metadata.json) simply
+-- don't have one — clients fall back to the folder name.
+ALTER TABLE photo_source_albums ADD COLUMN album_title TEXT;

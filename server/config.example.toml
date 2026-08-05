@@ -51,8 +51,8 @@ max_connections = 16
 # The server uses cross-platform file I/O, so any accessible path works.
 root = "/data/storage"
 
-# Per-user quota in bytes. 0 = unlimited.
-default_quota_bytes = 10737418240   # 10 GB
+# Per-user quota in bytes. 0 = unlimited (default).
+default_quota_bytes = 0
 
 # Max size per single upload. 5 GiB default to support large video files.
 max_blob_size_bytes = 5368709120    # 5 GB

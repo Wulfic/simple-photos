@@ -6,9 +6,11 @@ package com.simplephotos.ui.screens.gallery
 
 import android.net.Uri
 import android.os.Build
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.simplephotos.data.SecureBlobIds
 import com.simplephotos.ui.components.SelectionState
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
@@ -36,6 +38,8 @@ import java.text.SimpleDateFormat
 import java.util.*
 import javax.inject.Inject
 
+private const val TAG = "GalleryViewModel"
+
 // ── Day grouping helper ─────────────────────────────────────────────────────
 
 internal fun groupPhotosByDay(photos: List<PhotoEntity>): List<Pair<String, List<PhotoEntity>>> {
@@ -51,14 +55,19 @@ internal fun groupPhotosByDay(photos: List<PhotoEntity>): List<Pair<String, List
 
 // Sealed class for grid items (headers vs photos)
 internal sealed class GalleryGridItem {
-    data class Header(val dateLabel: String, val photoIds: Set<String>) : GalleryGridItem()
+    // dateLabel: full "EEEE, MMMM d, yyyy" for the header row.
+    // shortLabel: compact "MMM d" for the select-day chip so the user can tell
+    // which day they're selecting mid-scroll (todo1 #2).
+    data class Header(val dateLabel: String, val shortLabel: String, val photoIds: Set<String>) : GalleryGridItem()
     data class Photo(val photo: PhotoEntity) : GalleryGridItem()
 }
 
 internal fun buildGridItems(dayGroups: List<Pair<String, List<PhotoEntity>>>): List<GalleryGridItem> {
+    val shortFmt = SimpleDateFormat("MMM d", Locale.getDefault())
     val items = mutableListOf<GalleryGridItem>()
     for ((dateLabel, photos) in dayGroups) {
-        items.add(GalleryGridItem.Header(dateLabel, photos.map { it.localId }.toSet()))
+        val shortLabel = photos.firstOrNull()?.let { shortFmt.format(Date(it.takenAt)) } ?: dateLabel
+        items.add(GalleryGridItem.Header(dateLabel, shortLabel, photos.map { it.localId }.toSet()))
         for (photo in photos) {
             items.add(GalleryGridItem.Photo(photo))
         }
@@ -85,6 +94,10 @@ class GalleryViewModel @Inject constructor(
     val photos = photoRepository.getAllPhotos()
     /** Exposed for banner composables that need to poll the server. */
     val apiService get() = photoRepository.apiService
+
+    /** This device's queued-upload count, reported to the unified encryption
+     *  banner so its total reflects local backup work (TODO #2/#5). */
+    suspend fun countPendingUploads(): Int = photoRepository.countPendingUploads()
     var error by mutableStateOf<String?>(null)
     var isSyncing by mutableStateOf(false)
         private set
@@ -113,6 +126,29 @@ class GalleryViewModel @Inject constructor(
     var secureBlobIds by mutableStateOf(emptySet<String>())
         private set
 
+    /**
+     * True once [secureBlobIds] is a real answer rather than its initial empty
+     * placeholder (B5).
+     *
+     * `emptySet()` and "we have not been told yet" render identically —
+     * `excludeSecure` short-circuits on an empty set — so before this flag the
+     * grid drew the whole library unfiltered for the entire window between
+     * launch and the first successful fetch, and forever if that fetch never
+     * succeeded (offline, most obviously). It flips on a stale set too: the last
+     * known ids are a real answer, and the repository persists them so this is
+     * true within one read of a cold start.
+     */
+    var secureFilterReady by mutableStateOf(false)
+        private set
+
+    /**
+     * The grid may render only when the mirror has rows AND it is known what to
+     * hide. Both halves are load-bearing and they fail differently: [dataReady]
+     * guards against flashing a previous user's photos, [secureFilterReady]
+     * against showing this user's hidden ones.
+     */
+    val gridReady: Boolean get() = dataReady && secureFilterReady
+
     // ── Multi-select state (shared machine; see ui.components.SelectionState) ──
     private val selection = SelectionState()
     val selectedIds get() = selection.selectedIds
@@ -133,6 +169,18 @@ class GalleryViewModel @Inject constructor(
                 error = "Init failed: ${e.message}"
             }
         }
+        // Reveal the grid the moment any photos are available locally — cached
+        // from a prior sync (instant on reopen) or the first inserted page of a
+        // fresh sync — instead of blocking behind the full multi-minute sync.
+        // logout() wipes the Room DB, so any cached rows belong to the CURRENT
+        // user; there is no stale other-user data to guard against. The full
+        // sync still runs in the background and the reactive Flow updates the
+        // grid as rows arrive. The empty-library case is handled by syncFromServer
+        // setting dataReady=true in its finally block. (#3, #8)
+        viewModelScope.launch {
+            photos.first { it.isNotEmpty() }
+            dataReady = true
+        }
         // Start periodic polling for secure gallery updates
         startActivityPolling()
     }
@@ -144,15 +192,38 @@ class GalleryViewModel @Inject constructor(
                 try {
                     // Refresh secure gallery blob IDs so photos moved to/from
                     // secure galleries on other devices are hidden/shown promptly.
-                    try {
-                        val freshIds = withContext(Dispatchers.IO) { secureGalleryRepository.getSecureBlobIds() }
-                        if (freshIds != secureBlobIds) {
-                            secureBlobIds = freshIds
-                        }
-                    } catch (_: Exception) { /* endpoint unavailable — keep existing set */ }
-                } catch (_: Exception) { /* server unreachable — skip this tick */ }
+                    applySecureBlobIds(
+                        withContext(Dispatchers.IO) { secureGalleryRepository.secureBlobIds() }
+                    )
+                } catch (e: Exception) {
+                    // secureBlobIds() reports a failed fetch as a value rather
+                    // than a throw, so reaching here means something else broke
+                    // (and the loop must not die on it). Silent before B5.
+                    Log.w(TAG, "[secure] poll tick failed", e)
+                }
                 delay(3_000)
             }
+        }
+    }
+
+    /**
+     * Adopt a secure-id read, failing CLOSED (B5).
+     *
+     * [SecureBlobIds.Unavailable] leaves [secureBlobIds] and [secureFilterReady]
+     * exactly as they were — so a grid already rendering keeps hiding the set it
+     * was hiding, and a grid that has never resolved one stays behind its
+     * loading gate instead of drawing the library unfiltered. The polling loop
+     * retries every 3s, so this state is self-healing rather than terminal.
+     */
+    private fun applySecureBlobIds(read: SecureBlobIds) {
+        when (read) {
+            is SecureBlobIds.Known -> {
+                if (read.ids != secureBlobIds) secureBlobIds = read.ids
+                secureFilterReady = true
+            }
+            SecureBlobIds.Unavailable ->
+                Log.w(TAG, "[secure] no id set available; " +
+                    "keeping ${secureBlobIds.size} hidden, ready=$secureFilterReady")
         }
     }
 
@@ -163,8 +234,12 @@ class GalleryViewModel @Inject constructor(
     fun selectAll(allPhotos: List<PhotoEntity>) =
         selection.setSelection(allPhotos.map { it.localId }.toSet())
 
-    fun selectDay(dayPhotoIds: Set<String>) =
-        selection.setSelection(selectedIds + dayPhotoIds)
+    /**
+     * Toggle every photo in a day group so a whole day can be selected — and,
+     * crucially, deselected — in one tap instead of one photo at a time (#24).
+     * Delegates to the shared [SelectionState.toggleGroup].
+     */
+    fun selectDay(dayPhotoIds: Set<String>) = selection.toggleGroup(dayPhotoIds)
 
     fun clearSelection() = selection.clear()
 
@@ -193,8 +268,13 @@ class GalleryViewModel @Inject constructor(
                 // Expand any collapsed burst representative to its full stack so
                 // the whole burst is added, not just the cover frame.
                 val ids = withContext(Dispatchers.IO) { photoRepository.expandBurstSelection(selectedIds) }
-                for (id in ids) {
-                    withContext(Dispatchers.IO) { albumRepository.addPhotoToAlbum(id, albumId) }
+                withContext(Dispatchers.IO) {
+                    albumRepository.addPhotosToAlbum(ids.toList(), albumId)
+                    // Publish the new membership. Without this the photos joined
+                    // the album on this device only — every other device kept the
+                    // old manifest, and the album's own next manifest sync would
+                    // eventually overwrite the local addition away.
+                    albumRepository.getAlbum(albumId)?.let { albumRepository.syncAlbum(it) }
                 }
                 clearSelection()
             } catch (e: Exception) {
@@ -209,8 +289,11 @@ class GalleryViewModel @Inject constructor(
                 val album = withContext(Dispatchers.IO) { albumRepository.createAlbum(name) }
                 // Expand burst representatives so the entire stack is added.
                 val ids = withContext(Dispatchers.IO) { photoRepository.expandBurstSelection(selectedIds) }
-                for (id in ids) {
-                    withContext(Dispatchers.IO) { albumRepository.addPhotoToAlbum(id, album.localId) }
+                withContext(Dispatchers.IO) {
+                    albumRepository.addPhotosToAlbum(ids.toList(), album.localId)
+                    // A brand-new album exists only locally until its manifest is
+                    // uploaded — see addSelectedToAlbum.
+                    albumRepository.getAlbum(album.localId)?.let { albumRepository.syncAlbum(it) }
                 }
                 clearSelection()
             } catch (e: Exception) {
@@ -366,9 +449,9 @@ class GalleryViewModel @Inject constructor(
                 // Also sync albums from server (downloads manifests created on web)
                 try { withContext(Dispatchers.IO) { albumRepository.syncAlbumsFromServer() } } catch (_: Exception) {}
                 // Fetch blob IDs in secure galleries so they can be hidden from the main grid
-                try {
-                    secureBlobIds = withContext(Dispatchers.IO) { secureGalleryRepository.getSecureBlobIds() }
-                } catch (_: Exception) {}
+                applySecureBlobIds(
+                    withContext(Dispatchers.IO) { secureGalleryRepository.secureBlobIds() }
+                )
                 lastSyncResult = if (imported > 0) "Synced $imported new items" else "Up to date"
             } catch (e: Exception) { error = "Sync failed: ${e.message}" } finally { isSyncing = false; dataReady = true }
         }
@@ -381,14 +464,22 @@ class GalleryViewModel @Inject constructor(
             for (uri in uris) {
                 try {
                     val resolver = context.contentResolver
-                    val mimeType = resolver.getType(uri) ?: "image/jpeg"
-                    val mediaType = when {
+                    var mimeType = resolver.getType(uri) ?: "image/jpeg"
+                    var mediaType = when {
                         mimeType.startsWith("video/") -> "video"
                         mimeType.startsWith("audio/") -> "audio"
                         mimeType == "image/gif" -> "gif"
                         else -> "photo"
                     }
                     val data = withContext(Dispatchers.IO) { resolver.openInputStream(uri)?.use { it.readBytes() } } ?: continue
+
+                    // Content-based GIF rescue (#14): a GIF picked with a wrong/generic
+                    // MIME would land in the gallery but not the GIF smart album.
+                    val rescued = com.simplephotos.data.media.MediaTypeDetector.rescueGif(mediaType, data)
+                    if (rescued != mediaType) {
+                        mediaType = rescued
+                        mimeType = "image/gif"
+                    }
 
                     // Content hash dedup — skip if identical content already exists in DB
                     val contentHash = withContext(Dispatchers.IO) {

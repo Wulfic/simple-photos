@@ -23,7 +23,6 @@ import BackupRecoverySection from "../components/settings/BackupRecoverySection"
 import AiRecognitionSection from "../components/settings/AiRecognitionSection";
 import GeolocationSection from "../components/settings/GeolocationSection";
 // Migration is now fully server-side — no browser-based worker needed
-import CastDialog, { CastIcon } from "../components/CastDialog";
 import { getErrorMessage } from "../utils/formatters";
 import { useThumbnailSizeStore } from "../store/thumbnailSize";
 import { usePwaInstall } from "../hooks/usePwaInstall";
@@ -63,9 +62,6 @@ export default function Settings() {
   // ── Restart server state ──────────────────────────────────────────────
   const [restartLoading, setRestartLoading] = useState(false);
   const [restartConfirm, setRestartConfirm] = useState(false);
-
-  // ── Cast dialog state ─────────────────────────────────────────────────
-  const [castDialogOpen, setCastDialogOpen] = useState(false);
 
   // ── PWA install-instructions dialog (shown when the browser hasn't
   //    fired beforeinstallprompt — e.g. Brave, Firefox, Safari). ────────
@@ -620,24 +616,6 @@ export default function Settings() {
 
 
 
-      {/* ── Cast (HTTPS only) ────────────────────────────────────────────── */}
-      {window.location.protocol === "https:" && (
-        <section className="card p-6 mb-4">
-          <h2 className="text-lg font-semibold mb-3">Cast</h2>
-          <p className="text-sm text-fg-muted mb-4">
-            Stream your gallery slideshow to a Chromecast or compatible receiver on your local network.
-          </p>
-          <button
-            onClick={() => setCastDialogOpen(true)}
-            className="btn btn-primary btn-md inline-flex items-center"
-          >
-            <CastIcon className="w-4 h-4" />
-            Cast to device…
-          </button>
-          <CastDialog open={castDialogOpen} onClose={() => setCastDialogOpen(false)} />
-        </section>
-      )}
-
       {/* PWA install-instructions fallback dialog — rendered globally so it
           works even if the Apps section is collapsed/hidden on small screens. */}
       <PwaInstallInstructionsDialog
@@ -703,7 +681,7 @@ export default function Settings() {
             <img src="/logo.png" alt="Simple Photos" className="w-20 h-20 mb-3" />
             <h3 className="text-xl font-bold text-fg">Simple Photos</h3>
             <p className="text-sm text-fg-muted">
-              v1.0.0 — Self-hosted, end-to-end encrypted photo &amp; video library
+              v{__APP_VERSION__} — Self-hosted, end-to-end encrypted photo &amp; video library
             </p>
           </div>
           {/* Divider — vertical on wide screens, horizontal when stacked */}

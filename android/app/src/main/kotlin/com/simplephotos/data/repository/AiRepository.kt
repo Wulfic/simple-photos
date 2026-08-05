@@ -39,6 +39,15 @@ class AiRepository @Inject constructor(private val api: ApiService) {
         api.renameFaceCluster(clusterId, FaceClusterRenameRequest(name))
     }
 
+    /** Faces detected in one photo, with their current person labels. */
+    suspend fun listPhotoFaces(photoId: String): List<PhotoFace> =
+        api.listPhotoFaces(photoId)
+
+    /** Manually move a face detection into a chosen person (cluster). */
+    suspend fun assignFace(detectionId: Long, clusterId: Long) {
+        api.assignFace(FaceAssignRequest(detectionId, clusterId))
+    }
+
     // Object classes
     suspend fun listObjectClasses(): List<ObjectClass> =
         api.listObjectClasses()

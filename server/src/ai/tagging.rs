@@ -164,6 +164,48 @@ pub async fn rename_cluster_tags(
     Ok(updated)
 }
 
+/// Recompute the `person:*` tags for a single photo from scratch.
+///
+/// Called after a manual face reassignment: the photo's person tags are
+/// derived from *every* cluster that still has a detection in it, so the only
+/// safe way to keep them correct is to wipe and re-apply. Mirrors the per-photo
+/// re-tagging inner loop of [`rename_cluster_tags`].
+pub async fn resync_photo_face_tags(
+    pool: &SqlitePool,
+    user_id: &str,
+    photo_id: &str,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "DELETE FROM photo_tags WHERE photo_id = ?1 AND user_id = ?2 AND tag LIKE 'person:%'",
+    )
+    .bind(photo_id)
+    .bind(user_id)
+    .execute(pool)
+    .await?;
+
+    let clusters: Vec<(i64, Option<String>)> = sqlx::query_as(
+        "SELECT DISTINCT fc.id, fc.label FROM face_clusters fc \
+         JOIN face_detections fd ON fd.cluster_id = fc.id \
+         WHERE fd.photo_id = ?1 AND fd.user_id = ?2",
+    )
+    .bind(photo_id)
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+
+    for (cid, label) in &clusters {
+        apply_face_tag(pool, user_id, photo_id, *cid, label.as_deref()).await?;
+    }
+
+    tracing::debug!(
+        photo_id = %photo_id,
+        clusters = clusters.len(),
+        "AI tagging: resynced person tags after manual reassignment"
+    );
+
+    Ok(())
+}
+
 // ── Pet tags ─────────────────────────────────────────────────────────
 
 /// Apply a pet cluster label as a tag to a photo.

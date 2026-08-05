@@ -1,27 +1,25 @@
 /**
- * Banner-stack registry — assigns each visible global progress banner a
- * *compacted* slot in a bottom-anchored stack.
+ * Banner-stack shared state.
  *
- * Previously every banner hard-coded a Tailwind `bottom-*` slot tied to its
- * TYPE, so an inactive middle banner (e.g. geo) left a visible hole between the
- * banners above and below it. This registry instead hands out slot indices
- * based on which banners are *actually rendering right now*, so the stack always
- * compacts to the bottom with no gaps and grows upward as more appear.
+ * Global progress banners (encryption, conversion, AI, geo, …) all render into a
+ * single fixed, bottom-anchored flex column owned by {@link BannerHost}. Because
+ * they live in one flex container with a real gap, they stack vertically with
+ * consistent spacing and **never overlap** regardless of each card's height or
+ * the viewport size (the old design offset each `fixed` card by a hard-coded
+ * step that was smaller than the card, so tall cards overlapped — item #3).
  *
- * Each banner registers itself (via {@link useBannerSlot}) only while it is
- * mounted/visible. We deliberately do NOT derive slots from `useProcessingStore`
- * because a dismissed banner keeps its task active there (polling continues to
- * drive the nav-bar spinner) even though it is no longer drawn — that would
- * create phantom slots.
+ * Ordering within the stack is driven purely by CSS `order` = the priority
+ * below; missing banners simply don't render, so the column compacts with no
+ * gaps and no registry bookkeeping.
  */
-import { useEffect } from "react";
 import { create } from "zustand";
 
 /**
- * Stable bottom→top ordering of the global banners, expressed as priorities.
- * Lower priority sits lower in the stack (closer to the bottom anchor). Slot
- * indices are derived from these, so banners never reshuffle relative to each
- * other — they only compact toward the bottom as siblings come and go.
+ * Stable bottom→top ordering of the global banners, expressed as priorities and
+ * applied via CSS `order` inside a `flex-col-reverse` container: lower priority
+ * sits lower in the stack (closer to the bottom anchor). Keeping the
+ * highest-signal banner (encryption) at priority 0 pins it to the bottom, where
+ * it stays visible even when the stack scrolls.
  */
 export const BANNERS = {
   encryption: 0,
@@ -34,54 +32,17 @@ export const BANNERS = {
 
 export type BannerId = keyof typeof BANNERS;
 
-interface BannerStackState {
-  /** id → priority for every banner currently rendering. */
-  active: Record<string, number>;
-  register: (id: string, priority: number) => void;
-  unregister: (id: string) => void;
+interface BannerContainerState {
+  /** The live DOM node banners portal into, or null before {@link BannerHost} mounts. */
+  el: HTMLElement | null;
+  setEl: (el: HTMLElement | null) => void;
 }
-
-export const useBannerStackStore = create<BannerStackState>((set) => ({
-  active: {},
-  register: (id, priority) =>
-    set((s) =>
-      s.active[id] === priority
-        ? s
-        : { active: { ...s.active, [id]: priority } },
-    ),
-  unregister: (id) =>
-    set((s) => {
-      if (!(id in s.active)) return s;
-      const next = { ...s.active };
-      delete next[id];
-      return { active: next };
-    }),
-}));
 
 /**
- * Register a banner while it is visible and return its compacted slot index
- * (0 = bottom-most). The slot is the number of *other* active banners that sit
- * below it (strictly lower priority), so the stack stays gap-free.
- *
- * Mount this hook only from a component that renders solely when the banner is
- * visible — its mount/unmount lifecycle is what drives registration.
+ * Holds the shared container node. {@link BannerHost} publishes its `<div>` here
+ * on mount; each {@link BannerSlot} subscribes and portals into it once present.
  */
-export function useBannerSlot(id: BannerId, priority: number): number {
-  const register = useBannerStackStore((s) => s.register);
-  const unregister = useBannerStackStore((s) => s.unregister);
-
-  useEffect(() => {
-    register(id, priority);
-    return () => unregister(id);
-  }, [id, priority, register, unregister]);
-
-  // Recomputes on any registry change; returns a primitive so consumers only
-  // re-render when their slot actually moves.
-  return useBannerStackStore((s) => {
-    let slot = 0;
-    for (const [otherId, otherPriority] of Object.entries(s.active)) {
-      if (otherId !== id && otherPriority < priority) slot++;
-    }
-    return slot;
-  });
-}
+export const useBannerContainer = create<BannerContainerState>((set) => ({
+  el: null,
+  setEl: (el) => set({ el }),
+}));

@@ -44,6 +44,49 @@ pub async fn list_photos(
     auth: AuthUser,
     Query(params): Query<PhotoListQuery>,
 ) -> Result<Json<PhotoListResponse>, AppError> {
+    Ok(Json(
+        list_photos_page(&state.read_pool, &auth.user_id, &params).await?,
+    ))
+}
+
+/// Split a `"<ts>|<filename>|<id>"` photo cursor into its three parts.
+///
+/// The middle field, `filename`, may itself contain `|`; `ts` is an ISO
+/// timestamp and `id` a UUID, so neither does. So take `ts` up to the FIRST
+/// `|` and `id` after the LAST, and everything between is the filename. A legacy
+/// bare-timestamp cursor (no `|`) yields empty filename/id, which re-serves the
+/// whole timestamp group at the boundary — a duplicate, never a skip.
+fn parse_photo_cursor(after: &str) -> (String, String, String) {
+    match (after.find('|'), after.rfind('|')) {
+        (Some(first), Some(last)) if first < last => (
+            after[..first].to_string(),
+            after[first + 1..last].to_string(),
+            after[last + 1..].to_string(),
+        ),
+        (Some(only), _) => (
+            after[..only].to_string(),
+            after[only + 1..].to_string(),
+            String::new(),
+        ),
+        (None, _) => (after.to_string(), String::new(), String::new()),
+    }
+}
+
+/// Fetch one keyset page of the photo listing.
+///
+/// Split out of the handler so the pagination contract is unit-testable without
+/// an HTTP stack. The cursor is composite — `"<ts>|<filename>|<id>"`. The list
+/// orders by `COALESCE(taken_at, created_at) DESC, filename ASC`, but neither
+/// timestamp nor filename is unique (a batch import shares a `taken_at`, and two
+/// sources can carry the same filename), and the boundary predicate used only
+/// the timestamp — so a page cut inside a same-timestamp run dropped every row
+/// after the first. `id` is the unique final tiebreak that makes the boundary
+/// exact, the same fix `gallery::sync::fetch_page` applied to the encrypted feed.
+pub async fn list_photos_page(
+    pool: &sqlx::SqlitePool,
+    user_id: &str,
+    params: &PhotoListQuery,
+) -> Result<PhotoListResponse, AppError> {
     let limit = params.limit.unwrap_or(100).min(500);
     let fav_only = params.favorites_only.unwrap_or(false);
 
@@ -80,7 +123,7 @@ pub async fn list_photos(
              AND id NOT IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL)",
         )
     };
-    let mut binds: Vec<String> = vec![auth.user_id.clone()];
+    let mut binds: Vec<String> = vec![user_id.to_string()];
 
     if let Some(ref mt) = params.media_type {
         sql.push_str(" AND media_type = ?");
@@ -97,16 +140,29 @@ pub async fn list_photos(
     }
 
     if let Some(ref after) = params.after {
-        sql.push_str(" AND COALESCE(taken_at, created_at) < ?");
-        binds.push(after.clone());
+        // Composite (ts, filename, id) keyset boundary for DESC ts / ASC
+        // filename / ASC id. A bare `ts < ?` dropped every same-timestamp row
+        // after the first at a page boundary.
+        sql.push_str(
+            " AND (COALESCE(taken_at, created_at) < ? \
+             OR (COALESCE(taken_at, created_at) = ? AND filename > ?) \
+             OR (COALESCE(taken_at, created_at) = ? AND filename = ? AND id > ?))",
+        );
+        let (ts, fname, id) = parse_photo_cursor(after);
+        binds.push(ts.clone());
+        binds.push(ts.clone());
+        binds.push(fname.clone());
+        binds.push(ts);
+        binds.push(fname);
+        binds.push(id);
     }
 
     if collapse {
         sql.push_str(
-            ") WHERE rn = 1 ORDER BY COALESCE(taken_at, created_at) DESC, filename ASC LIMIT ?",
+            ") WHERE rn = 1 ORDER BY COALESCE(taken_at, created_at) DESC, filename ASC, id ASC LIMIT ?",
         );
     } else {
-        sql.push_str(" ORDER BY COALESCE(taken_at, created_at) DESC, filename ASC LIMIT ?");
+        sql.push_str(" ORDER BY COALESCE(taken_at, created_at) DESC, filename ASC, id ASC LIMIT ?");
     }
     binds.push((limit + 1).to_string());
 
@@ -120,22 +176,27 @@ pub async fn list_photos(
         }
     }
 
-    let photos = query.fetch_all(&state.read_pool).await?;
+    let mut photos = query.fetch_all(pool).await?;
 
-    let next_cursor = if photos.len() as i64 > limit {
-        photos
-            .last()
-            .map(|p| p.taken_at.clone().unwrap_or_else(|| p.created_at.clone()))
+    // Truncate before deriving the cursor: the extra row exists only to detect
+    // a next page, and the next-page predicate is strict, so a cursor built from
+    // the peeked row skips it permanently. See `gallery::sync::fetch_page`.
+    let has_more = photos.len() as i64 > limit;
+    photos.truncate(limit as usize);
+
+    let next_cursor = if has_more {
+        photos.last().map(|p| {
+            let ts = p.taken_at.clone().unwrap_or_else(|| p.created_at.clone());
+            format!("{}|{}|{}", ts, p.filename, p.id)
+        })
     } else {
         None
     };
 
-    let photos: Vec<PhotoRecord> = photos.into_iter().take(limit as usize).collect();
-
-    Ok(Json(PhotoListResponse {
+    Ok(PhotoListResponse {
         photos,
         next_cursor,
-    }))
+    })
 }
 
 /// POST /api/photos/register
@@ -406,6 +467,10 @@ pub async fn register_encrypted_photo(
         "register-encrypted: created photos row"
     );
 
+    // Notify the user's other connected clients so their gallery refetches the
+    // new photo within seconds instead of at the next periodic sync (item #11).
+    state.emit_sync(&auth.user_id, "photo", &photo_id);
+
     Ok((
         StatusCode::CREATED,
         Json(serde_json::json!({
@@ -441,6 +506,10 @@ pub async fn toggle_favorite(
     .await?;
 
     let is_favorite = new_fav.ok_or(AppError::NotFound)?;
+
+    // Favorite count changed — drop the cached summary so the next
+    // /photos/summary recomputes immediately instead of waiting out the TTL.
+    state.summary_cache.invalidate(&auth.user_id);
 
     audit::log(
         &state,
@@ -587,4 +656,181 @@ pub async fn detect_bursts(
     Ok(Json(serde_json::json!({
         "burst_groups_created": groups,
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+    use std::str::FromStr;
+
+    async fn test_pool() -> sqlx::SqlitePool {
+        let opts = sqlx::sqlite::SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .foreign_keys(false);
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        pool
+    }
+
+    async fn insert(pool: &sqlx::SqlitePool, id: &str, user: &str, filename: &str, taken_at: &str) {
+        sqlx::query(
+            "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
+             created_at, taken_at) \
+             VALUES (?, ?, ?, ?, 'image/jpeg', 'photo', '2026-01-01T00:00:00Z', ?)",
+        )
+        .bind(id)
+        .bind(user)
+        .bind(filename)
+        .bind(format!("uploads/{id}.jpg"))
+        .bind(taken_at)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    fn query(after: Option<&str>, limit: i64) -> PhotoListQuery {
+        PhotoListQuery {
+            after: after.map(|s| s.to_string()),
+            limit: Some(limit),
+            media_type: None,
+            favorites_only: None,
+            subtype: None,
+            collapse_bursts: None,
+        }
+    }
+
+    async fn paginate_all(pool: &sqlx::SqlitePool, user: &str, limit: i64) -> Vec<String> {
+        let mut ids = Vec::new();
+        let mut cursor: Option<String> = None;
+        for _ in 0..100 {
+            let page = list_photos_page(pool, user, &query(cursor.as_deref(), limit))
+                .await
+                .unwrap();
+            ids.extend(page.photos.iter().map(|p| p.id.clone()));
+            match page.next_cursor {
+                Some(c) => cursor = Some(c),
+                None => return ids,
+            }
+        }
+        panic!("pagination did not terminate — cursor is not advancing");
+    }
+
+    fn assert_round_trip(got: &[String], seeded: &[String]) {
+        let got_set: HashSet<&String> = got.iter().collect();
+        let want_set: HashSet<&String> = seeded.iter().collect();
+        let missing: Vec<_> = want_set.difference(&got_set).collect();
+        assert!(
+            missing.is_empty(),
+            "photos never returned by ANY page: {missing:?}"
+        );
+        assert_eq!(got.len(), seeded.len(), "expected each photo exactly once");
+        assert_eq!(got_set, want_set);
+    }
+
+    #[test]
+    fn parses_photo_cursors_including_pipes_in_filename() {
+        assert_eq!(
+            parse_photo_cursor("2026-01-01T00:00:00Z|IMG_1.jpg|abc"),
+            (
+                "2026-01-01T00:00:00Z".into(),
+                "IMG_1.jpg".into(),
+                "abc".into()
+            )
+        );
+        // A filename containing '|' stays intact: ts up to first, id after last.
+        assert_eq!(
+            parse_photo_cursor("2026-01-01T00:00:00Z|od|d|name.jpg|abc"),
+            (
+                "2026-01-01T00:00:00Z".into(),
+                "od|d|name.jpg".into(),
+                "abc".into()
+            )
+        );
+        // Legacy bare-timestamp cursor.
+        assert_eq!(
+            parse_photo_cursor("2026-01-01T00:00:00Z"),
+            ("2026-01-01T00:00:00Z".into(), String::new(), String::new())
+        );
+    }
+
+    #[tokio::test]
+    async fn distinct_timestamps_round_trip() {
+        let pool = test_pool().await;
+        let mut seeded = Vec::new();
+        for i in 0..7 {
+            let id = format!("d{i:02}");
+            insert(
+                &pool,
+                &id,
+                "u1",
+                &format!("IMG_{i}.jpg"),
+                &format!("2026-01-{:02}T00:00:00Z", i + 1),
+            )
+            .await;
+            seeded.push(id);
+        }
+        for limit in [1, 2, 3, 7] {
+            assert_round_trip(&paginate_all(&pool, "u1", limit).await, &seeded);
+        }
+    }
+
+    /// The bug: a batch import shares one `taken_at`. The list orders by
+    /// `filename` within that group, but the boundary predicate used only the
+    /// timestamp, so a page cut inside the group asked `ts < ?` next and skipped
+    /// every remaining member. Verified RED against the pre-fix bare-ts cursor:
+    /// `limit=1` returned a single photo of the five.
+    #[tokio::test]
+    async fn rows_sharing_a_timestamp_survive_a_page_boundary() {
+        let pool = test_pool().await;
+        let mut seeded = Vec::new();
+        for i in 0..5 {
+            let id = format!("t{i:02}");
+            // Distinct filenames, identical taken_at — ordering falls to filename.
+            insert(
+                &pool,
+                &id,
+                "u1",
+                &format!("IMG_{i}.jpg"),
+                "2026-02-01T00:00:00Z",
+            )
+            .await;
+            seeded.push(id);
+        }
+        for limit in [1, 2, 3, 4, 5] {
+            assert_round_trip(&paginate_all(&pool, "u1", limit).await, &seeded);
+        }
+    }
+
+    /// Worst case: same timestamp AND same filename (two sources of "IMG_1.jpg").
+    /// Only the `id` tiebreak makes this boundary exact.
+    #[tokio::test]
+    async fn rows_sharing_timestamp_and_filename_survive_a_page_boundary() {
+        let pool = test_pool().await;
+        let mut seeded = Vec::new();
+        for i in 0..4 {
+            let id = format!("s{i:02}");
+            insert(&pool, &id, "u1", "IMG_1.jpg", "2026-02-01T00:00:00Z").await;
+            seeded.push(id);
+        }
+        for limit in [1, 2, 3, 4] {
+            assert_round_trip(&paginate_all(&pool, "u1", limit).await, &seeded);
+        }
+    }
+
+    #[tokio::test]
+    async fn pagination_is_scoped_to_the_user() {
+        let pool = test_pool().await;
+        insert(&pool, "mine-1", "u1", "a.jpg", "2026-03-01T00:00:00Z").await;
+        insert(&pool, "mine-2", "u1", "b.jpg", "2026-03-01T00:00:00Z").await;
+        insert(&pool, "theirs", "u2", "c.jpg", "2026-03-01T00:00:00Z").await;
+        assert_round_trip(
+            &paginate_all(&pool, "u1", 1).await,
+            &["mine-1".to_string(), "mine-2".to_string()],
+        );
+    }
 }

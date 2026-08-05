@@ -15,7 +15,11 @@
  *
  * Google Photos Takeout sidecars are still parsed locally (local mode) so their
  * `photoTakenTime` / `geoData` are forwarded as override headers when the file's
- * EXIF is missing those fields.
+ * EXIF is missing those fields. Album membership is recovered the same way: a
+ * picked/dropped *folder* carries the structure the album name lives in (see
+ * `utils/pickedFiles.ts` + `utils/uploadAlbums.ts`), which is sent per file as
+ * `X-Source-Album`. Individually-picked files have no folder and so no album —
+ * hence the folder picker being the primary button.
  */
 import { useState, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
@@ -31,6 +35,17 @@ import {
   dedupeGooglePhotosEdits,
 } from "../utils/media";
 import { formatBytes } from "../utils/formatters";
+import {
+  ALBUM_METADATA_JSON,
+  dirOfPath,
+  parseAlbumTitle,
+  resolveUploadAlbums,
+} from "../utils/uploadAlbums";
+import {
+  pickedFromDrop,
+  pickedFromInput,
+  type PickedFile,
+} from "../utils/pickedFiles";
 import ImportFileList from "./import/ImportFileList";
 
 type ImportMode = "server" | "local";
@@ -47,6 +62,7 @@ const STATUS_FLUSH_MS = 250;
 export default function Import() {
   const navigate = useNavigate();
   const inputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef(false);
   const { startTask, endTask } = useProcessingStore();
   const [mode, setMode] = useState<ImportMode>("server");
@@ -64,6 +80,17 @@ export default function Import() {
     queued: number;
     in_place: boolean;
     directory: string;
+  } | null>(null);
+
+  // Takeout album backfill state
+  const [albumBusy, setAlbumBusy] = useState(false);
+  const [albumResult, setAlbumResult] = useState<{
+    albums_seen: number;
+    albums_recorded: number;
+    albums_retitled: number;
+    photos_matched: number;
+    photos_unmatched: number;
+    errors_total: number;
   } | null>(null);
 
   // Redirect if no crypto key (after hooks, none above are conditional).
@@ -103,16 +130,59 @@ export default function Import() {
     }
   }
 
+  // ── Rebuild Takeout album membership (already-imported library) ─────────
+
+  async function handleBackfillAlbums() {
+    setAlbumBusy(true);
+    setError("");
+    setNotice("");
+    setAlbumResult(null);
+    try {
+      const res = await api.admin.backfillTakeoutAlbums(scanPath);
+      setAlbumResult(res);
+      if (res.albums_seen === 0) {
+        setNotice(
+          "No Google Takeout album folders found under that path. Point this at " +
+            "the folder containing your Takeout export (the one with the album " +
+            "folders and their .json files).",
+        );
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Rebuilding albums failed";
+      setError(msg);
+    } finally {
+      setAlbumBusy(false);
+    }
+  }
+
   // ── Process local files (drag & drop / file picker) ─────────────────────
 
-  const processFiles = useCallback((fileList: FileList) => {
-    const allFiles = Array.from(fileList);
+  const processFiles = useCallback((picked: PickedFile[]) => {
     const mediaFiles: File[] = [];
     const jsonFiles = new Map<string, GooglePhotosMetadata>();
     const jsonReadPromises: Promise<void>[] = [];
+    // Album folder → its real title, from that folder's own metadata.json.
+    const albumTitles = new Map<string, string>();
+    // File → the path it was picked at, so the album can be looked up below.
+    const pathByFile = new Map<File, string>();
 
-    for (const file of allFiles) {
-      if (file.name.endsWith(".json")) {
+    for (const { file, path } of picked) {
+      pathByFile.set(file, path);
+      if (file.name.toLowerCase() === ALBUM_METADATA_JSON) {
+        // Album-level metadata, NOT a per-photo sidecar. Mirrors the server's
+        // is_photo_sidecar guard: its "title" is the album's real name, so
+        // matching it to a photo (as this used to, via `jsonFiles.set(title)`)
+        // would attach an album's metadata to a same-named photo.
+        const promise = file.text().then((text) => {
+          try {
+            const title = parseAlbumTitle(JSON.parse(text));
+            if (title) albumTitles.set(dirOfPath(path), title);
+          } catch (e) {
+            console.warn(`[Import] unreadable album metadata at "${path}"`, e); // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
+          }
+        });
+        jsonReadPromises.push(promise);
+      } else if (file.name.endsWith(".json")) {
         const promise = file.text().then((text) => {
           try {
             const data = JSON.parse(text) as GooglePhotosMetadata;
@@ -138,13 +208,26 @@ export default function Import() {
       }
     }
 
+    // Album membership from the picked folder structure, using the same rules
+    // as the server-side importer (is_takeout gate + non-album folders).
+    const albumByPath = resolveUploadAlbums(picked.map((p) => p.path));
+
     Promise.all(jsonReadPromises).then(() => {
       // Collapse Google Photos original/"-edited" pairs to the edited copy
       // BEFORE matching metadata, so the surviving file inherits the
       // original's sidecar (Google names the sidecar after the original).
       const dedupedMedia = dedupeGooglePhotosEdits(mediaFiles);
       const skippedDupes = mediaFiles.length - dedupedMedia.length;
-      const matched = matchMetadataToFiles(dedupedMedia, jsonFiles);
+      const matched = matchMetadataToFiles(dedupedMedia, jsonFiles).map((item) => {
+        const path = item.file ? pathByFile.get(item.file) : undefined;
+        const album = path ? albumByPath.get(path) : undefined;
+        if (!album || !path) return item;
+        return {
+          ...item,
+          sourceAlbum: album,
+          sourceAlbumTitle: albumTitles.get(dirOfPath(path)),
+        };
+      });
       if (matched.length === 0 && jsonFiles.size > 0) {
         setError("Only metadata JSON files found. Please also select the photo/video files.");
         return;
@@ -155,11 +238,18 @@ export default function Import() {
       }
       setItems((prev) => [...prev, ...matched]);
       setError("");
-      setNotice(
+      const albumCount = new Set(
+        matched.map((i) => i.sourceAlbum).filter(Boolean),
+      ).size;
+      const notices = [
         skippedDupes > 0
           ? `Skipped ${skippedDupes} unedited Google Photos original${skippedDupes === 1 ? "" : "s"} — keeping the edited copy with its metadata.`
-          : ""
-      );
+          : "",
+        albumCount > 0
+          ? `Found ${albumCount} Google Photos album${albumCount === 1 ? "" : "s"} — membership will be restored after import.`
+          : "",
+      ].filter(Boolean);
+      setNotice(notices.join(" "));
     });
   }, []);
 
@@ -318,6 +408,8 @@ export default function Import() {
       longitude,
       fileModifiedAt: item.file.lastModified,
       deferConversion: true,
+      sourceAlbum: item.sourceAlbum,
+      sourceAlbumTitle: item.sourceAlbumTitle,
     });
   }
 
@@ -444,6 +536,85 @@ export default function Import() {
                 </button>
               </div>
             )}
+
+            {/* Album repair for libraries imported before album capture existed. */}
+            <div className="mt-6 pt-6 border-t border-edge">
+              <h3 className="font-semibold text-fg mb-3">
+                Rebuild Google Takeout Albums
+              </h3>
+              <p className="text-sm text-fg-muted mb-4">
+                Already imported a Google Takeout export but your albums are
+                missing or half-empty? This re-reads the album folders in the
+                directory above and re-links them to the photos already in your
+                library. It doesn&apos;t import, copy, or change any photos, and
+                it&apos;s safe to run more than once.
+              </p>
+              <button
+                onClick={() => handleBackfillAlbums()}
+                disabled={albumBusy || !scanPath.trim()}
+                className="btn btn-secondary btn-md whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
+                title={
+                  scanPath.trim()
+                    ? undefined
+                    : "Enter the server path to your Takeout folder above"
+                }
+              >
+                {albumBusy ? (
+                  <span className="flex items-center gap-2">
+                    <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                    Rebuilding…
+                  </span>
+                ) : (
+                  "Rebuild Takeout Albums"
+                )}
+              </button>
+
+              {albumResult && albumResult.albums_seen > 0 && (
+                <div className="mt-4 bg-accent-50 dark:bg-accent-900/30 border border-accent-200 dark:border-accent-800 rounded-lg p-4">
+                  <p className="text-accent-900 dark:text-accent-300 font-medium text-sm">
+                    Re-linked {albumResult.albums_recorded.toLocaleString()} photo
+                    {albumResult.albums_recorded === 1 ? "" : "s"} across{" "}
+                    {albumResult.albums_seen.toLocaleString()} album
+                    {albumResult.albums_seen === 1 ? "" : "s"}.
+                  </p>
+                  <p className="text-accent-800 dark:text-accent-300 text-sm mt-1">
+                    {albumResult.albums_recorded === 0 &&
+                    albumResult.albums_retitled === 0
+                      ? "Everything was already linked — your albums should rebuild on this device shortly."
+                      : "Your albums will finish rebuilding on each device the next time it opens the Albums page."}
+                  </p>
+                  {albumResult.albums_retitled > 0 && (
+                    <p className="text-accent-800 dark:text-accent-300 text-sm mt-1">
+                      Recovered the original Google Photos name for{" "}
+                      {albumResult.albums_retitled.toLocaleString()} album
+                      {albumResult.albums_retitled === 1 ? "" : "s"} that Takeout
+                      had renamed.
+                    </p>
+                  )}
+                  {albumResult.photos_unmatched > 0 && (
+                    <p className="text-fg-muted text-sm mt-2">
+                      {albumResult.photos_unmatched.toLocaleString()} file
+                      {albumResult.photos_unmatched === 1 ? " in an album folder is" : "s in album folders are"}{" "}
+                      not in your library (never imported, trashed, or moved to
+                      the secure gallery), so they were skipped.
+                    </p>
+                  )}
+                  {albumResult.errors_total > 0 && (
+                    <p className="text-red-700 dark:text-red-400 text-sm mt-2">
+                      {albumResult.errors_total.toLocaleString()} error
+                      {albumResult.errors_total === 1 ? "" : "s"} — check the
+                      server log for details.
+                    </p>
+                  )}
+                  <button
+                    onClick={() => navigate("/albums")}
+                    className="mt-3 btn btn-primary btn-md"
+                  >
+                    View Albums →
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -478,28 +649,63 @@ export default function Import() {
               onDrop={(e) => {
                 e.preventDefault();
                 setDragOver(false);
-                if (e.dataTransfer.files.length > 0) processFiles(e.dataTransfer.files);
+                // Expand dropped folders so Takeout albums survive; a flat file
+                // drop behaves exactly as before.
+                pickedFromDrop(e.dataTransfer)
+                  .then((picked) => {
+                    if (picked.length > 0) processFiles(picked);
+                  })
+                  .catch((err) => {
+                    console.error("[Import] reading dropped files failed", err);
+                    setError("Could not read the dropped files.");
+                  });
               }}
             >
               <div className="text-4xl mb-3">📂</div>
               <p className="text-fg-muted font-medium mb-1">
                 Drag & drop photos, videos, and JSON metadata files here
               </p>
-              <p className="text-fg-muted text-sm mb-4">or click to browse</p>
-              <label className="btn btn-primary btn-md inline-block cursor-pointer">
-                Select Files
-                <input
-                  ref={inputRef}
-                  type="file"
-                  multiple
-                  accept="image/jpeg,image/png,image/gif,image/webp,image/avif,image/bmp,image/x-icon,video/mp4,video/webm,video/quicktime,audio/mpeg,audio/flac,audio/ogg,audio/wav,.json"
-                  className="hidden"
-                  onChange={(e) => {
-                    if (e.target.files && e.target.files.length > 0) processFiles(e.target.files);
-                    if (inputRef.current) inputRef.current.value = "";
-                  }}
-                />
-              </label>
+              <p className="text-fg-muted text-sm mb-4">
+                Drop or select a <strong>folder</strong> to keep your Google
+                Photos albums — album membership comes from the folder structure,
+                which individually-picked files don't carry.
+              </p>
+              <div className="flex gap-2 justify-center flex-wrap">
+                <label className="btn btn-primary btn-md inline-block cursor-pointer">
+                  Select Folder
+                  <input
+                    ref={folderInputRef}
+                    type="file"
+                    multiple
+                    // Non-standard but universally supported; React needs these
+                    // lowercase to pass them through to the DOM.
+                    {...{ webkitdirectory: "", directory: "" }}
+                    className="hidden"
+                    onChange={(e) => {
+                      if (e.target.files && e.target.files.length > 0) {
+                        processFiles(pickedFromInput(e.target.files));
+                      }
+                      if (folderInputRef.current) folderInputRef.current.value = "";
+                    }}
+                  />
+                </label>
+                <label className="btn btn-secondary btn-md inline-block cursor-pointer">
+                  Select Files
+                  <input
+                    ref={inputRef}
+                    type="file"
+                    multiple
+                    accept="image/jpeg,image/png,image/gif,image/webp,image/avif,image/bmp,image/x-icon,video/mp4,video/webm,video/quicktime,audio/mpeg,audio/flac,audio/ogg,audio/wav,.json"
+                    className="hidden"
+                    onChange={(e) => {
+                      if (e.target.files && e.target.files.length > 0) {
+                        processFiles(pickedFromInput(e.target.files));
+                      }
+                      if (inputRef.current) inputRef.current.value = "";
+                    }}
+                  />
+                </label>
+              </div>
             </div>
           </>
         )}

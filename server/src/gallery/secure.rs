@@ -19,6 +19,311 @@ use crate::state::AppState;
 
 use crate::photos::models::*;
 
+/// Correlates a membership row with the photo a caller is naming, in either of
+/// the two id spaces a client may use: the canonical **photo id** (stored as
+/// `original_blob_id`) or the **clone blob id** the secure album serves.
+///
+/// `?1` = the resolved canonical original id, `?2` = the id as the client sent
+/// it. Both are needed: Android sends `serverBlobId` (a `blobs` row) while web
+/// sends the photo id, and a second add must recognise the first one's row
+/// whichever space it arrived in.
+///
+/// Shared verbatim by [`existing_memberships`] (which decides whether an add is
+/// a duplicate, a new clone, or an adoption) and by the tests, rather than being
+/// re-typed at each site. This repo has now recorded nine separate instances of
+/// one list derived twice and drifting; the membership correlation is a tenth
+/// candidate and is deliberately not written out by hand anywhere.
+/// `gi.blob_id = ?1` is the **Z1f** arm and is not redundant with `= ?2`. It
+/// exists because [`resolve_canonical_original_id`] has **two admissible
+/// answers** for one input, and only one of them was previously correlated.
+///
+/// After a secured server-side photo's clone is encrypted, the encryption pass
+/// dedups on plaintext content hash and hands the clone the *original's* blob
+/// (`server_migrate_encrypt` names this case by name). So **two `photos` rows —
+/// the original and the clone — carry the same `encrypted_blob_id`**, and the
+/// resolver's `SELECT id FROM photos WHERE encrypted_blob_id = ?` has no
+/// `ORDER BY` and no tie-break. It returns the original today, purely by
+/// insertion order; a clone-id answer is equally admissible and is what an
+/// index change, a re-created original or a trashed original would produce.
+/// With only `gi.original_blob_id = ?1` the clone-id answer finds nothing —
+/// minting a second full clone and skipping the same-album 409. Matching both
+/// makes the outcome identical whichever row the planner picks, which is the
+/// property worth having: correctness that does not depend on row order.
+///
+/// Safe because a clone id is a fresh v4 UUID: it cannot collide with an
+/// unrelated photo id, and the lookup is owner-scoped on top.
+pub const SECURE_MEMBERSHIP_MATCH: &str =
+    "(gi.original_blob_id = ?1 OR gi.blob_id = ?1 OR gi.blob_id = ?2)";
+
+/// The `blob_id` both secure feeds publish for an item — the id every client
+/// hands back to [`add_gallery_item`] when pushing a photo into a second album.
+///
+/// Shared verbatim by [`list_gallery_items`] and [`list_all_gallery_items`]
+/// (which must agree — the smart albums are derived from the aggregate feed) and
+/// by the Z1f test, which resolves an id through *this* expression rather than
+/// re-typing it. That distinction is the whole lesson of Z1f: `test_94` added
+/// with the client-uploaded blob id, where this COALESCE collapses to
+/// `gi.blob_id`, so the tested path and the UI path were different id spaces and
+/// the correlation miss below was invisible for both.
+pub const SECURE_ITEM_PUBLISHED_BLOB_ID: &str =
+    "COALESCE(gi.encrypted_blob_id, p.encrypted_blob_id, gi.blob_id)";
+
+/// The join that makes `p` — the **clone's own** `photos` row — available to
+/// [`SECURE_ITEM_PUBLISHED_BLOB_ID`]. Shared for the same reason the expression
+/// is: without it the COALESCE silently falls through to `gi.blob_id`, which is
+/// precisely the vacuous shape that hid Z1f.
+pub const SECURE_ITEM_CLONE_JOIN: &str =
+    "LEFT JOIN photos p ON p.id = gi.blob_id AND p.encrypted_blob_id IS NOT NULL";
+
+/// Resolve the id a client sent to the canonical **photo id** the membership
+/// rows are keyed on, matching `?1` of [`SECURE_MEMBERSHIP_MATCH`].
+///
+/// For a server-side photo id this is the id itself; for an *encrypted* blob id
+/// it is the owning photo's id.
+///
+/// **This lookup is ambiguous by construction and the caller must not rely on
+/// which row it returns.** Encryption dedups on plaintext content hash, so a
+/// secure clone ends up sharing the original's `encrypted_blob_id`; both rows
+/// then satisfy the `WHERE`, and there is no `ORDER BY` to choose between them.
+/// Adding one here would be a false fix — it would pin an arbitrary winner
+/// rather than remove the dependence on one. [`SECURE_MEMBERSHIP_MATCH`]
+/// correlates **both** admissible answers instead, so the add behaves the same
+/// either way. See its docs for what the un-correlated answer used to cost.
+///
+/// Extracted from [`add_gallery_item`] so the test can drive the real resolution
+/// instead of asserting against a hand-computed id.
+pub async fn resolve_canonical_original_id(
+    pool: &sqlx::SqlitePool,
+    user_id: &str,
+    requested_blob_id: &str,
+) -> Result<String, AppError> {
+    Ok(sqlx::query_scalar::<_, String>(
+        "SELECT id FROM photos WHERE encrypted_blob_id = ? AND user_id = ?",
+    )
+    .bind(requested_blob_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?
+    .unwrap_or_else(|| requested_blob_id.to_string()))
+}
+
+/// One existing secure-album membership for a photo, in any of the user's
+/// galleries. Carries everything an *adoption* needs to reuse the clone rather
+/// than paying for a second one.
+#[derive(Debug, Clone, FromRow)]
+pub struct ExistingMembership {
+    pub id: String,
+    pub gallery_id: String,
+    pub blob_id: String,
+    pub original_blob_id: Option<String>,
+    pub original_photo_hash: Option<String>,
+    pub encrypted_blob_id: Option<String>,
+    pub encrypted_thumb_blob_id: Option<String>,
+    pub crop_metadata: Option<String>,
+}
+
+/// Every secure-album membership this photo already has, across all galleries
+/// the user owns. Empty means "not secured anywhere".
+///
+/// A photo may now live in **several** secure albums (Z1), so this returns a
+/// list where it once returned an `Option`. The two callers ask different
+/// questions of it: `add_gallery_item` asks "is one of these in the album I am
+/// adding to" (a true duplicate) and "is there one anywhere else" (a clone it
+/// can adopt).
+pub async fn existing_memberships(
+    pool: &sqlx::SqlitePool,
+    user_id: &str,
+    canonical_original_id: &str,
+    requested_blob_id: &str,
+) -> Result<Vec<ExistingMembership>, AppError> {
+    let rows = sqlx::query_as::<_, ExistingMembership>(&format!(
+        "SELECT gi.id, gi.gallery_id, gi.blob_id, gi.original_blob_id, \
+                gi.original_photo_hash, gi.encrypted_blob_id, gi.encrypted_thumb_blob_id, \
+                gi.crop_metadata \
+         FROM encrypted_gallery_items gi \
+         JOIN encrypted_galleries g ON g.id = gi.gallery_id \
+         WHERE g.user_id = ?3 AND {SECURE_MEMBERSHIP_MATCH} \
+         ORDER BY gi.added_at ASC"
+    ))
+    .bind(canonical_original_id)
+    .bind(requested_blob_id)
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Whether some **other** membership row still points at `clone_blob_id`.
+///
+/// This is the guard that makes multi-album membership safe to remove from.
+/// [`remove_gallery_item`] destroys the clone blob, the clone `photos` row, its
+/// encrypted blobs and its thumbnail files — correct when the row being removed
+/// is the only one referencing them, and **silent data loss for every other
+/// album** the moment it is not. Removing a photo from one album would blank its
+/// tile in the others while leaving their membership rows intact, which reads as
+/// corruption rather than as a deletion.
+///
+/// Deliberately scoped to galleries owned by `user_id`, matching every other
+/// query here: a clone blob is never shared across users (each add clones), so a
+/// row belonging to somebody else can only be a bug, and treating it as a
+/// reference would leak a blob rather than protect one.
+pub async fn clone_is_shared(
+    pool: &sqlx::SqlitePool,
+    user_id: &str,
+    clone_blob_id: &str,
+    excluding_item_id: &str,
+) -> Result<bool, AppError> {
+    let shared: bool = sqlx::query_scalar(
+        "SELECT EXISTS(\
+           SELECT 1 FROM encrypted_gallery_items gi \
+           JOIN encrypted_galleries g ON g.id = gi.gallery_id \
+           WHERE g.user_id = ? AND gi.blob_id = ? AND gi.id != ?\
+         )",
+    )
+    .bind(user_id)
+    .bind(clone_blob_id)
+    .bind(excluding_item_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(shared)
+}
+
+/// One `(clone, gallery)` pair — a membership, named by the album that holds it.
+#[derive(Debug, Clone, FromRow)]
+struct CloneMembershipRow {
+    clone_blob_id: String,
+    gallery_id: String,
+    gallery_name: String,
+}
+
+/// Every secure album each clone in `gallery_id` is filed in, keyed by the clone
+/// blob id, **oldest membership first** — the same order and the same meaning as
+/// [`CollapsedItem::galleries`], so one field name means one thing on both feeds.
+///
+/// This exists because the per-album feed could not answer a question Z1 made
+/// unavoidable: **removing a photo from one secure album now does two entirely
+/// different things** depending on whether another album still holds it (leaves
+/// the secure domain vs. stays secured and hidden), and a confirmation that
+/// picks the wrong one tells the user they exposed something they did not, or
+/// hid something they did not.
+///
+/// The alternative was to let each client join the per-album listing against the
+/// aggregate feed it already holds. That works only by an accident of the schema
+/// — an adoption copies `encrypted_blob_id` and `original_blob_id` verbatim, so
+/// the two feeds' `COALESCE`d `blob_id`s happen to agree — and it is a second
+/// derivation of membership in every client, which is the drift this file has
+/// already refused once (`planSecureAddsToTarget` declines to guess the same
+/// fact). Ten instances of that shape are recorded in `todo.md`. One query here
+/// is cheaper than two clients agreeing forever.
+async fn memberships_by_clone(
+    pool: &sqlx::SqlitePool,
+    user_id: &str,
+    gallery_id: &str,
+) -> Result<std::collections::HashMap<String, Vec<(String, String)>>, AppError> {
+    // Scoped to this user's galleries on the OUTER query, which is what makes
+    // the answer safe to publish: the inner set is only "which clones does the
+    // (already ownership-checked) open album contain", and every album named in
+    // the result had to clear `g.user_id`.
+    let rows = sqlx::query_as::<_, CloneMembershipRow>(
+        "SELECT gi.blob_id as clone_blob_id, gi.gallery_id, g.name as gallery_name \
+         FROM encrypted_gallery_items gi \
+         JOIN encrypted_galleries g ON g.id = gi.gallery_id \
+         WHERE g.user_id = ?1 \
+           AND gi.blob_id IN (\
+             SELECT blob_id FROM encrypted_gallery_items WHERE gallery_id = ?2\
+           ) \
+         ORDER BY gi.added_at ASC",
+    )
+    .bind(user_id)
+    .bind(gallery_id)
+    .fetch_all(pool)
+    .await?;
+
+    let mut out: std::collections::HashMap<String, Vec<(String, String)>> =
+        std::collections::HashMap::new();
+    for r in rows {
+        out.entry(r.clone_blob_id)
+            .or_default()
+            .push((r.gallery_id, r.gallery_name));
+    }
+    Ok(out)
+}
+
+/// One row of the aggregate secure feed: an item plus the gallery it is filed
+/// in. A photo in N secure albums produces N of these.
+#[derive(Debug, Clone, FromRow)]
+pub struct AllGalleryItemRow {
+    pub id: String,
+    pub blob_id: String,
+    /// Identity key for the collapse — the clone blob every membership of one
+    /// photo shares. Selected raw rather than `COALESCE`d like `blob_id`,
+    /// because it is precisely the column an adoption reuses.
+    pub clone_blob_id: String,
+    pub added_at: String,
+    pub gallery_id: String,
+    pub gallery_name: String,
+    pub encrypted_thumb_blob_id: Option<String>,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    pub media_type: Option<String>,
+    pub photo_subtype: Option<String>,
+    pub burst_id: Option<String>,
+    pub duration_secs: Option<f64>,
+    pub motion_video_blob_id: Option<String>,
+    pub crop_metadata: Option<String>,
+}
+
+/// One tile of the aggregate feed after multi-album memberships are collapsed.
+pub struct CollapsedItem<'a> {
+    /// The membership that represents the tile.
+    pub rep: &'a AllGalleryItemRow,
+    /// Every album the photo is in, **oldest membership first**, as
+    /// `(gallery_id, gallery_name)`.
+    pub galleries: Vec<(&'a str, &'a str)>,
+}
+
+/// Collapse multi-album memberships into one tile per photo (Z1).
+///
+/// A photo may now sit in several secure albums sharing a clone, which would
+/// otherwise surface in the aggregate feed as N identical tiles. That feed is
+/// not merely a listing: the secure smart albums are derived from it, so a
+/// duplicated row becomes a **double-counted** tile in "Secure Videos" and
+/// friends. Raw rows vs collapsed tiles is the single most repeated defect
+/// shape in this repo's history, which is why the collapse happens once, at the
+/// source of the feed, instead of in each consumer.
+///
+/// `rows` is expected in `added_at DESC` order (as the query returns them). The
+/// representative is the **oldest** membership, so the tile's `added_at` is when
+/// the photo entered the secure domain rather than when it was later filed into
+/// an additional album — a photo does not become "new" again because it was
+/// added to a second album. Tile order follows first appearance, i.e. the
+/// newest membership, so filing a photo into another album does surface it.
+pub fn collapse_by_clone(rows: &[AllGalleryItemRow]) -> Vec<CollapsedItem<'_>> {
+    let mut out: Vec<CollapsedItem<'_>> = Vec::new();
+    let mut index: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+
+    for r in rows {
+        match index.get(r.clone_blob_id.as_str()) {
+            Some(&i) => {
+                let slot: &mut CollapsedItem<'_> = &mut out[i];
+                // Rows arrive newest-first, so each later row is older: it
+                // becomes the representative, and prepending keeps `galleries`
+                // oldest-first.
+                slot.rep = r;
+                slot.galleries.insert(0, (&r.gallery_id, &r.gallery_name));
+            }
+            None => {
+                index.insert(r.clone_blob_id.as_str(), out.len());
+                out.push(CollapsedItem {
+                    rep: r,
+                    galleries: vec![(&r.gallery_id, &r.gallery_name)],
+                });
+            }
+        }
+    }
+    out
+}
+
 /// GET /api/galleries/secure
 /// List secure galleries for the authenticated user.
 pub async fn list_secure_galleries(
@@ -177,6 +482,34 @@ pub async fn remove_gallery_item(
 
     let (clone_blob_id, enc_blob_id, enc_thumb_blob_id) = item.ok_or(AppError::NotFound)?;
 
+    // A photo may sit in several secure albums sharing ONE clone (Z1).  If any
+    // other membership still points at this clone, removing it from *this*
+    // album must drop the membership row and nothing else — the destruction
+    // below would otherwise delete the bytes the other albums are still
+    // displaying, leaving their rows intact and their tiles blank.  That is
+    // silent data loss, and it looks like corruption rather than like a
+    // deletion the user asked for.
+    if clone_is_shared(&state.pool, &auth.user_id, &clone_blob_id, &item_id).await? {
+        sqlx::query("DELETE FROM encrypted_gallery_items WHERE id = ? AND gallery_id = ?")
+            .bind(&item_id)
+            .bind(&gallery_id)
+            .execute(&state.pool)
+            .await?;
+
+        tracing::info!(
+            gallery_id = %gallery_id,
+            item_id = %item_id,
+            clone_blob_id = %clone_blob_id,
+            "[DIAG:SECURE_REMOVE] Dropped membership only — clone still referenced by another secure album"
+        );
+
+        // Deliberately NOT returned to the regular gallery: the photo is still
+        // secured elsewhere, so `list_secure_blob_ids` still reports its
+        // original id and the main gallery keeps hiding it.  Un-hiding here
+        // would surface a photo the user still has in a secure album.
+        return Ok(StatusCode::NO_CONTENT);
+    }
+
     let storage_root = (**state.storage_root.load()).clone();
 
     // Delete the cloned blob file + row (if owned by this user).
@@ -312,6 +645,99 @@ pub async fn add_gallery_item(
 
     if count == 0 {
         return Err(AppError::NotFound);
+    }
+
+    // Determine the canonical "original" identity for this add: for a
+    // server-side photo id it's the id itself; for a client-encrypted blob id
+    // it's the owning photo's id (photos.encrypted_blob_id = req.blob_id).
+    let candidate_original_id =
+        resolve_canonical_original_id(&state.pool, &auth.user_id, &req.blob_id).await?;
+
+    // A photo may now live in SEVERAL secure albums (Z1).  What survives from
+    // the old one-secure-album invariant is only its useful half: a photo may
+    // not be added to the *same* album twice.  That still has to be enforced
+    // here rather than client-side, for the reason the original invariant was
+    // moved server-side in the first place — two windows, a stale picker, or a
+    // raw API call can all double-add.
+    let existing = existing_memberships(
+        &state.pool,
+        &auth.user_id,
+        &candidate_original_id,
+        &req.blob_id,
+    )
+    .await?;
+
+    if let Some(dup) = existing.iter().find(|m| m.gallery_id == gallery_id) {
+        tracing::info!(
+            target_gallery_id = %gallery_id,
+            existing_item_id = %dup.id,
+            req_blob_id = %req.blob_id,
+            candidate_original_id = %candidate_original_id,
+            "[DIAG:SECURE_ADD] Rejected duplicate add — photo already in THIS secure album"
+        );
+        return Err(AppError::Conflict(
+            "Photo is already in this secure album".into(),
+        ));
+    }
+
+    // Already secured elsewhere → ADOPT that album's clone instead of making a
+    // second one.  This is the whole reason multi-album membership is cheap:
+    // the plaintext clone has already been produced and re-encrypted at rest,
+    // so a second membership row costs one INSERT and zero bytes.  Cloning
+    // again would double the storage, spend a second decrypt+encrypt pass on
+    // (potentially) a multi-gigabyte video, and — because the two clones would
+    // encrypt to different blobs — leave the album showing what is physically a
+    // different file, so an edit applied in one album could never reach the
+    // other.
+    //
+    // The original photo is already hidden from the main gallery by the first
+    // membership, and `list_secure_blob_ids` dedups into a HashSet, so nothing
+    // about the hiding behaviour changes.
+    if let Some(donor) = existing.first() {
+        let item_id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+
+        sqlx::query(
+            "INSERT INTO encrypted_gallery_items \
+             (id, gallery_id, blob_id, added_at, original_blob_id, original_photo_hash, \
+              encrypted_blob_id, encrypted_thumb_blob_id, crop_metadata) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&item_id)
+        .bind(&gallery_id)
+        .bind(&donor.blob_id)
+        .bind(&now)
+        .bind(&donor.original_blob_id)
+        .bind(&donor.original_photo_hash)
+        .bind(&donor.encrypted_blob_id)
+        .bind(&donor.encrypted_thumb_blob_id)
+        // Carry the crop across so the photo looks the same in both albums.
+        // Edits stay per-item after this point (migration 032 put crop on the
+        // membership row deliberately); this only sets the starting state, so
+        // the second album does not open showing an uncropped photo the user
+        // already framed.
+        .bind(&donor.crop_metadata)
+        .execute(&state.pool)
+        .await?;
+
+        tracing::info!(
+            gallery_id = %gallery_id,
+            donor_gallery_id = %donor.gallery_id,
+            donor_item_id = %donor.id,
+            clone_blob_id = %donor.blob_id,
+            item_id = %item_id,
+            total_memberships = existing.len() + 1,
+            "[DIAG:SECURE_ADD] Adopted existing clone into an additional secure album"
+        );
+
+        return Ok((
+            StatusCode::CREATED,
+            Json(serde_json::json!({
+                "item_id": item_id,
+                "new_blob_id": donor.blob_id,
+                "adopted": true,
+            })),
+        ));
     }
 
     // Fetch original blob metadata — first try the `blobs` table (encrypted
@@ -792,6 +1218,11 @@ pub async fn list_gallery_items(
     struct GalleryItemRow {
         id: String,
         blob_id: String,
+        /// Identity key for the membership lookup — the clone blob every
+        /// membership of one photo shares. Selected raw rather than `COALESCE`d
+        /// like `blob_id`, for the same reason the aggregate feed does it: it is
+        /// precisely the column an adoption reuses.
+        clone_blob_id: String,
         added_at: String,
         encrypted_thumb_blob_id: Option<String>,
         width: Option<i64>,
@@ -801,11 +1232,16 @@ pub async fn list_gallery_items(
         burst_id: Option<String>,
         duration_secs: Option<f64>,
         motion_video_blob_id: Option<String>,
+        // Non-destructive edit metadata stored on the item itself (#31). Lives
+        // on `gi` only — never falls through to the original photo, so an edit
+        // in the secure album can't leak back onto the regular-gallery original.
+        crop_metadata: Option<String>,
     }
 
-    let items = sqlx::query_as::<_, GalleryItemRow>(
+    let items = sqlx::query_as::<_, GalleryItemRow>(&format!(
         "SELECT gi.id, \
-                COALESCE(gi.encrypted_blob_id, p.encrypted_blob_id, gi.blob_id) as blob_id, \
+                {SECURE_ITEM_PUBLISHED_BLOB_ID} as blob_id, \
+                gi.blob_id as clone_blob_id, \
                 gi.added_at, \
                 COALESCE(gi.encrypted_thumb_blob_id, p.encrypted_thumb_blob_id, op.encrypted_thumb_blob_id) as encrypted_thumb_blob_id, \
                 COALESCE(p.width, op.width) as width, \
@@ -814,24 +1250,58 @@ pub async fn list_gallery_items(
                 COALESCE(p.photo_subtype, op.photo_subtype) as photo_subtype, \
                 COALESCE(p.burst_id, op.burst_id) as burst_id, \
                 COALESCE(p.duration_secs, op.duration_secs) as duration_secs, \
-                COALESCE(p.motion_video_blob_id, op.motion_video_blob_id) as motion_video_blob_id \
+                COALESCE(p.motion_video_blob_id, op.motion_video_blob_id) as motion_video_blob_id, \
+                gi.crop_metadata as crop_metadata \
          FROM encrypted_gallery_items gi \
-         LEFT JOIN photos p ON p.id = gi.blob_id AND p.encrypted_blob_id IS NOT NULL \
+         {SECURE_ITEM_CLONE_JOIN} \
          LEFT JOIN photos op ON op.id = gi.original_blob_id \
          WHERE gi.gallery_id = ? \
-         ORDER BY gi.added_at DESC",
-    )
+         ORDER BY gi.added_at DESC"
+    ))
     .bind(&gallery_id)
     .fetch_all(&state.pool)
     .await?;
 
+    // The ladder of each secured video (#49). Keyed by item id — see
+    // `list_renditions_for_secure_items` for why a secured video still has one
+    // and why a video secured before its rung existed never will.
+    let mut ladders = crate::transcode::renditions::list_renditions_for_secure_items(
+        &state.pool,
+        &auth.user_id,
+        Some(&gallery_id),
+    )
+    .await?;
+
+    // Every album each of these photos is in (Z1) — one query, not one per row.
+    let memberships = memberships_by_clone(&state.pool, &auth.user_id, &gallery_id).await?;
+
     let items_json: Vec<serde_json::Value> = items
         .iter()
         .map(|r| {
+            // A miss is unreachable — this row is itself one of the memberships
+            // the map was built from — so the empty fallback exists only so a
+            // future refactor of the query cannot silently publish a *wrong*
+            // count. Empty means "unknown", and a client must treat it as such:
+            // the one thing it may not do is read 0 as "no other album" and
+            // promise the photo leaves the secure domain.
+            let galleries_json: Vec<serde_json::Value> = memberships
+                .get(&r.clone_blob_id)
+                .map(|gs| {
+                    gs.iter()
+                        .map(|(id, name)| serde_json::json!({ "id": id, "name": name }))
+                        .collect()
+                })
+                .unwrap_or_default();
             serde_json::json!({
                 "id": r.id,
                 "blob_id": r.blob_id,
                 "added_at": r.added_at,
+                "gallery_id": gallery_id,
+                // Same field, same meaning and same order as the aggregate feed
+                // publishes. A client must not have to know which endpoint it
+                // came from to interpret it.
+                "galleries": galleries_json,
+                "renditions": ladders.remove(&r.id).unwrap_or_default(),
                 "encrypted_thumb_blob_id": r.encrypted_thumb_blob_id,
                 "width": r.width,
                 "height": r.height,
@@ -840,9 +1310,1119 @@ pub async fn list_gallery_items(
                 "burst_id": r.burst_id,
                 "duration_secs": r.duration_secs,
                 "motion_video_blob_id": r.motion_video_blob_id,
+                "crop_metadata": r.crop_metadata,
             })
         })
         .collect();
 
     Ok(Json(serde_json::json!({ "items": items_json })))
+}
+
+/// GET /api/galleries/secure/items
+/// List items across ALL of the user's secure galleries (requires unlock token
+/// in header).  This is the aggregate feed the clients use to derive the
+/// built-in secure smart albums (Secure Gallery / Photos / GIFs / Videos /
+/// Audio) without an N+1 per-gallery fetch.
+///
+/// Each item carries its owning `gallery_id` (+ `gallery_name` for the detail
+/// header) so a "remove" from a smart view can route to the real album.
+///
+/// Token verification is identical to [`list_gallery_items`]; there is no
+/// gallery-id ownership check because the scope is simply `g.user_id = ?`.
+pub async fn list_all_gallery_items(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, AppError> {
+    // Verify the unlock token — same contract as the per-gallery endpoint.
+    let token = headers
+        .get("x-gallery-token")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| {
+            AppError::Unauthorized("Gallery token required. Unlock the gallery first.".into())
+        })?;
+
+    if !crate::gallery::secure_token::verify(token, &auth.user_id, &state.config.auth.jwt_secret) {
+        return Err(AppError::Unauthorized(
+            "Invalid or expired gallery token. Unlock the gallery again.".into(),
+        ));
+    }
+
+    let items = sqlx::query_as::<_, AllGalleryItemRow>(&format!(
+        "SELECT gi.id, \
+                {SECURE_ITEM_PUBLISHED_BLOB_ID} as blob_id, \
+                gi.blob_id as clone_blob_id, \
+                gi.added_at, \
+                gi.gallery_id, \
+                g.name as gallery_name, \
+                COALESCE(gi.encrypted_thumb_blob_id, p.encrypted_thumb_blob_id, op.encrypted_thumb_blob_id) as encrypted_thumb_blob_id, \
+                COALESCE(p.width, op.width) as width, \
+                COALESCE(p.height, op.height) as height, \
+                COALESCE(p.media_type, op.media_type) as media_type, \
+                COALESCE(p.photo_subtype, op.photo_subtype) as photo_subtype, \
+                COALESCE(p.burst_id, op.burst_id) as burst_id, \
+                COALESCE(p.duration_secs, op.duration_secs) as duration_secs, \
+                COALESCE(p.motion_video_blob_id, op.motion_video_blob_id) as motion_video_blob_id, \
+                gi.crop_metadata as crop_metadata \
+         FROM encrypted_gallery_items gi \
+         JOIN encrypted_galleries g ON g.id = gi.gallery_id \
+         {SECURE_ITEM_CLONE_JOIN} \
+         LEFT JOIN photos op ON op.id = gi.original_blob_id \
+         WHERE g.user_id = ? \
+         ORDER BY gi.added_at DESC"
+    ))
+    .bind(&auth.user_id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    // Same ladder hydration as the per-gallery endpoint, unscoped. Both feeds
+    // must agree: the smart albums (Secure Videos in particular) are derived
+    // from this one, and a picker that appears in the album but not the smart
+    // view would read as the album being a different place.
+    let mut ladders = crate::transcode::renditions::list_renditions_for_secure_items(
+        &state.pool,
+        &auth.user_id,
+        None,
+    )
+    .await?;
+
+    let items_json: Vec<serde_json::Value> = collapse_by_clone(&items)
+        .into_iter()
+        .map(|CollapsedItem { rep: r, galleries }| {
+            let galleries_json: Vec<serde_json::Value> = galleries
+                .iter()
+                .map(|(id, name)| serde_json::json!({ "id": id, "name": name }))
+                .collect();
+            serde_json::json!({
+                "id": r.id,
+                "blob_id": r.blob_id,
+                "added_at": r.added_at,
+                "gallery_id": r.gallery_id,
+                "gallery_name": r.gallery_name,
+                // Every album this photo is in. Existing clients read only the
+                // singular pair above and keep working; a client routing a
+                // "remove" needs the full set, because with N memberships
+                // "which album am I removing it from" is a real question.
+                "galleries": galleries_json,
+                "renditions": ladders.remove(&r.id).unwrap_or_default(),
+                "encrypted_thumb_blob_id": r.encrypted_thumb_blob_id,
+                "width": r.width,
+                "height": r.height,
+                "media_type": r.media_type,
+                "photo_subtype": r.photo_subtype,
+                "burst_id": r.burst_id,
+                "duration_secs": r.duration_secs,
+                "motion_video_blob_id": r.motion_video_blob_id,
+                "crop_metadata": r.crop_metadata,
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({ "items": items_json })))
+}
+
+/// Request body for `POST /api/galleries/secure/{gallery_id}/items/{item_id}/move`.
+#[derive(Debug, Deserialize)]
+pub struct MoveGalleryItemRequest {
+    /// Destination secure gallery (must be owned by the same user).
+    pub target_gallery_id: String,
+}
+
+/// POST /api/galleries/secure/:gallery_id/items/:item_id/move
+///
+/// Move a secure item from one of the user's secure galleries to another (#31,
+/// the cross-secure-album picker).  Because a photo may live in **at most one**
+/// secure gallery (enforced in [`add_gallery_item`]), pulling media in "from
+/// other secure albums" is a MOVE, not a copy — we simply reassign the
+/// membership row's `gallery_id`.  No re-clone, no re-encryption: the encrypted
+/// blob and the hidden original are untouched, so the one-secure-album invariant
+/// and the "original stays hidden" behaviour both hold.
+///
+/// Ownership of BOTH the source and target gallery is verified first (IDOR
+/// guard) — a caller can only shuffle items between galleries they own.
+pub async fn move_gallery_item(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((gallery_id, item_id)): Path<(String, String)>,
+    Json(req): Json<MoveGalleryItemRequest>,
+) -> Result<StatusCode, AppError> {
+    // Verify the caller owns the SOURCE gallery.
+    let owns_source: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM encrypted_galleries WHERE id = ? AND user_id = ?")
+            .bind(&gallery_id)
+            .bind(&auth.user_id)
+            .fetch_one(&state.pool)
+            .await?;
+    if owns_source == 0 {
+        return Err(AppError::NotFound);
+    }
+
+    // Verify the caller owns the TARGET gallery.
+    let owns_target: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM encrypted_galleries WHERE id = ? AND user_id = ?")
+            .bind(&req.target_gallery_id)
+            .bind(&auth.user_id)
+            .fetch_one(&state.pool)
+            .await?;
+    if owns_target == 0 {
+        return Err(AppError::BadRequest("Target secure album not found".into()));
+    }
+
+    // Multi-album membership (Z1) makes a same-album duplicate reachable here in
+    // a way it was not when a photo could only live in one gallery: if the
+    // TARGET already holds this photo, reassigning would leave it in the target
+    // twice.  "At most once per album" is the half of the old invariant that
+    // survives, so this is refused rather than merged — silently deleting the
+    // source row would be a destructive reading of a request the user made as a
+    // move.
+    let clone_blob_id: Option<String> = sqlx::query_scalar(
+        "SELECT blob_id FROM encrypted_gallery_items WHERE id = ? AND gallery_id = ?",
+    )
+    .bind(&item_id)
+    .bind(&gallery_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let clone_blob_id = clone_blob_id.ok_or(AppError::NotFound)?;
+
+    let already_in_target: bool = sqlx::query_scalar(
+        "SELECT EXISTS(\
+           SELECT 1 FROM encrypted_gallery_items \
+           WHERE gallery_id = ? AND blob_id = ? AND id != ?\
+         )",
+    )
+    .bind(&req.target_gallery_id)
+    .bind(&clone_blob_id)
+    .bind(&item_id)
+    .fetch_one(&state.pool)
+    .await?;
+
+    if already_in_target {
+        tracing::info!(
+            source_gallery_id = %gallery_id,
+            target_gallery_id = %req.target_gallery_id,
+            item_id = %item_id,
+            "[DIAG:SECURE_MOVE] Rejected move — photo already in the target secure album"
+        );
+        return Err(AppError::Conflict(
+            "Photo is already in the target secure album".into(),
+        ));
+    }
+
+    // Reassign the membership row.  Scoped to (item_id, source gallery_id) so a
+    // guessed item id from another gallery can't be moved.
+    let result = sqlx::query(
+        "UPDATE encrypted_gallery_items SET gallery_id = ? WHERE id = ? AND gallery_id = ?",
+    )
+    .bind(&req.target_gallery_id)
+    .bind(&item_id)
+    .bind(&gallery_id)
+    .execute(&state.pool)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
+
+    tracing::info!(
+        source_gallery_id = %gallery_id,
+        target_gallery_id = %req.target_gallery_id,
+        item_id = %item_id,
+        "[DIAG:SECURE_MOVE] Moved item between secure galleries"
+    );
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Request body for `PUT /api/galleries/secure/{gallery_id}/items/{item_id}/crop`.
+#[derive(Debug, Deserialize)]
+pub struct SetGalleryItemCropRequest {
+    /// Crop/edit metadata JSON (same shape as `photos.crop_metadata`), or
+    /// `null` to clear all edits.
+    pub crop_metadata: Option<String>,
+}
+
+/// PUT /api/galleries/secure/:gallery_id/items/:item_id/crop
+///
+/// Persist non-destructive edit metadata (crop / brightness / rotate / trim) for
+/// a secure item (#31).  Stored on the item row itself, not the photos table, so
+/// it stays inside the secure domain and never leaks onto the regular-gallery
+/// original.  Clients apply it at display time exactly like `photos.crop_metadata`
+/// — no re-render / re-encryption of the encrypted blob.
+///
+/// Ownership of the gallery is verified first (IDOR guard), matching
+/// [`add_gallery_item`] / [`remove_gallery_item`].
+pub async fn set_gallery_item_crop(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((gallery_id, item_id)): Path<(String, String)>,
+    Json(req): Json<SetGalleryItemCropRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let owner: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM encrypted_galleries WHERE id = ? AND user_id = ?")
+            .bind(&gallery_id)
+            .bind(&auth.user_id)
+            .fetch_one(&state.pool)
+            .await?;
+    if owner == 0 {
+        return Err(AppError::NotFound);
+    }
+
+    let result = sqlx::query(
+        "UPDATE encrypted_gallery_items SET crop_metadata = ? WHERE id = ? AND gallery_id = ?",
+    )
+    .bind(&req.crop_metadata)
+    .bind(&item_id)
+    .bind(&gallery_id)
+    .execute(&state.pool)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
+
+    tracing::info!(
+        gallery_id = %gallery_id,
+        item_id = %item_id,
+        has_crop = req.crop_metadata.is_some(),
+        "[DIAG:SECURE_CROP] Updated secure item crop metadata"
+    );
+
+    Ok(Json(serde_json::json!({
+        "item_id": item_id,
+        "crop_metadata": req.crop_metadata,
+    })))
+}
+
+#[cfg(test)]
+mod tests {
+    //! Core SQL behaviour for the #31 move + crop mutations, exercised against
+    //! an in-memory DB with the REAL migrations (so migration 032's new
+    //! `crop_metadata` column is proven to apply). The handlers themselves need
+    //! a full `AppState`; these tests target the exact UPDATE statements the
+    //! handlers run, plus their gallery-scoping (the IDOR guard's teeth).
+    // The Z1 tests below drive the REAL helpers (`existing_memberships`,
+    // `clone_is_shared`, `collapse_by_clone`) rather than a copy of their SQL,
+    // which is why this module now imports its parent at all. The older tests
+    // here re-type the statement under test — fine for a two-line UPDATE, and
+    // exactly the drift this repo has recorded nine times for anything bigger.
+    use super::*;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use sqlx::SqlitePool;
+    use std::str::FromStr;
+
+    async fn mem_pool() -> SqlitePool {
+        // FKs off: we insert bare gallery/item rows without the full users graph.
+        let opts = SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .foreign_keys(false);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        pool
+    }
+
+    /// Insert a secure gallery owned by `user_id`.
+    async fn insert_gallery(pool: &SqlitePool, id: &str, user_id: &str) {
+        sqlx::query(
+            "INSERT INTO encrypted_galleries (id, user_id, name, password_hash, created_at) \
+             VALUES (?, ?, ?, 'x', '2026-07-18T00:00:00Z')",
+        )
+        .bind(id)
+        .bind(user_id)
+        .bind(format!("gallery-{id}"))
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    /// Insert a membership row into `gallery_id`.
+    async fn insert_item(pool: &SqlitePool, item_id: &str, gallery_id: &str) {
+        sqlx::query(
+            "INSERT INTO encrypted_gallery_items (id, gallery_id, blob_id, added_at) \
+             VALUES (?, ?, ?, '2026-07-18T00:00:00Z')",
+        )
+        .bind(item_id)
+        .bind(gallery_id)
+        .bind(format!("blob-{item_id}"))
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    /// Insert a membership row with an explicit clone `blob_id` — the shape
+    /// multi-album membership produces, where several rows share one clone.
+    async fn insert_shared_item(
+        pool: &SqlitePool,
+        item_id: &str,
+        gallery_id: &str,
+        blob_id: &str,
+        original_blob_id: &str,
+        added_at: &str,
+    ) {
+        sqlx::query(
+            "INSERT INTO encrypted_gallery_items (id, gallery_id, blob_id, added_at, original_blob_id) \
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(item_id)
+        .bind(gallery_id)
+        .bind(blob_id)
+        .bind(added_at)
+        .bind(original_blob_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    /// Insert a `photos` row, optionally already encrypted.
+    async fn insert_photo(
+        pool: &SqlitePool,
+        id: &str,
+        user_id: &str,
+        encrypted_blob_id: Option<&str>,
+    ) {
+        sqlx::query(
+            "INSERT INTO photos (id, user_id, filename, mime_type, created_at, encrypted_blob_id) \
+             VALUES (?, ?, ?, 'image/jpeg', '2026-08-01T00:00:00Z', ?)",
+        )
+        .bind(id)
+        .bind(user_id)
+        .bind(format!("{id}.jpg"))
+        .bind(encrypted_blob_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    /// The `blob_id` the secure feeds actually publish for `item_id`, evaluated
+    /// through the REAL shared expression and join rather than a copy of them.
+    /// Re-typing this is how Z1f stayed invisible: the id a test computes by
+    /// hand and the id a client is handed were different values.
+    async fn published_blob_id(pool: &SqlitePool, item_id: &str) -> String {
+        sqlx::query_scalar::<_, String>(&format!(
+            "SELECT {SECURE_ITEM_PUBLISHED_BLOB_ID} \
+             FROM encrypted_gallery_items gi {SECURE_ITEM_CLONE_JOIN} \
+             WHERE gi.id = ?"
+        ))
+        .bind(item_id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    /// Build an aggregate-feed row with only the fields the collapse reads.
+    fn feed_row(
+        id: &str,
+        clone_blob_id: &str,
+        gallery_id: &str,
+        gallery_name: &str,
+        added_at: &str,
+    ) -> AllGalleryItemRow {
+        AllGalleryItemRow {
+            id: id.into(),
+            blob_id: clone_blob_id.into(),
+            clone_blob_id: clone_blob_id.into(),
+            added_at: added_at.into(),
+            gallery_id: gallery_id.into(),
+            gallery_name: gallery_name.into(),
+            encrypted_thumb_blob_id: None,
+            width: None,
+            height: None,
+            media_type: None,
+            photo_subtype: None,
+            burst_id: None,
+            duration_secs: None,
+            motion_video_blob_id: None,
+            crop_metadata: None,
+        }
+    }
+
+    // ── Z1: multi-album secure membership ───────────────────────────────────
+
+    #[tokio::test]
+    async fn membership_is_found_through_either_id_space() {
+        // Android sends the encrypted `blobs` id, web sends the photo id. A
+        // second add must recognise the first one's row whichever space it
+        // arrives in — the reason SECURE_MEMBERSHIP_MATCH takes two params.
+        let pool = mem_pool().await;
+        insert_gallery(&pool, "g1", "u1").await;
+        insert_shared_item(
+            &pool,
+            "i1",
+            "g1",
+            "clone-1",
+            "photo-1",
+            "2026-08-01T00:00:00Z",
+        )
+        .await;
+
+        let by_photo = existing_memberships(&pool, "u1", "photo-1", "photo-1")
+            .await
+            .unwrap();
+        assert_eq!(by_photo.len(), 1, "photo-id space must match");
+
+        let by_clone = existing_memberships(&pool, "u1", "unrelated", "clone-1")
+            .await
+            .unwrap();
+        assert_eq!(by_clone.len(), 1, "clone/blob-id space must match");
+
+        let neither = existing_memberships(&pool, "u1", "nope", "nope")
+            .await
+            .unwrap();
+        assert!(
+            neither.is_empty(),
+            "an unsecured photo must match nothing — otherwise the two \
+             assertions above pass for any input"
+        );
+    }
+
+    // ── Z1f: the id the feed publishes must correlate back to the membership ──
+
+    /// The live shape: a **server-side (autoscanned)** photo secured into an
+    /// album, whose clone has since been encrypted.
+    ///
+    /// The clone and the original share **one** `encrypted_blob_id`, which is
+    /// not a simplification — it is what the server actually produces.
+    /// `encrypt_one_photo` dedups on plaintext content hash and a clone is a
+    /// byte-for-byte copy, so the clone is handed the original's existing blob
+    /// (`server_migrate_encrypt` names this case in a comment of its own).
+    /// Verified end to end by `test_94`, which asserts the published id equals
+    /// the original's encrypted blob id.
+    ///
+    /// That sharing IS the defect: `resolve_canonical_original_id` then has two
+    /// rows satisfying its `WHERE` and no `ORDER BY` to choose between them.
+    ///
+    /// Returns `(item_id, clone_id, published_blob_id)`.
+    async fn secured_server_side_photo(pool: &SqlitePool) -> (String, String, String) {
+        insert_gallery(pool, "g1", "u1").await;
+        insert_photo(pool, "photo-1", "u1", Some("enc-shared-1")).await;
+        insert_photo(pool, "clone-1", "u1", Some("enc-shared-1")).await;
+        // Server-side adds leave `gi.encrypted_blob_id` NULL — it is only set
+        // for client-encrypted uploads, and there it equals `gi.blob_id`.
+        insert_shared_item(
+            pool,
+            "i1",
+            "g1",
+            "clone-1",
+            "photo-1",
+            "2026-08-01T00:00:00Z",
+        )
+        .await;
+
+        let published = published_blob_id(pool, "i1").await;
+        (String::from("i1"), String::from("clone-1"), published)
+    }
+
+    #[tokio::test]
+    async fn the_published_id_correlates_whichever_row_resolution_returns() {
+        // Z1f, stated as what it actually is: the add must not depend on which
+        // of two equally-valid rows SQLite happens to hand back.
+        //
+        // A client can only push back the id it was given, and for a secured
+        // server-side photo that is the SHARED encrypted blob. Resolving it can
+        // legitimately yield either the original's photo id or the clone's.
+        // Both are asserted, because the handler cannot tell which it got — and
+        // the clone arm is the one that used to find nothing, mint a second
+        // full clone (double storage, a second decrypt+encrypt of a possibly
+        // multi-GB video) and skip the same-album 409.
+        let pool = mem_pool().await;
+        let (_item, clone_id, published) = secured_server_side_photo(&pool).await;
+
+        // Preconditions. Without these the arms below could pass trivially —
+        // and `test_94` missing this bug is precisely what an unasserted
+        // precondition looks like.
+        assert_ne!(
+            published, clone_id,
+            "the feed must publish the ENCRYPTED blob, not the clone id — \
+             otherwise this re-tests the already-working id space"
+        );
+        let sharers: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM photos WHERE encrypted_blob_id = ?")
+                .bind(&published)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            sharers, 2,
+            "the original and the clone must SHARE one encrypted blob — that is \
+             what makes resolution ambiguous, and without it there is nothing \
+             here to be robust against"
+        );
+
+        // Whatever the real resolver returns must work...
+        let canonical = resolve_canonical_original_id(&pool, "u1", &published)
+            .await
+            .unwrap();
+        assert_eq!(
+            existing_memberships(&pool, "u1", &canonical, &published)
+                .await
+                .unwrap()
+                .len(),
+            1,
+            "the resolver's actual answer ({canonical}) must correlate"
+        );
+
+        // ...and so must the OTHER admissible answer — the arm the old
+        // correlation dropped. Both are pinned because row order is not a
+        // contract and today's winner is an accident of insertion order.
+        for canonical in ["photo-1", "clone-1"] {
+            let found = existing_memberships(&pool, "u1", canonical, &published)
+                .await
+                .unwrap();
+            assert_eq!(
+                found.len(),
+                1,
+                "resolving to `{canonical}` must find the membership; finding \
+                 none mints a second clone and drops the same-album 409"
+            );
+            assert_eq!(found[0].blob_id, clone_id, "and must adopt THAT clone");
+        }
+    }
+
+    #[tokio::test]
+    async fn re_adding_a_secured_photo_to_its_own_album_is_still_a_duplicate() {
+        // The half of the old one-album invariant Z1 deliberately kept. It is
+        // enforced by `add_gallery_item` finding a membership whose gallery_id
+        // matches — so a correlation miss silently disables it and the user gets
+        // a duplicate tile instead of a 409. Checked for BOTH resolutions.
+        let pool = mem_pool().await;
+        let (_item, _clone, published) = secured_server_side_photo(&pool).await;
+
+        for canonical in ["photo-1", "clone-1"] {
+            let found = existing_memberships(&pool, "u1", canonical, &published)
+                .await
+                .unwrap();
+            assert!(
+                found.iter().any(|m| m.gallery_id == "g1"),
+                "resolving to `{canonical}`, re-adding to the SAME album must \
+                 still be detectable as a duplicate"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn the_widened_correlation_is_not_a_catch_all() {
+        // `gi.blob_id = ?1` widens the match, so guard that it stays keyed on
+        // identity: another user's clone and an unrelated photo must still miss.
+        // Without this, deleting the WHERE clause outright would satisfy every
+        // assertion above.
+        let pool = mem_pool().await;
+        let (_item, _clone, published) = secured_server_side_photo(&pool).await;
+
+        let other_user = existing_memberships(&pool, "u2", "clone-1", &published)
+            .await
+            .unwrap();
+        assert!(
+            other_user.is_empty(),
+            "the widened match must stay scoped to the owner"
+        );
+
+        let unrelated = existing_memberships(&pool, "u1", "photo-999", "photo-999")
+            .await
+            .unwrap();
+        assert!(
+            unrelated.is_empty(),
+            "an unsecured photo must still match nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn membership_lookup_is_scoped_to_the_owner() {
+        // Another user's secure album must not make this user's photo look
+        // already-secured (and must never donate its clone to an adoption).
+        let pool = mem_pool().await;
+        insert_gallery(&pool, "theirs", "u2").await;
+        insert_shared_item(
+            &pool,
+            "i1",
+            "theirs",
+            "clone-1",
+            "photo-1",
+            "2026-08-01T00:00:00Z",
+        )
+        .await;
+
+        let found = existing_memberships(&pool, "u1", "photo-1", "photo-1")
+            .await
+            .unwrap();
+        assert!(
+            found.is_empty(),
+            "cross-user membership must not be visible"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_photo_can_hold_memberships_in_several_albums() {
+        // The core Z1 property: one clone, N membership rows, all discoverable.
+        let pool = mem_pool().await;
+        insert_gallery(&pool, "g1", "u1").await;
+        insert_gallery(&pool, "g2", "u1").await;
+        insert_shared_item(
+            &pool,
+            "i1",
+            "g1",
+            "clone-1",
+            "photo-1",
+            "2026-08-01T00:00:00Z",
+        )
+        .await;
+        insert_shared_item(
+            &pool,
+            "i2",
+            "g2",
+            "clone-1",
+            "photo-1",
+            "2026-08-02T00:00:00Z",
+        )
+        .await;
+
+        let found = existing_memberships(&pool, "u1", "photo-1", "photo-1")
+            .await
+            .unwrap();
+        assert_eq!(found.len(), 2, "the photo is in both albums");
+        // Oldest first — `add_gallery_item` adopts `first()`, and adopting the
+        // original clone rather than a later one keeps the donor stable.
+        assert_eq!(found[0].gallery_id, "g1");
+        assert_eq!(found[1].gallery_id, "g2");
+        assert!(
+            found.iter().all(|m| m.blob_id == "clone-1"),
+            "both memberships share ONE clone — a second clone is the storage \
+             cost adoption exists to avoid"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_lone_clone_is_not_shared_but_a_sibling_makes_it_shared() {
+        // The guard that decides whether remove_gallery_item may destroy bytes.
+        let pool = mem_pool().await;
+        insert_gallery(&pool, "g1", "u1").await;
+        insert_gallery(&pool, "g2", "u1").await;
+        insert_shared_item(
+            &pool,
+            "i1",
+            "g1",
+            "clone-1",
+            "photo-1",
+            "2026-08-01T00:00:00Z",
+        )
+        .await;
+
+        assert!(
+            !clone_is_shared(&pool, "u1", "clone-1", "i1").await.unwrap(),
+            "the only membership must NOT read as shared, or the clone is \
+             never reclaimed and every removal leaks its bytes"
+        );
+
+        insert_shared_item(
+            &pool,
+            "i2",
+            "g2",
+            "clone-1",
+            "photo-1",
+            "2026-08-02T00:00:00Z",
+        )
+        .await;
+
+        assert!(
+            clone_is_shared(&pool, "u1", "clone-1", "i1").await.unwrap(),
+            "a sibling membership must read as shared — this is the arm that \
+             stops removal from one album blanking the photo in the other"
+        );
+        assert!(
+            clone_is_shared(&pool, "u1", "clone-1", "i2").await.unwrap(),
+            "and it must hold from either side"
+        );
+    }
+
+    #[tokio::test]
+    async fn clone_sharing_ignores_the_row_being_removed() {
+        // Without the `id != ?` exclusion the predicate is TRUE for every
+        // removal, so the destruction path becomes unreachable and every
+        // secure-album removal silently leaks its clone forever.
+        let pool = mem_pool().await;
+        insert_gallery(&pool, "g1", "u1").await;
+        insert_shared_item(
+            &pool,
+            "i1",
+            "g1",
+            "clone-1",
+            "photo-1",
+            "2026-08-01T00:00:00Z",
+        )
+        .await;
+
+        assert!(!clone_is_shared(&pool, "u1", "clone-1", "i1").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn clone_sharing_is_scoped_to_the_owner() {
+        let pool = mem_pool().await;
+        insert_gallery(&pool, "mine", "u1").await;
+        insert_gallery(&pool, "theirs", "u2").await;
+        insert_shared_item(
+            &pool,
+            "i1",
+            "mine",
+            "clone-1",
+            "photo-1",
+            "2026-08-01T00:00:00Z",
+        )
+        .await;
+        insert_shared_item(
+            &pool,
+            "i2",
+            "theirs",
+            "clone-1",
+            "photo-1",
+            "2026-08-02T00:00:00Z",
+        )
+        .await;
+
+        assert!(
+            !clone_is_shared(&pool, "u1", "clone-1", "i1").await.unwrap(),
+            "another user's row must not pin this user's clone — clones are \
+             never shared across users, so that can only be a bug"
+        );
+    }
+
+    // ── Z1: the per-album feed answers "which albums is this in" ────────────
+    //
+    // These drive `memberships_by_clone` itself rather than a copy of its SQL.
+    // What hangs off the answer is not a listing detail: it decides whether a
+    // removal confirmation may promise the photo becomes visible in the regular
+    // gallery, and that promise is false the moment a second album holds it.
+
+    #[tokio::test]
+    async fn a_multi_album_photo_names_every_album_it_is_in() {
+        let pool = mem_pool().await;
+        insert_gallery(&pool, "g1", "u1").await;
+        insert_gallery(&pool, "g2", "u1").await;
+        // One clone, two memberships — what an adoption produces.
+        insert_shared_item(
+            &pool,
+            "i1",
+            "g1",
+            "clone-1",
+            "photo-1",
+            "2026-08-01T00:00:00Z",
+        )
+        .await;
+        insert_shared_item(
+            &pool,
+            "i2",
+            "g2",
+            "clone-1",
+            "photo-1",
+            "2026-08-02T00:00:00Z",
+        )
+        .await;
+
+        let map = memberships_by_clone(&pool, "u1", "g1").await.unwrap();
+        let got = map.get("clone-1").expect("the open album's own clone");
+
+        assert_eq!(
+            got,
+            &vec![
+                ("g1".to_string(), "gallery-g1".to_string()),
+                ("g2".to_string(), "gallery-g2".to_string()),
+            ],
+            "both albums, oldest membership first — the same order and meaning \
+             `CollapsedItem::galleries` publishes on the aggregate feed"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_single_album_photo_names_only_itself() {
+        // The vacuity guard for the test above, and the arm that carries the
+        // user-visible consequence: exactly one membership is what licenses a
+        // client to say "this returns to your regular gallery". A query that
+        // over-matched would pass the multi-album assertion while making every
+        // ordinary removal claim the photo stays secured.
+        let pool = mem_pool().await;
+        insert_gallery(&pool, "g1", "u1").await;
+        insert_gallery(&pool, "g2", "u1").await;
+        insert_shared_item(
+            &pool,
+            "i1",
+            "g1",
+            "clone-1",
+            "photo-1",
+            "2026-08-01T00:00:00Z",
+        )
+        .await;
+        // A different photo, filed elsewhere. Must not bleed in.
+        insert_shared_item(
+            &pool,
+            "i2",
+            "g2",
+            "clone-2",
+            "photo-2",
+            "2026-08-02T00:00:00Z",
+        )
+        .await;
+
+        let map = memberships_by_clone(&pool, "u1", "g1").await.unwrap();
+
+        assert_eq!(map.get("clone-1").map(Vec::len), Some(1));
+        assert!(
+            !map.contains_key("clone-2"),
+            "a clone the open album does not hold is not this listing's business"
+        );
+    }
+
+    #[tokio::test]
+    async fn membership_naming_is_scoped_to_the_owner() {
+        // Clones are never shared across users, so a foreign row on the same
+        // blob id can only be a bug — and here it would be a *disclosing* one:
+        // the album names in this map are rendered verbatim in a confirmation
+        // dialog, so an unscoped query would print a stranger's album name.
+        let pool = mem_pool().await;
+        insert_gallery(&pool, "mine", "u1").await;
+        insert_gallery(&pool, "theirs", "u2").await;
+        insert_shared_item(
+            &pool,
+            "i1",
+            "mine",
+            "clone-1",
+            "photo-1",
+            "2026-08-01T00:00:00Z",
+        )
+        .await;
+        insert_shared_item(
+            &pool,
+            "i2",
+            "theirs",
+            "clone-1",
+            "photo-1",
+            "2026-08-02T00:00:00Z",
+        )
+        .await;
+
+        let map = memberships_by_clone(&pool, "u1", "mine").await.unwrap();
+
+        assert_eq!(
+            map.get("clone-1"),
+            Some(&vec![("mine".to_string(), "gallery-mine".to_string())]),
+            "only the owner's albums may be named"
+        );
+    }
+
+    #[tokio::test]
+    async fn move_into_an_album_that_already_holds_the_photo_is_detected() {
+        // "At most once per album" is the half of the old invariant that
+        // survives; multi-membership is what makes this reachable via move.
+        let pool = mem_pool().await;
+        insert_gallery(&pool, "src", "u1").await;
+        insert_gallery(&pool, "dst", "u1").await;
+        insert_shared_item(
+            &pool,
+            "i1",
+            "src",
+            "clone-1",
+            "photo-1",
+            "2026-08-01T00:00:00Z",
+        )
+        .await;
+        insert_shared_item(
+            &pool,
+            "i2",
+            "dst",
+            "clone-1",
+            "photo-1",
+            "2026-08-02T00:00:00Z",
+        )
+        .await;
+
+        // The exact predicate move_gallery_item runs.
+        let already: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM encrypted_gallery_items \
+             WHERE gallery_id = ? AND blob_id = ? AND id != ?)",
+        )
+        .bind("dst")
+        .bind("clone-1")
+        .bind("i1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(already, "moving into dst would duplicate the photo there");
+
+        let fresh: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM encrypted_gallery_items \
+             WHERE gallery_id = ? AND blob_id = ? AND id != ?)",
+        )
+        .bind("dst")
+        .bind("clone-2")
+        .bind("i1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(!fresh, "an unrelated photo must still be movable into dst");
+    }
+
+    #[test]
+    fn collapse_folds_multi_album_memberships_into_one_tile() {
+        // Rows arrive added_at DESC, as the query orders them.
+        let rows = vec![
+            feed_row("i2", "clone-1", "g2", "Trip", "2026-08-02T00:00:00Z"),
+            feed_row("i1", "clone-1", "g1", "Private", "2026-08-01T00:00:00Z"),
+        ];
+        let out = collapse_by_clone(&rows);
+
+        assert_eq!(out.len(), 1, "one photo in two albums is ONE tile");
+        assert_eq!(
+            out[0].galleries,
+            vec![("g1", "Private"), ("g2", "Trip")],
+            "every album the photo is in, oldest membership first"
+        );
+        assert_eq!(
+            out[0].rep.id, "i1",
+            "the oldest membership represents the tile, so added_at is when the \
+             photo was secured — not when it was filed into a second album"
+        );
+    }
+
+    #[test]
+    fn collapse_keeps_distinct_photos_distinct() {
+        // Vacuity guard for the test above: collapsing EVERYTHING to a single
+        // tile satisfies `out.len() == 1` while destroying the feed.
+        let rows = vec![
+            feed_row("i2", "clone-2", "g1", "Private", "2026-08-02T00:00:00Z"),
+            feed_row("i1", "clone-1", "g1", "Private", "2026-08-01T00:00:00Z"),
+        ];
+        let out = collapse_by_clone(&rows);
+
+        assert_eq!(out.len(), 2, "two different photos are two tiles");
+        assert_eq!(out[0].rep.id, "i2", "feed order is preserved");
+        assert_eq!(out[1].rep.id, "i1");
+        assert!(
+            out.iter().all(|c| c.galleries.len() == 1),
+            "a photo in one album lists exactly one gallery"
+        );
+    }
+
+    #[test]
+    fn collapse_of_a_single_album_feed_changes_nothing() {
+        // The no-op property: before anyone uses multi-album membership, this
+        // feed must be byte-identical to what it was. If this fails, the
+        // collapse is a regression for every existing library.
+        let rows = vec![
+            feed_row("i3", "clone-3", "g1", "Private", "2026-08-03T00:00:00Z"),
+            feed_row("i2", "clone-2", "g1", "Private", "2026-08-02T00:00:00Z"),
+            feed_row("i1", "clone-1", "g2", "Trip", "2026-08-01T00:00:00Z"),
+        ];
+        let out = collapse_by_clone(&rows);
+
+        assert_eq!(out.len(), 3);
+        let ids: Vec<&str> = out.iter().map(|c| c.rep.id.as_str()).collect();
+        assert_eq!(ids, vec!["i3", "i2", "i1"], "order and count untouched");
+    }
+
+    async fn gallery_of(pool: &SqlitePool, item_id: &str) -> Option<String> {
+        sqlx::query_scalar("SELECT gallery_id FROM encrypted_gallery_items WHERE id = ?")
+            .bind(item_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn migration_032_adds_crop_metadata_column() {
+        // If the column didn't exist this query would error, failing the test.
+        let pool = mem_pool().await;
+        insert_gallery(&pool, "g1", "u1").await;
+        insert_item(&pool, "i1", "g1").await;
+        let crop: Option<String> =
+            sqlx::query_scalar("SELECT crop_metadata FROM encrypted_gallery_items WHERE id = 'i1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(crop.is_none(), "new items start with no crop metadata");
+    }
+
+    #[tokio::test]
+    async fn move_reassigns_gallery_id() {
+        let pool = mem_pool().await;
+        insert_gallery(&pool, "src", "u1").await;
+        insert_gallery(&pool, "dst", "u1").await;
+        insert_item(&pool, "i1", "src").await;
+
+        // The exact statement move_gallery_item runs.
+        let res = sqlx::query(
+            "UPDATE encrypted_gallery_items SET gallery_id = ? WHERE id = ? AND gallery_id = ?",
+        )
+        .bind("dst")
+        .bind("i1")
+        .bind("src")
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(res.rows_affected(), 1);
+        assert_eq!(gallery_of(&pool, "i1").await.as_deref(), Some("dst"));
+    }
+
+    #[tokio::test]
+    async fn move_is_scoped_to_source_gallery() {
+        // A move claiming the wrong source gallery must NOT touch the item — this
+        // is what stops a guessed item id in another gallery being moved.
+        let pool = mem_pool().await;
+        insert_gallery(&pool, "src", "u1").await;
+        insert_gallery(&pool, "dst", "u1").await;
+        insert_item(&pool, "i1", "src").await;
+
+        let res = sqlx::query(
+            "UPDATE encrypted_gallery_items SET gallery_id = ? WHERE id = ? AND gallery_id = ?",
+        )
+        .bind("dst")
+        .bind("i1")
+        .bind("wrong-source")
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(res.rows_affected(), 0, "wrong source must be a no-op");
+        assert_eq!(gallery_of(&pool, "i1").await.as_deref(), Some("src"));
+    }
+
+    #[tokio::test]
+    async fn set_and_clear_crop_metadata() {
+        let pool = mem_pool().await;
+        insert_gallery(&pool, "g1", "u1").await;
+        insert_item(&pool, "i1", "g1").await;
+
+        let json = r#"{"x":0.1,"y":0.1,"width":0.8,"height":0.8,"rotate":90,"brightness":0}"#;
+        let set = sqlx::query(
+            "UPDATE encrypted_gallery_items SET crop_metadata = ? WHERE id = ? AND gallery_id = ?",
+        )
+        .bind(Some(json))
+        .bind("i1")
+        .bind("g1")
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(set.rows_affected(), 1);
+        let stored: Option<String> =
+            sqlx::query_scalar("SELECT crop_metadata FROM encrypted_gallery_items WHERE id = 'i1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(stored.as_deref(), Some(json));
+
+        // Clearing (null) wipes the edit.
+        sqlx::query(
+            "UPDATE encrypted_gallery_items SET crop_metadata = ? WHERE id = ? AND gallery_id = ?",
+        )
+        .bind(Option::<String>::None)
+        .bind("i1")
+        .bind("g1")
+        .execute(&pool)
+        .await
+        .unwrap();
+        let cleared: Option<String> =
+            sqlx::query_scalar("SELECT crop_metadata FROM encrypted_gallery_items WHERE id = 'i1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(cleared.is_none());
+    }
 }

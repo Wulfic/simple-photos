@@ -3,7 +3,9 @@
 use std::net::SocketAddr;
 
 use axum::extract::{ConnectInfo, State};
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::Json;
+use futures_util::stream::Stream;
 use serde_json::{json, Value};
 
 use crate::error::AppError;
@@ -189,6 +191,15 @@ pub async fn activity_status(
             "total": ai_total,
             "done": ai_done,
             "pending": ai_pending_count,
+            // Processor liveness / circuit-breaker telemetry (item #16). A
+            // non-zero consecutive_errors means the breaker is backing the
+            // processor off; last_batch_at lets a client detect a wedged loop.
+            "health": {
+                "consecutive_errors": state.ai_health.consecutive_errors.load(Ordering::Relaxed),
+                "last_batch_at": state.ai_health.last_batch_unix.load(Ordering::Relaxed),
+                "last_batch_ms": state.ai_health.last_batch_ms.load(Ordering::Relaxed),
+                "last_batch_photos": state.ai_health.last_batch_photos.load(Ordering::Relaxed),
+            },
         },
         "geo_progress": {
             "running": geo_running,
@@ -216,6 +227,49 @@ pub async fn activity_status(
             "pending": precise_pending,
         },
     }))
+}
+
+/// GET /api/sync/events?token=<jwt>
+///
+/// Server-Sent Events stream of real-time album/gallery change notifications for
+/// the authenticated user (item #11). Each event's `event:` field is the change
+/// kind (`album` / `photo` / `trash`) and its data is the serialised
+/// [`crate::state::SyncEvent`]. Clients subscribe and refetch the affected data,
+/// giving sub-minute propagation while the app is open; a lagging subscriber
+/// gets a single `resync` event telling it to do a full refetch.
+///
+/// Uses `?token=<jwt>` for auth because `EventSource` can't set headers (same
+/// pattern as the audit-log stream). Events are filtered to the caller's
+/// `user_id`, so a user never sees another user's changes.
+pub async fn sync_events(
+    auth: crate::auth::middleware::AuthUser,
+    State(state): State<AppState>,
+) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
+    use tokio::sync::broadcast::error::RecvError;
+
+    let user_id = auth.user_id.clone();
+    let mut rx = state.sync_tx.subscribe();
+
+    let stream = async_stream::stream! {
+        loop {
+            match rx.recv().await {
+                Ok(ev) => {
+                    if ev.user_id == user_id {
+                        if let Ok(json) = serde_json::to_string(&ev) {
+                            yield Ok(Event::default().event(ev.kind.clone()).data(json));
+                        }
+                    }
+                }
+                Err(RecvError::Lagged(_)) => {
+                    // Fell behind — tell the client to do a full refetch.
+                    yield Ok(Event::default().event("resync").data("{}"));
+                }
+                Err(RecvError::Closed) => break,
+            }
+        }
+    };
+
+    Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
 /// GET /api/discover/info

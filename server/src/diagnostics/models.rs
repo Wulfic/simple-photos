@@ -83,7 +83,7 @@ pub struct DatabaseStats {
     pub freelist_count: i64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct StorageStats {
     /// Total bytes consumed by photo/blob files
     pub total_bytes: u64,
@@ -105,7 +105,15 @@ pub struct UserStats {
 #[derive(Debug, Serialize)]
 pub struct PhotoStats {
     pub total_photos: i64,
+    /// Rows holding an encrypted blob. Must be queried with a predicate — see
+    /// `collect_photo_stats`, where this was a copy of `total_photos`.
     pub encrypted_count: i64,
+    /// Rows with no encrypted blob: the plaintext-at-rest set, parked or not.
+    pub unencrypted_count: i64,
+    /// The subset of `unencrypted_count` that the migration has abandoned and
+    /// nothing will retry. Non-zero here is a standing confidentiality gap, not
+    /// a backlog, and is the number B3a exists to stop hiding.
+    pub parked_count: i64,
     pub total_file_bytes: i64,
     pub total_thumb_bytes: i64,
     pub photos_with_thumbs: i64,
@@ -264,6 +272,14 @@ pub struct AuditLogParams {
     pub limit: Option<u32>,
     /// Filter by source server name.  `"local"` = only this server's events.
     pub source_server: Option<String>,
+    /// Return only failure events (#45).
+    ///
+    /// Applied server-side on purpose. The obvious alternative — let the client
+    /// filter the page it already has — reads "no failures" whenever the most
+    /// recent 100 events happen to be logins, which is a worse answer than no
+    /// filter at all because it looks authoritative. The set comes from
+    /// [`crate::audit::FAILURE_EVENTS`].
+    pub failures_only: Option<bool>,
 }
 
 // ── Server log listing models ─────────────────────────────────────────────

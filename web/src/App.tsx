@@ -2,7 +2,9 @@ import { useEffect, useState, lazy, Suspense } from "react";
 import { BrowserRouter, Routes, Route, Navigate, Outlet } from "react-router-dom";
 import { useAuthStore } from "./store/auth";
 import { useThemeStore } from "./store/theme";
-import { hasCryptoKey, loadKeyFromSession } from "./crypto/crypto";
+import { hasCryptoKey } from "./crypto/crypto";
+import { startKeySessionResponder } from "./crypto/keySession";
+import { restoreKeyOnBoot } from "./crypto/restoreKey";
 import RouteFallback from "./components/RouteFallback";
 
 // Route pages are code-split with React.lazy so the initial bundle only ships
@@ -25,6 +27,8 @@ const Search = lazy(() => import("./pages/Search"));
 const Diagnostics = lazy(() => import("./pages/Diagnostics"));
 const ExportDownloads = lazy(() => import("./pages/ExportDownloads"));
 const CastReceiver = lazy(() => import("./pages/CastReceiver"));
+import useSyncEvents from "./hooks/useSyncEvents";
+import BannerHost from "./components/BannerHost";
 import EncryptionBanner from "./components/EncryptionBanner";
 import ConversionBanner from "./components/ConversionBanner";
 import SavingBanner from "./components/SavingBanner";
@@ -47,6 +51,10 @@ function ProtectedLayout() {
   const [setupChecked, setSetupChecked] = useState(false);
   const [wizardCompleted, setWizardCompleted] = useState(true);
   const [serverUnreachable, setServerUnreachable] = useState(false);
+
+  // Subscribe to the server's real-time album/gallery change stream so this
+  // client refetches within seconds of a change made elsewhere (item #11).
+  useSyncEvents();
 
   useEffect(() => {
     fetch("/api/setup/status")
@@ -108,6 +116,9 @@ function ProtectedLayout() {
   return (
     <>
       <ToastHost />
+      {/* Single fixed container all progress banners portal into — see item #3.
+          Must render before the banners so the portal target exists. */}
+      <BannerHost />
       <ConversionBanner />
       <EncryptionBanner />
       <AiBanner />
@@ -198,6 +209,10 @@ function RootRedirect() {
   return <Navigate to={target} replace />;
 }
 
+/** How long boot waits for the encryption key to be restored from the keystore
+ *  before giving up and rendering anyway (see the restore in [App]). */
+const KEY_RESTORE_TIMEOUT_MS = 3000;
+
 /** Minimal full-screen fallback for the outer Suspense boundary (public/guard
  * route chunks). Mirrors the existing setup-check spinner. */
 function BootFallback() {
@@ -211,6 +226,7 @@ function BootFallback() {
 export default function App() {
   const { loadFromStorage } = useAuthStore();
   const { theme } = useThemeStore();
+  const [keyReady, setKeyReady] = useState(false);
 
   // Apply dark class to <html> element
   useEffect(() => {
@@ -224,8 +240,51 @@ export default function App() {
 
   useEffect(() => {
     loadFromStorage();
-    loadKeyFromSession();
+
+    // Vouch for this tab's session while it holds the key, so a tab opened
+    // later can adopt it rather than re-deriving from the password (#21).
+    const stopResponder = startKeySessionResponder(hasCryptoKey);
+
+    // A reload — or a window.open'd tab, which inherits a copy of
+    // sessionStorage — still has the key flag and loads the key directly. A
+    // hand-opened tab has no flag: the key is in IndexedDB, but adopting it
+    // needs a live peer to confirm the session is still running.
+    const restore = restoreKeyOnBoot({
+      isAuthenticated: useAuthStore.getState().isAuthenticated,
+    });
+
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+
+    // The restore reads IndexedDB, and it now gates the first render — so a
+    // keystore that never answers (corrupt IDB, a blocked upgrade) must not
+    // mean a permanent spinner. On timeout we render anyway and degrade to the
+    // previous behavior: the sessionStorage flag decides what the pages do, and
+    // encrypt/decrypt re-await the load on demand.
+    const bootGuard = new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
+        console.error("Encryption-key restore timed out on boot — rendering without it");
+        resolve();
+      }, KEY_RESTORE_TIMEOUT_MS);
+    });
+
+    Promise.race([restore, bootGuard]).finally(() => {
+      clearTimeout(timer);
+      if (!cancelled) setKeyReady(true);
+    });
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      stopResponder();
+    };
   }, []);
+
+  // Pages decide whether to bounce to /setup by reading the key synchronously
+  // (hasCryptoKey), so nothing may render until the restore above settles —
+  // otherwise a tab adopting a peer's key would race its own gallery to the
+  // password screen.
+  if (!keyReady) return <BootFallback />;
 
   return (
     <BrowserRouter>

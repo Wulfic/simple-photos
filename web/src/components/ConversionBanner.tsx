@@ -13,15 +13,22 @@ import { useProcessingStore } from "../store/processing";
 import { ProgressBanner } from "./ProgressBanner";
 import { formatEta } from "../utils/formatters";
 
+/** Show the manual "Reset" affordance once a conversion has made zero progress
+ *  for this long. Far shorter than the server watchdog's 2h auto-recovery so an
+ *  operator watching the banner can unstick it immediately (#18). */
+const STALL_HINT_MS = 3 * 60 * 1000;
+
 export default function ConversionBanner() {
   const [dismissed, setDismissed] = useState(false);
   const [counts, setCounts] = useState<{ total: number; done: number } | null>(null);
   const [eta, setEta] = useState<string | null>(null);
+  const [stalled, setStalled] = useState(false);
+  const [resetting, setResetting] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Track when `done` last advanced so we can detect a wedged pass client-side
+  // without trusting cross-machine clocks.
+  const progressRef = useRef<{ done: number; at: number }>({ done: -1, at: Date.now() });
   const { startTask, endTask } = useProcessingStore();
-
-  const batchStartRef = useRef(0);
-  const prevDoneRef = useRef(0);
 
   const poll = useCallback(async () => {
     try {
@@ -30,34 +37,49 @@ export default function ConversionBanner() {
       if (!res.active || res.total === 0) {
         setCounts(null);
         setEta(null);
+        setStalled(false);
+        progressRef.current = { done: -1, at: Date.now() };
         endTask("conversion");
-        batchStartRef.current = 0;
-        prevDoneRef.current = 0;
         return;
       }
 
-      // New batch detected
-      if (batchStartRef.current === 0 && res.done === 0) {
-        batchStartRef.current = Date.now();
-      }
-
-      setCounts({ total: res.total, done: Math.min(res.done, res.total) });
+      const done = Math.min(res.done, res.total);
+      setCounts({ total: res.total, done });
       startTask("conversion");
 
-      // ETA estimation
-      if (res.done > 0 && batchStartRef.current > 0) {
-        const elapsedMs = Date.now() - batchStartRef.current;
-        const msPerItem = elapsedMs / res.done;
-        const remaining = res.total - res.done;
-        const remainingSec = Math.max(0, (remaining * msPerItem) / 1000);
-        setEta(formatEta(remainingSec));
+      // Client-side stall detection: if `done` hasn't advanced in STALL_HINT_MS
+      // while still active, surface the manual reset button.
+      if (done !== progressRef.current.done) {
+        progressRef.current = { done, at: Date.now() };
+        setStalled(false);
+      } else if (Date.now() - progressRef.current.at > STALL_HINT_MS) {
+        setStalled(true);
       }
 
-      prevDoneRef.current = res.done;
+      // ETA is server-authoritative (item #4), so there is no client-side clock
+      // to drift. Since #40 it is *not* the encryption banner's estimator: the
+      // conversion queue deliberately mixes categories whose per-item costs
+      // differ by orders of magnitude, so it uses the work-weighted,
+      // per-category one instead (server `progress::ConversionEta`).
+      setEta(res.eta_seconds != null ? formatEta(res.eta_seconds) : null);
     } catch {
       // Non-critical — will retry on next interval
     }
   }, [startTask, endTask]);
+
+  const handleReset = useCallback(async () => {
+    setResetting(true);
+    try {
+      await api.admin.conversionReset();
+      setStalled(false);
+      progressRef.current = { done: -1, at: Date.now() };
+      await poll();
+    } catch {
+      // Best-effort — the server watchdog remains the backstop.
+    } finally {
+      setResetting(false);
+    }
+  }, [poll]);
 
   useEffect(() => {
     poll();
@@ -82,8 +104,19 @@ export default function ConversionBanner() {
       id="conversion"
       tone="orange"
       label={`Converting media… ${counts.done}/${counts.total}`}
+      description={stalled ? "This conversion looks stuck." : undefined}
       eta={eta}
       pct={pct}
+      action={
+        stalled
+          ? {
+              label: "Reset stuck conversion",
+              busyLabel: "Resetting…",
+              busy: resetting,
+              onClick: handleReset,
+            }
+          : undefined
+      }
       onDismiss={() => setDismissed(true)}
     />
   );

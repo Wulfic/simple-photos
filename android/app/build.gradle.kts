@@ -14,8 +14,8 @@ android {
         applicationId = "com.simplephotos"
         minSdk = 26
         targetSdk = 34
-        versionCode = 132
-        versionName = "1.5.1"
+        versionCode = 137
+        versionName = "1.7.1"
         testInstrumentationRunner = "com.simplephotos.HiltTestRunner"
     }
 
@@ -67,6 +67,21 @@ android {
 
     buildFeatures {
         compose = true
+        // Needed so the About screen can read VERSION_NAME/VERSION_CODE from
+        // BuildConfig instead of a hardcoded string that never tracked the
+        // bump-version script (AGP 8+ defaults buildConfig to false).
+        buildConfig = true
+    }
+
+    testOptions {
+        unitTests {
+            // android.util.Log is a stub in android.jar that THROWS when a JVM
+            // unit test calls it. Every recovery path in this codebase logs
+            // before degrading, so without this a test that exercises one dies
+            // on the log line instead of asserting the recovery — which is the
+            // half worth testing. Returning defaults makes Log a no-op there.
+            isReturnDefaultValues = true
+        }
     }
 }
 
@@ -149,6 +164,12 @@ dependencies {
 
     // Local unit tests
     testImplementation("junit:junit:4.13.2")
+    // org.json ships in android.jar as stubs that throw when called from a JVM
+    // unit test, so the album-manifest format — the entire cross-platform
+    // contract with the web client — would be untestable without a real
+    // implementation on the test classpath. Test-only: the device uses the
+    // platform's.
+    testImplementation("org.json:json:20240303")
 
     // Testing
     androidTestImplementation(platform(libs.compose.bom))

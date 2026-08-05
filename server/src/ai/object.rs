@@ -12,7 +12,9 @@ use crate::ai::imagenet_labels::{self, IMAGENET_LABELS};
 use crate::ai::models::{BoundingBox, ObjectDetection};
 use image::{imageops::FilterType, DynamicImage, GenericImageView};
 use std::path::Path;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
+
+use crate::ai::session::SessionPool;
 
 use ort::session::Session;
 use tracing;
@@ -42,7 +44,7 @@ const TOP_K: usize = 5;
 
 // ── Model singleton ─────────────────────────────────────────────────
 
-static CLS_MODEL: OnceLock<Option<Arc<Mutex<Session>>>> = OnceLock::new();
+static CLS_MODEL: OnceLock<Option<Arc<SessionPool>>> = OnceLock::new();
 
 // ── Initialisation ──────────────────────────────────────────────────
 
@@ -70,9 +72,9 @@ pub fn init_classification_model(model_dir: &str) {
             }
         }
         match load_onnx_cls(&p) {
-            Ok(session) => {
+            Ok(pool) => {
                 tracing::info!("MobileNetV2 classification model loaded from {:?}", p);
-                Some(Arc::new(Mutex::new(session)))
+                Some(Arc::new(pool))
             }
             Err(e) => {
                 tracing::warn!(
@@ -113,8 +115,8 @@ fn download_model(url: &str, dest: &Path, min_size: usize) -> Result<(), String>
     Ok(())
 }
 
-fn load_onnx_cls(path: &Path) -> anyhow::Result<Session> {
-    crate::ai::session::build_session(path)
+fn load_onnx_cls(path: &Path) -> anyhow::Result<SessionPool> {
+    crate::ai::session::build_session_pool(path)
 }
 
 // ── MobileNetV2 classification ──────────────────────────────────────
@@ -236,7 +238,8 @@ pub fn detect_objects_with_quality(
 
     // ── Phase 1: MobileNetV2 classification (if model available) ─────
     let model_used = if let Some(Some(model)) = CLS_MODEL.get() {
-        let mut session = model.lock().unwrap_or_else(|p| p.into_inner());
+        let handle = model.acquire();
+        let mut session = handle.lock().unwrap_or_else(|p| p.into_inner());
         match classify_mobilenet(img, min_confidence, &mut session) {
             Ok(model_dets) => {
                 tracing::debug!(
@@ -873,7 +876,8 @@ fn compute_region_edge_density(
 ///
 /// Returns `None` when the model is not loaded (degraded / heuristic-only mode).
 pub fn extract_raw_logits(img: &DynamicImage) -> Option<Vec<f32>> {
-    let model_arc = CLS_MODEL.get()?.as_ref()?;
+    let model_pool = CLS_MODEL.get()?.as_ref()?;
+    let model_arc = model_pool.acquire();
     let mut session = model_arc.lock().unwrap_or_else(|p| p.into_inner());
 
     let resized = img.resize_exact(CLS_WIDTH as u32, CLS_HEIGHT as u32, FilterType::Triangle);

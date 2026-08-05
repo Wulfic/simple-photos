@@ -12,7 +12,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -39,6 +43,10 @@ internal fun SecureItemTile(
     var bitmap by remember(item.blobId) { mutableStateOf<android.graphics.Bitmap?>(null) }
     var gifBytes by remember(item.blobId) { mutableStateOf<ByteArray?>(null) }
     var loading by remember(item.blobId) { mutableStateOf(true) }
+
+    // Apply the secure item's own crop non-destructively at draw time (#31),
+    // exactly like the main gallery tile — no re-decode of the encrypted blob.
+    val crop = rememberSecureTileCrop(item.cropMetadata)
 
     LaunchedEffect(item.blobId) {
         loading = true
@@ -83,14 +91,16 @@ internal fun SecureItemTile(
                     crossfade = false,
                 ),
                 contentDescription = "Secure photo",
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop
+                modifier = Modifier.fillMaxSize().then(crop.modifier),
+                contentScale = crop.scale,
+                colorFilter = crop.colorFilter,
             )
             bitmap != null -> Image(
                 bitmap = bitmap!!.asImageBitmap(),
                 contentDescription = "Secure photo",
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop
+                modifier = Modifier.fillMaxSize().then(crop.modifier),
+                contentScale = crop.scale,
+                colorFilter = crop.colorFilter,
             )
             else -> {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {

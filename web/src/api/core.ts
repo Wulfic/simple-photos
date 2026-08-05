@@ -18,6 +18,39 @@ export const BASE = "/api";
  * - Never logs tokens
  */
 
+/**
+ * An HTTP error from the API, carrying the status code alongside the message.
+ *
+ * Subclasses `Error` and keeps `message` exactly as before, so every existing
+ * `catch (err) { getErrorMessage(err) }` site is unaffected — this only *adds*
+ * information that used to be thrown away.
+ *
+ * It exists because some non-2xx responses are not failures. A 409 from a secure
+ * add means "already in that album", which is a no-op the caller should report
+ * as such. The alternative was to match on the message text — a string authored
+ * in Rust and compared in TypeScript, i.e. one fact derived in two languages
+ * with nothing to keep them in step. Reading the status is the same information
+ * without the drift.
+ */
+export class ApiError extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
+/** True when `err` is an API error with the given HTTP status. */
+export function isHttpStatus(err: unknown, status: number): boolean {
+  return err instanceof ApiError && err.status === status;
+}
+
+/** True when `err` is a 409 Conflict — "this already exists", not a failure. */
+export function isConflict(err: unknown): boolean {
+  return isHttpStatus(err, 409);
+}
+
 // ── Single-flight refresh deduplication ──────────────────────────────────────
 // If multiple requests 401 at the same time, only one refresh attempt runs.
 let refreshPromise: Promise<boolean> | null = null;
@@ -146,7 +179,7 @@ export async function request<T>(
     }
     // codeql[js/tainted-format-string] -- path is an internal API route, rawText is server response; neither is a user-controlled format string
     console.error(`[API] ${options.method || "GET"} ${path} failed: ${res.status}`, rawText.substring(0, 500)); // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
-    throw new Error(errorMessage);
+    throw new ApiError(errorMessage, res.status);
   }
 
   if (res.status === 204) return undefined as T;

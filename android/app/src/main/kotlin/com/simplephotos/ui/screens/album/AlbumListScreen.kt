@@ -25,10 +25,13 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import coil.compose.AsyncImage
 import com.simplephotos.ui.components.rememberThumbnailRequest
 import com.simplephotos.data.local.entities.AlbumEntity
@@ -70,6 +73,20 @@ fun AlbumListScreen(
     // Load cover photos whenever the albums list changes
     LaunchedEffect(albums) {
         viewModel.loadCoverPhotos(albums)
+    }
+
+    // Re-sync albums + recompute smart counts on resume so changes made
+    // elsewhere (e.g. an album created on the web) appear when the user returns
+    // to the app, instead of only on a cold start (issue #12).
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                viewModel.refresh()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     Scaffold(
@@ -176,6 +193,13 @@ fun AlbumListScreen(
                                 is AlbumGridItem.UserAlbum -> {
                                     AlbumCard(
                                         album = item.album,
+                                        // Fall back to the last count we computed and
+                                        // persisted: on a cold start the mirror hasn't
+                                        // loaded, so the live count isn't available yet
+                                        // and the tile would otherwise flash 0 before
+                                        // settling on the real number.
+                                        count = viewModel.albumCounts[item.album.localId]
+                                            ?: item.album.cachedCount,
                                         coverPhoto = viewModel.albumCoverPhotos[item.album.localId],
                                         serverBaseUrl = viewModel.serverBaseUrl,
                                         onClick = { onAlbumClick(item.album.localId) }
@@ -439,6 +463,7 @@ fun AlbumListScreen(
 @Composable
 private fun AlbumCard(
     album: AlbumEntity,
+    count: Int? = null,
     coverPhoto: PhotoEntity? = null,
     serverBaseUrl: String = "",
     onClick: () -> Unit = {}
@@ -496,6 +521,17 @@ private fun AlbumCard(
                 style = MaterialTheme.typography.titleSmall,
                 maxLines = 1
             )
+            // Member count badge (secure-excluded) — regular album tiles had no
+            // count before (#12). Hidden until the count resolves so the tile
+            // doesn't flash a wrong number.
+            if (count != null) {
+                Text(
+                    "$count item${if (count != 1) "s" else ""}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1
+                )
+            }
         }
     }
 }

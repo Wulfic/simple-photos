@@ -141,4 +141,31 @@ export const geoApi = {
   /** List photos in a specific trip */
   listTripPhotos: (tripId: string) =>
     request<PhotoSummary[]>(`/geo/trips/${encodeURIComponent(tripId)}/photos`),
+
+  /** Get the effective home location (manual override or inferred). */
+  getHome: () => request<HomeResponse>("/geo/home"),
+
+  /** Set a manual home city override (excluded from trip detection). */
+  setHome: (body: { city: string; state?: string | null; country_code?: string | null }) =>
+    request<HomeResponse>("/geo/home", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+
+  /** Clear the manual home override (revert to the inferred city). */
+  clearHome: () => request<HomeResponse>("/geo/home", { method: "DELETE" }),
 };
+
+export interface HomeCity {
+  city: string;
+  state: string | null;
+  country_code: string;
+}
+
+export interface HomeResponse {
+  /** Effective home: manual override if set, otherwise inferred. */
+  home: HomeCity | null;
+  source: "manual" | "inferred" | "none";
+  /** Inferred home regardless of override, for the settings UI hint. */
+  inferred: HomeCity | null;
+}

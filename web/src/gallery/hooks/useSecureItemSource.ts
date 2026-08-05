@@ -41,7 +41,6 @@ export function useSecureItemSource(item: GalleryItem): {
     encryptedThumbBlobId: item.encrypted_thumb_blob_id ?? undefined,
     serverPhotoId: cachedPhoto?.serverPhotoId,
     serverSide: cachedPhoto?.serverSide,
-    thumbnailData: cachedPhoto?.thumbnailData,
     thumbnailMimeType: cachedPhoto?.thumbnailMimeType,
   };
 

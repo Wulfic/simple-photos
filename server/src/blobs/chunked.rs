@@ -39,7 +39,7 @@
 //! decrypt each frame with the same single-frame primitive they already ship —
 //! they just loop over the length-prefixed frames.
 
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use sha2::{Digest, Sha256};
@@ -272,6 +272,148 @@ fn decrypt_blob_file_to_file_inner(key: &[u8; 32], src: &Path, dst: &Path) -> Re
     }
 }
 
+/// Per-frame ciphertext overhead: 12-byte nonce + 16-byte AES-GCM tag.
+const FRAME_OVERHEAD: u64 = 12 + 16;
+
+/// On-disk size of one length-prefixed frame whose plaintext is exactly
+/// [`CHUNK_SIZE`] bytes: 4-byte BE length prefix + nonce + ciphertext (== the
+/// plaintext length for AES-GCM) + tag. Only the *final* frame may be shorter,
+/// so every frame before the last has exactly this on-disk size — which lets us
+/// seek to any frame in O(1) without an explicit offset index.
+const FULL_FRAME_DISK_SIZE: u64 = 4 + FRAME_OVERHEAD + CHUNK_SIZE as u64;
+
+/// Read the header of a v2 chunked blob `f` (positioned at byte 0) and return
+/// the byte offset at which the first chunk frame begins. Verifies [`MAGIC`].
+fn read_header_chunks_start(f: &mut std::fs::File) -> Result<u64, String> {
+    let mut magic = [0u8; MAGIC.len()];
+    f.read_exact(&mut magic)
+        .map_err(|e| format!("read magic: {e}"))?;
+    if magic != MAGIC {
+        return Err("not a chunked v2 blob".into());
+    }
+    let mut len_buf = [0u8; 4];
+    f.read_exact(&mut len_buf)
+        .map_err(|e| format!("read meta len: {e}"))?;
+    let meta_len = u32::from_be_bytes(len_buf) as u64;
+    Ok(MAGIC.len() as u64 + 4 + meta_len)
+}
+
+/// Compute the total *plaintext* length of a v2 chunked blob file without
+/// decrypting anything: walk the length-prefixed frames, summing
+/// `ciphertext_len - FRAME_OVERHEAD` per frame. Only 4 bytes are read per frame
+/// (the rest is `seek`-skipped). **Blocking** — run inside `spawn_blocking`.
+///
+/// Needed because `photos.size_bytes` is stored as `0` for encrypted-mode media,
+/// so the serve layer cannot learn the media length any other way.
+pub fn plaintext_len_from_file(src: &Path) -> Result<u64, String> {
+    let mut f = std::fs::File::open(src).map_err(|e| format!("open blob: {e}"))?;
+    let chunks_start = read_header_chunks_start(&mut f)?;
+    f.seek(SeekFrom::Start(chunks_start))
+        .map_err(|e| format!("seek chunks: {e}"))?;
+
+    let mut total: u64 = 0;
+    let mut len_buf = [0u8; 4];
+    loop {
+        if !read_len_or_eof(&mut f, &mut len_buf).map_err(|e| format!("frame len: {e}"))? {
+            break;
+        }
+        let frame_len = u32::from_be_bytes(len_buf) as u64;
+        total += frame_len.saturating_sub(FRAME_OVERHEAD);
+        f.seek(SeekFrom::Current(frame_len as i64))
+            .map_err(|e| format!("seek frame: {e}"))?;
+    }
+    Ok(total)
+}
+
+/// Decrypt only the plaintext byte range `[start, end_inclusive]` of a v2
+/// chunked blob file, reading just the overlapping chunk frames from disk.
+///
+/// Peak memory is bounded to roughly the requested range plus one chunk, so a
+/// multi-gigabyte video is never loaded or decrypted in full. This is what makes
+/// HTTP Range requests (video seeking, download resume) fast and memory-safe.
+/// **Blocking** — run inside `spawn_blocking`.
+pub fn decrypt_chunked_range_from_file(
+    key: &[u8; 32],
+    src: &Path,
+    start: u64,
+    end_inclusive: u64,
+) -> Result<Vec<u8>, String> {
+    if end_inclusive < start {
+        return Ok(Vec::new());
+    }
+    let mut f = std::fs::File::open(src).map_err(|e| format!("open blob: {e}"))?;
+    let chunks_start = read_header_chunks_start(&mut f)?;
+
+    let chunk = CHUNK_SIZE as u64;
+    let first_frame = start / chunk;
+    let frame_disk_off = chunks_start + first_frame * FULL_FRAME_DISK_SIZE;
+    f.seek(SeekFrom::Start(frame_disk_off))
+        .map_err(|e| format!("seek: {e}"))?;
+
+    let want = (end_inclusive - start + 1) as usize;
+    let mut out: Vec<u8> = Vec::with_capacity(want.min(CHUNK_SIZE * 2));
+    let mut frame_idx = first_frame;
+    let mut len_buf = [0u8; 4];
+
+    loop {
+        if !read_len_or_eof(&mut f, &mut len_buf).map_err(|e| format!("frame len: {e}"))? {
+            break; // ran off the end of the data
+        }
+        let frame_len = u32::from_be_bytes(len_buf) as usize;
+        let mut frame = vec![0u8; frame_len];
+        f.read_exact(&mut frame)
+            .map_err(|e| format!("read frame: {e}"))?;
+        let plain = crypto::decrypt(key, &frame)?;
+
+        let frame_plain_start = frame_idx * chunk;
+        let frame_plain_end = frame_plain_start + plain.len() as u64; // exclusive
+        let ov_start = start.max(frame_plain_start);
+        let ov_end = (end_inclusive + 1).min(frame_plain_end); // exclusive
+        if ov_start < ov_end {
+            let lo = (ov_start - frame_plain_start) as usize;
+            let hi = (ov_end - frame_plain_start) as usize;
+            out.extend_from_slice(&plain[lo..hi]);
+        }
+        if frame_plain_end > end_inclusive {
+            break; // requested range fully covered
+        }
+        frame_idx += 1;
+    }
+    Ok(out)
+}
+
+/// Stream-decrypt a v2 chunked blob file, invoking `sink` with each plaintext
+/// chunk in order. Stops early if `sink` returns `false` (receiver dropped).
+/// Peak memory is one chunk — used to serve a full encrypted video as a 200
+/// response without ever holding the whole file in memory. **Blocking** — run
+/// inside `spawn_blocking`.
+pub fn for_each_plaintext_chunk<F: FnMut(Vec<u8>) -> bool>(
+    key: &[u8; 32],
+    src: &Path,
+    mut sink: F,
+) -> Result<(), String> {
+    let mut f = std::fs::File::open(src).map_err(|e| format!("open blob: {e}"))?;
+    let chunks_start = read_header_chunks_start(&mut f)?;
+    f.seek(SeekFrom::Start(chunks_start))
+        .map_err(|e| format!("seek chunks: {e}"))?;
+
+    let mut len_buf = [0u8; 4];
+    loop {
+        if !read_len_or_eof(&mut f, &mut len_buf).map_err(|e| format!("frame len: {e}"))? {
+            break;
+        }
+        let frame_len = u32::from_be_bytes(len_buf) as usize;
+        let mut frame = vec![0u8; frame_len];
+        f.read_exact(&mut frame)
+            .map_err(|e| format!("read frame: {e}"))?;
+        let plain = crypto::decrypt(key, &frame)?;
+        if !sink(plain) {
+            break;
+        }
+    }
+    Ok(())
+}
+
 fn decrypt_chunked_to_bytes(key: &[u8; 32], enc: &[u8]) -> Result<Vec<u8>, String> {
     let mut cur = MAGIC.len();
     // Skip the metadata frame — callers wanting media bytes don't need it.
@@ -468,6 +610,57 @@ mod tests {
         for p in [&blob, &out] {
             let _ = std::fs::remove_file(p);
         }
+    }
+
+    #[test]
+    fn ranged_decrypt_matches_full() {
+        let key = [0x88u8; 32]; // codeql[rust/hard-coded-cryptographic-value] -- test fixture
+                                // 3 full chunks + a partial trailing chunk.
+        let total = CHUNK_SIZE * 3 + 777;
+        let mut data = Vec::with_capacity(total);
+        for i in 0..total {
+            data.push((i as u8).wrapping_mul(53).wrapping_add(11));
+        }
+        let src = tmp_path("rng_src.bin");
+        let dst = tmp_path("rng_dst.spb2");
+        std::fs::write(&src, &data).unwrap();
+        encrypt_file_chunked(&key, &src, &dst, b"{\"v\":2,\"data_len\":1}").unwrap();
+
+        // Plaintext length is recoverable without decrypting.
+        assert_eq!(plaintext_len_from_file(&dst).unwrap(), total as u64);
+
+        // Exercise ranges that cross frame boundaries, sit inside one frame,
+        // touch byte 0, and end exactly at EOF.
+        let cases: &[(u64, u64)] = &[
+            (0, 0),
+            (0, 10),
+            (0, CHUNK_SIZE as u64 - 1),
+            (CHUNK_SIZE as u64 - 5, CHUNK_SIZE as u64 + 5),
+            (CHUNK_SIZE as u64, CHUNK_SIZE as u64 * 2 + 3),
+            (CHUNK_SIZE as u64 * 3, total as u64 - 1),
+            (total as u64 - 1, total as u64 - 1),
+            (123, total as u64 - 1),
+        ];
+        for &(start, end) in cases {
+            let got = decrypt_chunked_range_from_file(&key, &dst, start, end).unwrap();
+            assert_eq!(
+                got,
+                &data[start as usize..=end as usize],
+                "range {start}..={end}"
+            );
+        }
+
+        // for_each_plaintext_chunk reassembles the whole file.
+        let mut whole = Vec::new();
+        for_each_plaintext_chunk(&key, &dst, |c| {
+            whole.extend_from_slice(&c);
+            true
+        })
+        .unwrap();
+        assert_eq!(whole, data);
+
+        let _ = std::fs::remove_file(&src);
+        let _ = std::fs::remove_file(&dst);
     }
 
     #[test]

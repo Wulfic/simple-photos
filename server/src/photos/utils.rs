@@ -104,6 +104,73 @@ pub fn normalize_iso_timestamp(ts: &str) -> String {
     ts.to_string()
 }
 
+/// Resolve the canonical `taken_at` for an uploaded photo from every available
+/// signal, in offset-aware priority order. Extracted from the upload handler so
+/// the ordering is unit-testable and lives in exactly one place (the previous
+/// inline version silently let an assume-UTC EXIF guess beat a zone-correct
+/// Google Takeout epoch, shifting many photos to the wrong day):
+///
+///   1. EXIF `DateTimeOriginal` **with** a real capture-zone offset — an
+///      unambiguous true instant from the camera; always wins.
+///   2. `sidecar_taken` (Google Takeout `photoTakenTime`, a true UTC epoch) —
+///      beats an offset-less EXIF value, which was only *assumed* to be UTC.
+///   3. EXIF `DateTimeOriginal` **without** an offset (assume-UTC) — still far
+///      better than the file mtime for chronological placement.
+///   4. `file_modified` (the browser File's `lastModified`).
+///   5. `fallback` (typically the upload time).
+///
+/// Every non-empty candidate is normalised to canonical ISO-8601 UTC via
+/// [`normalize_iso_timestamp`] so the result sorts correctly in SQLite.
+pub fn resolve_upload_taken_at(
+    exif_taken: Option<&str>,
+    exif_has_offset: bool,
+    sidecar_taken: Option<&str>,
+    file_modified: Option<&str>,
+    fallback: &str,
+) -> String {
+    resolve_taken_at(exif_taken, exif_has_offset, sidecar_taken, file_modified)
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+/// Same offset-aware priority as [`resolve_upload_taken_at`] but returns `None`
+/// when no signal carries a usable capture date (rather than substituting a
+/// fallback). The filesystem-scan import paths ([`crate::photos::register`])
+/// want this: a missing `taken_at` is left NULL so gallery sorting falls back to
+/// `created_at`, and — crucially for Google Takeout — the sidecar's
+/// `photoTakenTime` beats the file mtime, which for an unzipped Takeout is the
+/// *extraction* date, not the capture date. Every non-empty candidate is
+/// normalised to canonical ISO-8601 UTC so the result sorts correctly in SQLite.
+pub fn resolve_taken_at(
+    exif_taken: Option<&str>,
+    exif_has_offset: bool,
+    sidecar_taken: Option<&str>,
+    file_modified: Option<&str>,
+) -> Option<String> {
+    let exif = exif_taken
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(normalize_iso_timestamp);
+    let sidecar = sidecar_taken
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(normalize_iso_timestamp);
+
+    let chosen = if exif_has_offset {
+        // (1) zone-correct EXIF always wins.
+        exif
+    } else {
+        // (2) sidecar epoch beats assume-UTC EXIF; (3) fall back to that EXIF.
+        sidecar.or(exif)
+    };
+
+    chosen.or_else(|| {
+        file_modified
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(normalize_iso_timestamp)
+    })
+}
+
 /// Read the `audio_backup_enabled` server setting.
 ///
 /// Returns `false` when the setting is unset, malformed, or the query fails —
@@ -147,4 +214,116 @@ pub async fn compute_photo_hash_streaming(path: &Path) -> Option<String> {
         hasher.update(&buf[..n]);
     }
     Some(hex::encode(&hasher.finalize()[..6]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FALLBACK: &str = "2026-07-03T00:00:00.000Z";
+
+    #[test]
+    fn zoned_exif_always_wins_over_sidecar() {
+        // A modern phone writes OffsetTimeOriginal → the EXIF instant is
+        // unambiguous and must beat the Takeout sidecar.
+        let got = resolve_upload_taken_at(
+            Some("2021-06-01T12:00:00+00:00"), // already-UTC EXIF instant
+            true,                              // had a real offset
+            Some("1609459200"),                // sidecar epoch (2021-01-01) — ignored
+            None,
+            FALLBACK,
+        );
+        assert_eq!(got, "2021-06-01T12:00:00.000Z");
+    }
+
+    #[test]
+    fn sidecar_epoch_beats_offsetless_exif() {
+        // THE regression guard: offset-less EXIF was only *assumed* UTC, so the
+        // zone-correct Google Takeout epoch must win instead.
+        let got = resolve_upload_taken_at(
+            Some("2021-06-01T21:00:00Z"), // assume-UTC EXIF (local wall-clock)
+            false,                        // NO offset
+            Some("1622574000"),           // 2021-06-01T19:00:00Z (true instant)
+            None,
+            FALLBACK,
+        );
+        assert_eq!(got, "2021-06-01T19:00:00.000Z", "sidecar epoch wins");
+    }
+
+    #[test]
+    fn offsetless_exif_used_when_no_sidecar() {
+        // Plain manual upload, EXIF but no offset and no sidecar → keep EXIF
+        // (still far better than the file mtime).
+        let got = resolve_upload_taken_at(
+            Some("2021-06-01T21:00:00Z"),
+            false,
+            None,
+            Some("2020-01-01T00:00:00Z"),
+            FALLBACK,
+        );
+        assert_eq!(got, "2021-06-01T21:00:00.000Z");
+    }
+
+    #[test]
+    fn file_modified_used_when_no_exif_or_sidecar() {
+        let got =
+            resolve_upload_taken_at(None, false, None, Some("2020-01-01T00:00:00Z"), FALLBACK);
+        assert_eq!(got, "2020-01-01T00:00:00.000Z");
+    }
+
+    #[test]
+    fn empty_candidates_are_ignored_and_fall_through_to_fallback() {
+        // Blank header values must not be treated as a real timestamp.
+        let got = resolve_upload_taken_at(Some("   "), false, Some(""), Some(""), FALLBACK);
+        assert_eq!(got, FALLBACK);
+    }
+
+    #[test]
+    fn legacy_formats_sort_wrong_as_strings_but_right_after_normalization() {
+        // Issue #13 root cause: the gallery orders with a *string*
+        // `ORDER BY COALESCE(taken_at, created_at)`. A legacy raw-EXIF value
+        // ("2021:01:15 …", colon 0x3A) and a canonical one ("2021-12-31 …",
+        // dash 0x2D) sort by the wrong character, so a January photo lands
+        // after a December one. Prove the raw comparison is broken and that
+        // normalization restores chronological string order.
+        let jan_raw = "2021:01:15 09:00:00"; // earlier instant, legacy EXIF form
+        let dec_canonical = "2021-12-31T23:00:00.000Z"; // later instant, canonical
+        assert!(
+            jan_raw > dec_canonical,
+            "the bug: raw-EXIF January must (wrongly) sort after canonical December as strings"
+        );
+
+        let jan_norm = normalize_iso_timestamp(jan_raw);
+        let dec_norm = normalize_iso_timestamp(dec_canonical);
+        assert_eq!(jan_norm, "2021-01-15T09:00:00.000Z");
+        assert_eq!(dec_norm, "2021-12-31T23:00:00.000Z");
+        assert!(
+            jan_norm < dec_norm,
+            "after normalization January must sort before December"
+        );
+    }
+
+    #[test]
+    fn bare_rfc3339_mtime_matches_canonical_shape_after_normalization() {
+        // The exact takeout.rs regression: a chrono `to_rfc3339()` mtime
+        // ("…+00:00", seconds precision) must land on the same canonical shape
+        // every other write path produces, so same-instant rows don't split
+        // into two sort buckets.
+        assert_eq!(
+            normalize_iso_timestamp("2026-07-04T00:00:00+00:00"),
+            "2026-07-04T00:00:00.000Z"
+        );
+    }
+
+    #[test]
+    fn blank_sidecar_falls_back_to_offsetless_exif() {
+        let got = resolve_upload_taken_at(
+            Some("2021-06-01T21:00:00Z"),
+            false,
+            Some("   "), // blank sidecar → skipped, not chosen over EXIF
+            None,
+            FALLBACK,
+        );
+        assert_eq!(got, "2021-06-01T21:00:00.000Z");
+    }
 }

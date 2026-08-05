@@ -328,7 +328,7 @@ export default function Slideshow({
           showControls ? "opacity-100" : "opacity-0 pointer-events-none"
         }`}
       >
-        <div className="bg-gradient-to-t from-black/80 to-transparent pt-12 pb-4 px-4">
+        <div className="bg-gradient-to-t from-black/80 to-transparent pt-12 safe-pb-4 px-4 safe-px">
           {/* Progress indicator */}
           <div className="text-center text-white/70 text-xs mb-3">
             Photo {currentSlide + 1} of {totalSlides}

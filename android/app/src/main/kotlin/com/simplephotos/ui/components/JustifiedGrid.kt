@@ -9,6 +9,7 @@
 package com.simplephotos.ui.components
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -20,7 +21,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -156,8 +156,6 @@ fun <T> JustifiedGrid(
     itemContent: @Composable (item: T, widthDp: Dp, heightDp: Dp) -> Unit
 ) {
     val density = LocalDensity.current
-    val configuration = LocalConfiguration.current
-    val screenWidthPx = with(density) { configuration.screenWidthDp.dp.toPx() }
     val gapPx = with(density) { gap.toPx() }
     val targetRowHeightPx = with(density) { targetRowHeight.toPx() }
 
@@ -166,92 +164,101 @@ fun <T> JustifiedGrid(
         items.map { getAspectRatio(it).coerceIn(0.3f, 4.0f) }
     }
 
-    val rows = remember(aspectRatios, screenWidthPx, targetRowHeightPx, gapPx, breakBefore) {
-        computeRows(aspectRatios, screenWidthPx, targetRowHeightPx, gapPx, breakBefore)
-    }
+    // Lay out against the grid's ACTUAL width, not the physical screen width.
+    // LocalConfiguration.screenWidthDp is whole-screen and is wrong whenever the
+    // grid doesn't span the screen — most importantly in a split-screen /
+    // multi-window pane (#21), where rows and day-group headers were sized to
+    // the full screen and spilled off the window (todo1 #2).
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val containerWidthPx = constraints.maxWidth.toFloat()
 
-    // Build a flat list of "render entries" so headers and rows each get a
-    // LazyColumn slot.  This collapses to O(rows + headers).
-    data class RenderEntry(
-        val isHeader: Boolean,
-        val headerItemIndex: Int = 0,
-        val row: LayoutRow? = null,
-        val rowAspects: List<Float> = emptyList()
-    )
-
-    val renderEntries = remember(rows, aspectRatios, breakBefore) {
-        val entries = mutableListOf<RenderEntry>()
-        for (row in rows) {
-            // Emit header entries only for items that start a new group
-            if (headerBefore != null && row.startIdx in breakBefore) {
-                entries.add(RenderEntry(isHeader = true, headerItemIndex = row.startIdx))
-            }
-            entries.add(RenderEntry(
-                isHeader = false,
-                row = row,
-                rowAspects = aspectRatios.subList(row.startIdx, row.startIdx + row.count)
-            ))
+        val rows = remember(aspectRatios, containerWidthPx, targetRowHeightPx, gapPx, breakBefore) {
+            computeRows(aspectRatios, containerWidthPx, targetRowHeightPx, gapPx, breakBefore)
         }
-        entries
-    }
 
-    LazyColumn(
-        state = listState,
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        items(
-            count = renderEntries.size,
-            key = { idx ->
-                val entry = renderEntries[idx]
-                if (entry.isHeader) "header_${entry.headerItemIndex}"
-                else "row_${entry.row!!.startIdx}"
+        // Build a flat list of "render entries" so headers and rows each get a
+        // LazyColumn slot.  This collapses to O(rows + headers).
+        data class RenderEntry(
+            val isHeader: Boolean,
+            val headerItemIndex: Int = 0,
+            val row: LayoutRow? = null,
+            val rowAspects: List<Float> = emptyList()
+        )
+
+        val renderEntries = remember(rows, aspectRatios, breakBefore) {
+            val entries = mutableListOf<RenderEntry>()
+            for (row in rows) {
+                // Emit header entries only for items that start a new group
+                if (headerBefore != null && row.startIdx in breakBefore) {
+                    entries.add(RenderEntry(isHeader = true, headerItemIndex = row.startIdx))
+                }
+                entries.add(RenderEntry(
+                    isHeader = false,
+                    row = row,
+                    rowAspects = aspectRatios.subList(row.startIdx, row.startIdx + row.count)
+                ))
             }
-        ) { idx ->
-            val entry = renderEntries[idx]
-            if (entry.isHeader && headerBefore != null) {
-                headerBefore(entry.headerItemIndex)
-            } else if (entry.row != null) {
-                val row = entry.row
-                val rowHeightDp = with(density) { row.height.toDp() }
-                val isFullRow = row.isFull
+            entries
+        }
 
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(rowHeightDp)
-                ) {
-                    for (i in 0 until row.count) {
-                        val globalIdx = row.startIdx + i
-                        val item = items[globalIdx]
-                        val ar = entry.rowAspects[i]
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            items(
+                count = renderEntries.size,
+                key = { idx ->
+                    val entry = renderEntries[idx]
+                    if (entry.isHeader) "header_${entry.headerItemIndex}"
+                    else "row_${entry.row!!.startIdx}"
+                }
+            ) { idx ->
+                val entry = renderEntries[idx]
+                if (entry.isHeader && headerBefore != null) {
+                    headerBefore(entry.headerItemIndex)
+                } else if (entry.row != null) {
+                    val row = entry.row
+                    val rowHeightDp = with(density) { row.height.toDp() }
+                    val isFullRow = row.isFull
 
-                        if (i > 0) {
-                            Spacer(Modifier.width(gap))
-                        }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(rowHeightDp)
+                    ) {
+                        for (i in 0 until row.count) {
+                            val globalIdx = row.startIdx + i
+                            val item = items[globalIdx]
+                            val ar = entry.rowAspects[i]
 
-                        val itemWidthDp = if (isFullRow) {
-                            // Full row: width proportional to aspect ratio
-                            // We calculate the exact pixel width and convert
-                            val totalGapPx = (row.count - 1) * gapPx
-                            val availableWidthPx = screenWidthPx - totalGapPx
-                            val rowAspectSum = entry.rowAspects.sum()
-                            val itemWidthPx = (ar / rowAspectSum) * availableWidthPx
-                            with(density) { itemWidthPx.toDp() }
-                        } else {
-                            // Last row: fixed width based on aspect ratio × row height
-                            with(density) { (ar * row.height).toDp() }
-                        }
+                            if (i > 0) {
+                                Spacer(Modifier.width(gap))
+                            }
 
-                        Box(
-                            modifier = Modifier
-                                .width(itemWidthDp)
-                                .height(rowHeightDp)
-                        ) {
-                            itemContent(item, itemWidthDp, rowHeightDp)
+                            val itemWidthDp = if (isFullRow) {
+                                // Full row: width proportional to aspect ratio
+                                // We calculate the exact pixel width and convert
+                                val totalGapPx = (row.count - 1) * gapPx
+                                val availableWidthPx = containerWidthPx - totalGapPx
+                                val rowAspectSum = entry.rowAspects.sum()
+                                val itemWidthPx = (ar / rowAspectSum) * availableWidthPx
+                                with(density) { itemWidthPx.toDp() }
+                            } else {
+                                // Last row: fixed width based on aspect ratio × row height
+                                with(density) { (ar * row.height).toDp() }
+                            }
+
+                            Box(
+                                modifier = Modifier
+                                    .width(itemWidthDp)
+                                    .height(rowHeightDp)
+                            ) {
+                                itemContent(item, itemWidthDp, rowHeightDp)
+                            }
                         }
                     }
+                    Spacer(Modifier.height(gap))
                 }
-                Spacer(Modifier.height(gap))
             }
         }
     }

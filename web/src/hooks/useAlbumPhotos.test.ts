@@ -1,0 +1,305 @@
+import { describe, it, expect } from "vitest";
+import { resolveAlbumPhotos, countRegularAlbum } from "./useAlbumPhotos";
+import { SMART_ALBUM_DEFS } from "../gallery/smartAlbums";
+import type { CachedPhoto, CachedAlbum } from "../db";
+
+function photo(blobId: string, over: Partial<CachedPhoto> = {}): CachedPhoto {
+  return {
+    blobId,
+    filename: `${blobId}.jpg`,
+    takenAt: 0,
+    mimeType: "image/jpeg",
+    mediaType: "photo",
+    width: 100,
+    height: 100,
+    albumIds: [],
+    ...over,
+  };
+}
+
+function album(photoBlobIds: string[]): CachedAlbum {
+  return {
+    albumId: "album-1",
+    manifestBlobId: "manifest-1",
+    name: "Trip",
+    createdAt: 0,
+    photoBlobIds,
+  };
+}
+
+describe("resolveAlbumPhotos — regular albums", () => {
+  const mirror = [
+    photo("a"),
+    photo("b"),
+    photo("secret"),
+    photo("c"),
+    photo("not-in-album"),
+  ];
+
+  it("returns only manifest members present in the mirror", () => {
+    const out = resolveAlbumPhotos({
+      kind: "regular",
+      allPhotos: mirror,
+      secureBlobIds: new Set(),
+      album: album(["a", "b", "c", "gone"]),
+    });
+    expect(out.map((p) => p.blobId)).toEqual(["a", "b", "c"]);
+  });
+
+  it("excludes secure blob ids so the count matches the rendered grid (#12/#20)", () => {
+    const out = resolveAlbumPhotos({
+      kind: "regular",
+      allPhotos: mirror,
+      secureBlobIds: new Set(["secret"]),
+      album: album(["a", "b", "secret", "c"]),
+    });
+    // 'secret' is in the manifest but hidden — must NOT be counted or shown.
+    expect(out.map((p) => p.blobId)).toEqual(["a", "b", "c"]);
+    expect(out.length).toBe(3);
+  });
+
+  it("returns [] when the manifest hasn't loaded", () => {
+    expect(
+      resolveAlbumPhotos({
+        kind: "regular",
+        allPhotos: mirror,
+        secureBlobIds: new Set(),
+        album: undefined,
+      })
+    ).toEqual([]);
+  });
+});
+
+describe("resolveAlbumPhotos — smart albums", () => {
+  const mirror = [
+    photo("v1", { mediaType: "video" }),
+    photo("p1", { mediaType: "photo", isFavorite: true }),
+    photo("g1", { mediaType: "gif" }),
+    photo("secret", { mediaType: "video" }),
+    photo("v2", { mediaType: "video" }),
+  ];
+
+  it("smart-videos filters to videos and excludes secure", () => {
+    const out = resolveAlbumPhotos({
+      kind: "smart",
+      allPhotos: mirror,
+      secureBlobIds: new Set(["secret"]),
+      smartDef: SMART_ALBUM_DEFS["smart-videos"],
+    });
+    expect(out.map((p) => p.blobId)).toEqual(["v1", "v2"]);
+  });
+
+  it("smart-photos includes gifs", () => {
+    const out = resolveAlbumPhotos({
+      kind: "smart",
+      allPhotos: mirror,
+      secureBlobIds: new Set(),
+      smartDef: SMART_ALBUM_DEFS["smart-photos"],
+    });
+    expect(out.map((p) => p.blobId).sort()).toEqual(["g1", "p1"]);
+  });
+
+  it("smart-favorites filters to favorites", () => {
+    const out = resolveAlbumPhotos({
+      kind: "smart",
+      allPhotos: mirror,
+      secureBlobIds: new Set(),
+      smartDef: SMART_ALBUM_DEFS["smart-favorites"],
+    });
+    expect(out.map((p) => p.blobId)).toEqual(["p1"]);
+  });
+
+  it("smart-recent sorts by addedAt desc and caps to the limit", () => {
+    const many: CachedPhoto[] = Array.from({ length: 150 }, (_, i) =>
+      photo(`r${i}`, { addedAt: i })
+    );
+    const out = resolveAlbumPhotos({
+      kind: "smart",
+      allPhotos: many,
+      secureBlobIds: new Set(),
+      smartDef: SMART_ALBUM_DEFS["smart-recent"],
+    });
+    expect(out.length).toBe(100);
+    // Newest addedAt first.
+    expect(out[0].blobId).toBe("r149");
+    expect(out[99].blobId).toBe("r50");
+  });
+
+  it("collapses bursts in smart albums (count is one per stack)", () => {
+    const withBurst = [
+      photo("b1", { mediaType: "video", burstId: "grp" }),
+      photo("b2", { mediaType: "video", burstId: "grp" }),
+      photo("solo", { mediaType: "video" }),
+    ];
+    const out = resolveAlbumPhotos({
+      kind: "smart",
+      allPhotos: withBurst,
+      secureBlobIds: new Set(),
+      smartDef: SMART_ALBUM_DEFS["smart-videos"],
+    });
+    expect(out.map((p) => p.blobId)).toEqual(["b1", "solo"]);
+    expect(out.find((p) => p.blobId === "b1")?._burstCount).toBe(2);
+  });
+});
+
+describe("resolveAlbumPhotos — sort (#52)", () => {
+  it("leaves the intrinsic order untouched when no sort is given", () => {
+    // Mirror is takenAt-desc; a regular album preserves that order.
+    const mirror = [
+      photo("c", { takenAt: 300, filename: "c.jpg" }),
+      photo("a", { takenAt: 100, filename: "a.jpg" }),
+      photo("b", { takenAt: 200, filename: "b.jpg" }),
+    ];
+    const out = resolveAlbumPhotos({
+      kind: "regular",
+      allPhotos: mirror,
+      secureBlobIds: new Set(),
+      album: album(["a", "b", "c"]),
+    });
+    expect(out.map((p) => p.blobId)).toEqual(["c", "a", "b"]);
+  });
+
+  it("applies a name-asc sort to a regular album (numeric-aware)", () => {
+    const mirror = [
+      photo("x", { filename: "IMG_10.jpg" }),
+      photo("y", { filename: "IMG_2.jpg" }),
+      photo("z", { filename: "IMG_1.jpg" }),
+    ];
+    const out = resolveAlbumPhotos({
+      kind: "regular",
+      allPhotos: mirror,
+      secureBlobIds: new Set(),
+      album: album(["x", "y", "z"]),
+      sort: { field: "name", dir: "asc" },
+    });
+    expect(out.map((p) => p.blobId)).toEqual(["z", "y", "x"]);
+  });
+
+  it("sorts a smart album AFTER burst collapse, by the representative frame", () => {
+    const withBurst = [
+      photo("cover", { mediaType: "video", burstId: "grp", takenAt: 300, filename: "z.mp4" }),
+      photo("frame2", { mediaType: "video", burstId: "grp", takenAt: 350, filename: "a.mp4" }),
+      photo("solo", { mediaType: "video", takenAt: 100, filename: "m.mp4" }),
+    ];
+    const out = resolveAlbumPhotos({
+      kind: "smart",
+      allPhotos: withBurst,
+      secureBlobIds: new Set(),
+      smartDef: SMART_ALBUM_DEFS["smart-videos"],
+      sort: { field: "name", dir: "asc" },
+    });
+    // The burst collapses to its representative ("cover", filename z.mp4). Name
+    // asc then orders the two tiles by the representative's name: m < z.
+    expect(out.map((p) => p.blobId)).toEqual(["solo", "cover"]);
+    expect(out.find((p) => p.blobId === "cover")?._burstCount).toBe(2);
+  });
+
+  it("re-sorts the recently-added set without changing which N are in it", () => {
+    // 150 photos: addedAt selects the newest 100 (r50..r149); the date-asc sort
+    // must reorder THOSE, not pull older ones back in.
+    const many: CachedPhoto[] = Array.from({ length: 150 }, (_, i) =>
+      photo(`r${i}`, { addedAt: i, takenAt: i })
+    );
+    const out = resolveAlbumPhotos({
+      kind: "smart",
+      allPhotos: many,
+      secureBlobIds: new Set(),
+      smartDef: SMART_ALBUM_DEFS["smart-recent"],
+      sort: { field: "date", dir: "asc" },
+    });
+    expect(out.length).toBe(100);
+    // Oldest-of-the-recent first, and the set is still r50..r149.
+    expect(out[0].blobId).toBe("r50");
+    expect(out[99].blobId).toBe("r149");
+  });
+});
+
+describe("countRegularAlbum — album-list badge source (#12)", () => {
+  const mirror = [photo("a"), photo("b"), photo("secret"), photo("c")];
+
+  it("counts only manifest members present in the mirror (drops stale ids)", () => {
+    // "gone" was deleted from the library — must not be counted.
+    expect(countRegularAlbum(album(["a", "b", "c", "gone"]), mirror, new Set())).toBe(3);
+  });
+
+  it("excludes secure blob ids so the badge matches the secure-filtered grid", () => {
+    expect(
+      countRegularAlbum(album(["a", "b", "secret", "c"]), mirror, new Set(["secret"]))
+    ).toBe(3);
+  });
+
+  it("equals resolveAlbumPhotos(...).length — badge can't diverge from grid", () => {
+    const members = album(["a", "b", "secret", "c", "gone"]);
+    const secure = new Set(["secret"]);
+    const resolved = resolveAlbumPhotos({
+      kind: "regular",
+      allPhotos: mirror,
+      secureBlobIds: secure,
+      album: members,
+    });
+    expect(countRegularAlbum(members, mirror, secure)).toBe(resolved.length);
+  });
+
+  it("falls back to raw manifest size while the mirror is cold (avoids flashing 0)", () => {
+    expect(countRegularAlbum(album(["a", "b", "c"]), undefined, new Set())).toBe(3);
+    expect(countRegularAlbum(album(["a", "b", "c"]), [], new Set())).toBe(3);
+  });
+
+  it("prefers the persisted count over the manifest size while cold", () => {
+    // The raw manifest size counts secure-hidden and stale ids, so a cold cache
+    // showed one number and then visibly corrected itself once sync filled the
+    // mirror in. The last count we resolved is the better guess by definition —
+    // it *is* what the mirror last produced.
+    const cached = { ...album(["a", "b", "secret", "c", "gone"]), cachedCount: 3 };
+    expect(countRegularAlbum(cached, undefined, new Set())).toBe(3);
+    expect(countRegularAlbum(cached, [], new Set())).toBe(3);
+  });
+
+  it("lets the live count override a stale persisted one", () => {
+    // cachedCount is only ever a render hint; the mirror always wins.
+    const stale = { ...album(["a", "b", "gone"]), cachedCount: 99 };
+    expect(countRegularAlbum(stale, mirror, new Set())).toBe(2);
+  });
+
+  it("caches a count that a later cold start reproduces exactly", () => {
+    // The round trip that makes the badge stable across a restart: what the
+    // mirror resolves now must be what the next cold mount renders.
+    const a = album(["a", "b", "secret", "c", "gone"]);
+    const secure = new Set(["secret"]);
+    const live = countRegularAlbum(a, mirror, secure);
+    const persisted = { ...a, cachedCount: live };
+    expect(countRegularAlbum(persisted, undefined, secure)).toBe(live);
+  });
+});
+
+describe("resolveAlbumPhotos — count invariant", () => {
+  it("count always equals the resolved list length across kinds", () => {
+    const mirror = [photo("a"), photo("b"), photo("c")];
+    const regular = resolveAlbumPhotos({
+      kind: "regular",
+      allPhotos: mirror,
+      secureBlobIds: new Set(["b"]),
+      album: album(["a", "b", "c"]),
+    });
+    const smart = resolveAlbumPhotos({
+      kind: "smart",
+      allPhotos: mirror,
+      secureBlobIds: new Set(["b"]),
+      smartDef: SMART_ALBUM_DEFS["smart-photos"],
+    });
+    // The hook derives `count` as `photos.length`, so this is the guarantee
+    // that the badge can never diverge from the grid.
+    expect(regular.length).toBe(2);
+    expect(smart.length).toBe(2);
+  });
+
+  it("unknown kind resolves to empty", () => {
+    expect(
+      resolveAlbumPhotos({
+        kind: "unknown",
+        allPhotos: [photo("a")],
+        secureBlobIds: new Set(),
+      })
+    ).toEqual([]);
+  });
+});

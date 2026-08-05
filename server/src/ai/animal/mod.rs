@@ -25,18 +25,18 @@
 //! available (requires `--features cuda` build), CPU otherwise.
 
 use image::DynamicImage;
-use ort::session::Session;
 use std::path::Path;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 use tracing;
 
 use crate::ai::models::BoundingBox;
+use crate::ai::session::SessionPool;
 
 // ── Phase-2 dedicated model (optional) ──────────────────────────────
 
 const PET_EMB_FILENAME: &str = "pet_embedding.onnx";
 
-static PET_EMB_MODEL: OnceLock<Option<Arc<Mutex<Session>>>> = OnceLock::new();
+static PET_EMB_MODEL: OnceLock<Option<Arc<SessionPool>>> = OnceLock::new();
 
 /// Initialise the optional dedicated pet-embedding model.
 ///
@@ -54,10 +54,10 @@ pub fn init_pet_embedding_model(model_dir: &str) {
             );
             return None;
         }
-        match crate::ai::session::build_session(&p) {
-            Ok(sess) => {
+        match crate::ai::session::build_session_pool(&p) {
+            Ok(pool) => {
                 tracing::info!("Pet embedding model (Phase 2) loaded from {:?}", p);
-                Some(Arc::new(Mutex::new(sess)))
+                Some(Arc::new(pool))
             }
             Err(e) => {
                 tracing::warn!(
@@ -170,7 +170,8 @@ pub fn extract_pet_embedding(img: &DynamicImage, bbox: Option<&BoundingBox>) -> 
 fn try_phase2_embedding(img: &DynamicImage) -> Option<Vec<f32>> {
     use image::imageops::FilterType;
 
-    let model_arc = PET_EMB_MODEL.get()?.as_ref()?;
+    let model_pool = PET_EMB_MODEL.get()?.as_ref()?;
+    let model_arc = model_pool.acquire();
     let mut session = model_arc.lock().unwrap_or_else(|p| p.into_inner());
 
     // EfficientNet-Lite4: 320×320 input, ImageNet normalisation

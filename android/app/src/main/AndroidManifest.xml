@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
@@ -18,6 +19,16 @@
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
 
+    <!-- Background backup runs as a WorkManager foreground service so long
+         uploads (large videos) survive Doze and background execution limits
+         instead of being killed mid-batch (TODO #9). DATA_SYNC is the correct
+         type for uploading user media; POST_NOTIFICATIONS (API 33+) is needed
+         to show the required user-visible progress notification. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
     <application
         android:name=".SimplePhotosApplication"
         android:allowBackup="false"
@@ -32,9 +43,28 @@
         <!-- MainActivity must be exported so the launcher can start it via the
              MAIN/LAUNCHER intent filter. No other intent filters are exposed. -->
         <!-- nosemgrep: java.android.security.exported_activity.exported_activity -->
+        <!-- configChanges: this is a single-activity, 100% Compose host. We
+             handle every runtime configuration change ourselves so Android does
+             NOT destroy+recreate the activity for them — Compose recomposes
+             against the updated LocalConfiguration instead. This is required for
+             the app-lock (TODO #17): the biometric gate stores `authenticated`
+             in a `remember`, so an activity recreation (the default on rotation)
+             reset it to false and re-fired the biometric prompt — i.e. rotating
+             to landscape with biometrics enabled spuriously re-locked the app
+             and tore down any in-flight BiometricPrompt. Keeping the activity
+             alive across these changes preserves the unlocked session; a true
+             process death still cold-starts onCreate and re-locks (by design). -->
+        <!-- resizeableActivity + the default `standard` launchMode are LOAD-BEARING,
+             not leftovers: the split-screen feature (#21) is "run the app twice".
+             Two MainActivity instances in two tasks share this single process
+             (same Room DB, Coil cache, auth), and the OS window manager does the
+             splitting — see ui/navigation/NewWindow.kt. Setting launchMode to
+             singleTask/singleInstance, or resizeableActivity to false, kills it. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:resizeableActivity="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|keyboard|navigation|uiMode|density|fontScale|locale|layoutDirection"
             android:theme="@style/Theme.SimplePhotos">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -55,6 +85,26 @@
                 android:value="androidx.startup"
                 tools:node="remove" />
         </provider>
+
+        <!-- WorkManager's SystemForegroundService is declared by the androidx.work
+             library WITHOUT a foregroundServiceType attribute (0x0). BackupWorker
+             promotes itself to a DATA_SYNC foreground service at runtime
+             (ForegroundInfo type = FOREGROUND_SERVICE_TYPE_DATA_SYNC). On
+             targetSdk 34 / Android 14+ the OS requires the runtime type to be a
+             *subset* of the type declared on the <service> element in the merged
+             manifest, and throws IllegalArgumentException("foregroundServiceType
+             0x00000001 is not a subset of ... 0x00000000") from inside
+             SystemForegroundService.startForeground() — an UNCATCHABLE main-thread
+             crash (it fires on the service's own Handler, not in the coroutine
+             that called setForeground, so BackupWorker's try/catch can't stop it).
+             WorkManager then retries the FGS worker on every process restart →
+             the "app keeps stopping" crash loop on launch. Merging the attribute
+             onto the library's service element fixes it. Must match the runtime
+             type and the FOREGROUND_SERVICE_DATA_SYNC permission above. -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
 
     </application>
 

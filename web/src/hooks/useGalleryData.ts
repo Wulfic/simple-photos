@@ -11,6 +11,7 @@ import { hasCryptoKey } from "../crypto/crypto";
 import type { CachedPhoto } from "../db";
 import { useSecureBlobFilter } from "../gallery/hooks/useSecureBlobFilter";
 import { usePhotoSync } from "../gallery/hooks/usePhotoSync";
+import { useSyncSignal } from "../store/syncSignal";
 import type { PhotoPayload, ThumbnailPayload } from "../types/media";
 export type { PhotoPayload, ThumbnailPayload };
 
@@ -19,8 +20,9 @@ export interface GalleryDataResult {
   error: string;
   setError: (msg: string) => void;
   /** Encrypted-mode photos from IndexedDB (live query, auto-updates).
-   *  Returns undefined until the first server sync completes to prevent
-   *  flashing stale data from a previous user's session. */
+   *  Shows persisted cached data immediately; the server sync is a background
+   *  refresh. Safe against previous-user flash because IDB is wiped on
+   *  login/logout/401 (clearAllUserData). Undefined only until Dexie resolves. */
   encryptedPhotos: CachedPhoto[] | undefined;
   secureBlobIds: Set<string>;
   loadEncryptedPhotos: () => Promise<void>;
@@ -36,6 +38,7 @@ export function useGalleryData(): GalleryDataResult {
   const [error, setError] = useState("");
   const { secureBlobIds, refreshSecureBlobIds, startPolling } = useSecureBlobFilter();
   const { encryptedPhotos, loading, loadEncryptedPhotos } = usePhotoSync();
+  const syncVersion = useSyncSignal((s) => s.version);
 
   useEffect(() => {
     async function init() {
@@ -56,6 +59,16 @@ export function useGalleryData(): GalleryDataResult {
     init();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Real-time refetch: when the server pushes an album/gallery change (item #11)
+  // re-pull from the server so the grid reflects it within seconds. Skips the
+  // initial mount (version 0) — that's already covered by init() above.
+  useEffect(() => {
+    if (syncVersion === 0) return;
+    loadEncryptedPhotos().catch(() => {});
+    refreshSecureBlobIds().catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [syncVersion]);
 
   return {
     loading,

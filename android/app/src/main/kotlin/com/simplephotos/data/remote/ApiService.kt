@@ -58,11 +58,38 @@ interface ApiService {
         @Query("media_type") mediaType: String? = null
     ): PhotoListResponse
 
+    /**
+     * The photo manifest. Omit [since] for a full walk; pass a change-log
+     * sequence for a delta (#38).
+     *
+     * A server predating #38 ignores [since] and answers with a full walk, so
+     * the caller must verify it got a delta via the `deleted` handshake rather
+     * than assuming the parameter was honoured — see
+     * [com.simplephotos.data.sync.isDeltaFeed].
+     */
     @GET("api/photos/encrypted-sync")
     suspend fun encryptedSync(
         @Query("after") after: String? = null,
-        @Query("limit") limit: Int? = null
+        @Query("limit") limit: Int? = null,
+        @Query("since") since: Long? = null
     ): EncryptedSyncResponse
+
+    /** Cheap precomputed gallery counts — smart-album badges render instantly
+     *  on a cold Room mirror without paginating encrypted-sync (Issue 3). */
+    @GET("api/photos/summary")
+    suspend fun photosSummary(): PhotoSummaryDto
+
+    /** Authoritative Takeout album membership (photo-id keyed), for rebuilding
+     *  album manifests on-device without fragile filename matching (Issue 2). */
+    @GET("api/photos/source-albums")
+    suspend fun sourceAlbums(): SourceAlbumsResponse
+
+    /** Tombstone a Takeout-reconstructed album the user deleted, so no device
+     *  recreates it on the next rebuild. Photos are unaffected. */
+    @POST("api/photos/source-albums/dismiss")
+    suspend fun dismissSourceAlbum(
+        @Body request: DismissSourceAlbumRequest
+    ): DismissSourceAlbumResponse
 
     @GET("api/photos/crop-sync")
     suspend fun cropSync(): List<CropSyncRecord>
@@ -132,6 +159,19 @@ interface ApiService {
     @GET("api/blobs/{id}")
     @Streaming
     suspend fun downloadBlob(@Path("id") blobId: String): ResponseBody
+
+    /**
+     * Range download of an encrypted blob. Returns the full [Response] so the
+     * caller can read `Content-Range` (total encrypted size) off the 206 headers.
+     * Backs the streaming video DataSource (issue #17): only the ~4 MiB frame(s)
+     * ExoPlayer actually reads are fetched, never the whole file up front.
+     */
+    @GET("api/blobs/{id}")
+    @Streaming
+    suspend fun downloadBlobRange(
+        @Path("id") blobId: String,
+        @Header("Range") range: String,
+    ): Response<ResponseBody>
 
     @GET("api/blobs/{id}/thumb")
     @Streaming
@@ -296,6 +336,13 @@ interface ApiService {
         @Header("X-Gallery-Token") galleryToken: String
     ): SecureGalleryItemsResponse
 
+    // Aggregate feed across ALL of the user's secure galleries — drives the
+    // built-in secure smart albums. Each item carries its owning gallery_id.
+    @GET("api/galleries/secure/items")
+    suspend fun listAllSecureGalleryItems(
+        @Header("X-Gallery-Token") galleryToken: String
+    ): SecureGalleryItemsResponse
+
     @POST("api/galleries/secure/{id}/items")
     suspend fun addSecureGalleryItem(
         @Path("id") galleryId: String,
@@ -397,6 +444,12 @@ interface ApiService {
     @GET("api/ai/faces/{cluster_id}/photos")
     suspend fun listFaceClusterPhotos(@Path("cluster_id") clusterId: String): List<FaceClusterPhotoEntry>
 
+    @GET("api/ai/photos/{photo_id}/faces")
+    suspend fun listPhotoFaces(@Path("photo_id") photoId: String): List<PhotoFace>
+
+    @POST("api/ai/faces/assign")
+    suspend fun assignFace(@Body request: FaceAssignRequest): Response<Unit>
+
     @PUT("api/ai/faces/{cluster_id}/name")
     suspend fun renameFaceCluster(
         @Path("cluster_id") clusterId: String,
@@ -476,6 +529,18 @@ interface ApiService {
     // ── Activity / processing status ─────────────────────────────────────
     @GET("api/status/activity")
     suspend fun getActivityStatus(): ActivityStatusResponse
+
+    /** Server-authoritative encryption progress — single source of truth for
+     *  the encryption banner (TODO #1). */
+    @GET("api/status/encryption")
+    suspend fun getEncryptionStatus(): EncryptionStatusResponse
+
+    /** Report this device's queued-upload count so the server total includes
+     *  local backup work it can't see yet (TODO #2). */
+    @POST("api/status/encryption/contribute")
+    suspend fun contributeEncryption(
+        @Body request: EncryptionContributeRequest
+    ): EncryptionContributeResponse
 
     @GET("api/transcode/status")
     suspend fun getTranscodeStatus(): TranscodeStatusResponse
@@ -671,6 +736,22 @@ interface ApiService {
     suspend fun deleteSecureGalleryItem(
         @Path("id") galleryId: String,
         @Path("item_id") itemId: String,
+    ): Response<Unit>
+
+    // ── Secure gallery item move (cross-secure-album picker, #31) ─────────
+    @POST("api/galleries/secure/{id}/items/{item_id}/move")
+    suspend fun moveSecureGalleryItem(
+        @Path("id") sourceGalleryId: String,
+        @Path("item_id") itemId: String,
+        @Body request: SecureGalleryMoveItemRequest,
+    ): Response<Unit>
+
+    // ── Secure gallery item crop/edit persistence (#31) ──────────────────
+    @PUT("api/galleries/secure/{id}/items/{item_id}/crop")
+    suspend fun setSecureGalleryItemCrop(
+        @Path("id") galleryId: String,
+        @Path("item_id") itemId: String,
+        @Body request: SecureGallerySetCropRequest,
     ): Response<Unit>
 
     // ── External diagnostics (Basic auth) ────────────────────────────────

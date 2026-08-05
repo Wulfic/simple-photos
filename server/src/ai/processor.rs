@@ -7,10 +7,11 @@
 //! Rate-limited by `photos_per_minute` config to avoid overwhelming the CPU.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use futures_util::stream::{self, StreamExt};
 use sqlx::SqlitePool;
 use tokio::time;
 use tracing;
@@ -22,6 +23,34 @@ use crate::ai::face;
 use crate::ai::object;
 use crate::ai::tagging;
 use crate::config::AiConfig;
+use crate::state::AiHealth;
+
+/// Decode-bomb guard (item #16). Stills whose *pixel* count exceeds this budget
+/// are routed to the poster thumbnail instead of being full-decoded. A file that
+/// is modest on disk can be enormous in pixels (e.g. a stitched ~300 MP
+/// panorama, ~1.2 GB once expanded to an RGBA buffer) and OOM-kill the server —
+/// the class of crash item #16 targets. Detection only ever sees a 640×640
+/// letterbox, so nothing of value is lost. ~80 MP still admits full-res phone
+/// photos (48–108 MP sensors bin down well below this).
+const MAX_DECODE_PIXELS: u64 = 80_000_000;
+
+/// Compile-time guard: the pixel budget must admit full-res phone photos
+/// (~50 MP) yet reject the pathological stitched-panorama range (≥200 MP).
+const _: () = {
+    assert!(MAX_DECODE_PIXELS >= 50_000_000);
+    assert!(MAX_DECODE_PIXELS < 200_000_000);
+};
+
+/// Hard allocation ceiling handed to the image decoder as a belt-and-suspenders
+/// net for formats whose header dimensions `imagesize` can't read cheaply. A
+/// decode that would allocate more than this fails gracefully (→ skip the photo)
+/// instead of taking the process down.
+const MAX_DECODE_ALLOC_BYTES: u64 = 1024 * 1024 * 1024; // 1 GiB
+
+/// Minimum spacing between full re-clustering passes while an import is in
+/// flight. Clustering is O(n²) over a user's *entire* face set; without this it
+/// re-ran after every batch and pegged the CPU during large imports (item #16).
+const CLUSTER_COOLDOWN: Duration = Duration::from_secs(120);
 
 /// Spawn the background AI processor task.
 ///
@@ -35,6 +64,7 @@ pub fn spawn_ai_processor(
     storage_root: PathBuf,
     jwt_secret: String,
     active: Arc<AtomicBool>,
+    health: Arc<AiHealth>,
 ) {
     let engine = AiEngine::new(&config);
     // Only warn about missing models when the operator has enabled AI globally.
@@ -65,12 +95,15 @@ pub fn spawn_ai_processor(
         time::sleep(Duration::from_secs(30)).await;
 
         let photos_per_minute = config.photos_per_minute.max(1);
-        let interval = Duration::from_secs(60 / photos_per_minute as u64);
+        // Guard the divide: photos_per_minute > 60 would floor to 0 and spin the
+        // loop hot (a self-inflicted stability bug for item #16).
+        let interval = Duration::from_secs((60 / photos_per_minute as u64).max(1));
+        let batch_size = config.batch_size.max(1);
 
         tracing::info!(
             "AI processor started: {} photos/min, batch_size={}, provider={}, config_default={}",
             photos_per_minute,
-            config.batch_size,
+            batch_size,
             engine.provider(),
             if config.enabled {
                 "enabled"
@@ -78,6 +111,13 @@ pub fn spawn_ai_processor(
                 "disabled"
             }
         );
+
+        // Clustering throttle + circuit-breaker state (item #16).
+        //   last_cluster     — when the last full re-clustering pass ran.
+        //   clustering_dirty — new detections landed but clustering was deferred
+        //                      by the cooldown; flush once the queue drains.
+        let mut last_cluster: Option<Instant> = None;
+        let mut clustering_dirty = false;
 
         loop {
             // Defer AI work while the import → encrypt → convert pipeline is
@@ -94,25 +134,71 @@ pub fn spawn_ai_processor(
             // Run a batch with the activity flag held high so the web client
             // can spin its profile-avatar indicator while AI work is in progress.
             active.store(true, Ordering::Relaxed);
+            let batch_start = Instant::now();
             let result = process_batch(&pool, &engine, &config, &storage_root, &jwt_secret).await;
             active.store(false, Ordering::Relaxed);
-            if let Err(e) = result {
-                tracing::error!("AI processor error: {}", e);
+
+            let mut backoff = None;
+            match result {
+                Ok(processed) => {
+                    health.record_success(processed, batch_start.elapsed().as_millis() as u64);
+
+                    // Throttle clustering so it can't storm the CPU mid-import.
+                    if processed > 0 {
+                        clustering_dirty = true;
+                        let cooled = last_cluster.is_none_or(|t| t.elapsed() >= CLUSTER_COOLDOWN);
+                        // A short batch means the queue is nearly drained, so the
+                        // user should see face groups now; a *full* batch means an
+                        // import is still streaming, so wait out the cooldown.
+                        let drained = processed < batch_size;
+                        if cooled || drained {
+                            run_clustering_pass(&pool, &config).await;
+                            last_cluster = Some(Instant::now());
+                            clustering_dirty = false;
+                        }
+                    } else if clustering_dirty {
+                        // Queue fully drained after a throttled import — flush the
+                        // deferred clustering exactly once so nothing is stranded.
+                        run_clustering_pass(&pool, &config).await;
+                        last_cluster = Some(Instant::now());
+                        clustering_dirty = false;
+                    }
+                }
+                Err(e) => {
+                    let n = health.record_error();
+                    // Exponential backoff so a systemic failure (storage gone,
+                    // corrupt model, DB locked) can't hot-loop and starve the
+                    // box — the circuit breaker item #16 calls for.
+                    let mult = 1u64 << u32::min(n, 6); // 2,4,…,64×
+                    let secs = (interval.as_secs().max(1) * mult).min(300);
+                    backoff = Some(Duration::from_secs(secs));
+                    tracing::error!(
+                        consecutive_errors = n,
+                        backoff_secs = secs,
+                        "AI processor batch error: {}",
+                        e
+                    );
+                }
             }
 
-            time::sleep(interval).await;
+            time::sleep(backoff.unwrap_or(interval)).await;
         }
     });
 }
 
-/// Process a batch of unprocessed photos.
+/// Process a batch of unprocessed photos. Returns the number of photos handled
+/// so the caller can pace itself and decide when to run a clustering pass — a
+/// full batch signals an import is still streaming (defer clustering), a short
+/// or empty batch signals the queue is drained (cluster now). Clustering itself
+/// is deliberately *not* run here; the caller owns it via [`run_clustering_pass`]
+/// so it can be throttled against re-cluster storms (item #16).
 async fn process_batch(
     pool: &SqlitePool,
     engine: &AiEngine,
     config: &AiConfig,
     storage_root: &PathBuf,
     jwt_secret: &str,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<usize> {
     // Find unprocessed photos only for users who have AI enabled.
     // - Users who explicitly set ai_enabled = 'true' → included
     // - Users who explicitly set ai_enabled = 'false' → excluded
@@ -144,7 +230,7 @@ async fn process_batch(
     .await?;
 
     if unprocessed.is_empty() {
-        return Ok(());
+        return Ok(0);
     }
 
     // Lazily initialise ONNX model sessions on the first batch that actually
@@ -160,47 +246,73 @@ async fn process_batch(
     );
 
     let batch_start = Instant::now();
-    let mut total_faces = 0usize;
-    let mut total_objects = 0usize;
+    let total_faces = AtomicUsize::new(0);
+    let total_objects = AtomicUsize::new(0);
 
-    for (photo_id, user_id, filename) in &unprocessed {
-        let photo_start = Instant::now();
-        match process_single_photo(
-            pool,
-            engine,
-            config,
-            storage_root,
-            jwt_secret,
-            photo_id,
-            user_id,
-            filename,
-        )
-        .await
-        {
-            Ok((nf, no)) => {
-                total_faces += nf;
-                total_objects += no;
-                tracing::info!(
-                    photo_id = %photo_id,
-                    filename = %filename,
-                    faces = nf,
-                    objects = no,
-                    elapsed_ms = photo_start.elapsed().as_millis(),
-                    "AI processor: photo processed"
-                );
+    // Process the batch concurrently. Each ONNX model is a *pool* of sessions
+    // (see `session::build_session_pool`), so `concurrency` inferences run in
+    // parallel — one per pooled session — while their decrypt / decode / DB
+    // steps overlap. The pool size already divides the core budget across
+    // sessions, so aggregate CPU use matches the old single-session path; this
+    // just fills the cores that used to sit idle between serial inferences.
+    // A pool of 1 (single-core host / `SIMPLE_PHOTOS_AI_JOBS=1`) is exactly the
+    // old serial loop.
+    let concurrency = crate::ai::session::ai_pool_plan().0.max(1);
+    tracing::debug!(concurrency, "AI processor: batch concurrency");
+
+    stream::iter(unprocessed.iter())
+        .for_each_concurrent(concurrency, |(photo_id, user_id, filename)| {
+            let total_faces = &total_faces;
+            let total_objects = &total_objects;
+            async move {
+                let photo_start = Instant::now();
+                match process_single_photo(
+                    pool,
+                    engine,
+                    config,
+                    storage_root,
+                    jwt_secret,
+                    photo_id,
+                    user_id,
+                    filename,
+                )
+                .await
+                {
+                    Ok((nf, no)) => {
+                        total_faces.fetch_add(nf, Ordering::Relaxed);
+                        total_objects.fetch_add(no, Ordering::Relaxed);
+                        tracing::info!(
+                            photo_id = %photo_id,
+                            filename = %filename,
+                            faces = nf,
+                            objects = no,
+                            elapsed_ms = photo_start.elapsed().as_millis(),
+                            "AI processor: photo processed"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            photo_id = %photo_id,
+                            filename = %filename,
+                            error = %e,
+                            "AI processor: failed to process photo — marking done to skip retry"
+                        );
+                        // Mark as processed anyway to avoid infinite retry loops.
+                        if let Err(me) = mark_processed(pool, photo_id, user_id).await {
+                            tracing::warn!(
+                                photo_id = %photo_id,
+                                error = %me,
+                                "AI processor: failed to mark errored photo processed"
+                            );
+                        }
+                    }
+                }
             }
-            Err(e) => {
-                tracing::warn!(
-                    photo_id = %photo_id,
-                    filename = %filename,
-                    error = %e,
-                    "AI processor: failed to process photo — marking done to skip retry"
-                );
-                // Mark as processed anyway to avoid infinite retry loops
-                mark_processed(pool, photo_id, user_id).await?;
-            }
-        }
-    }
+        })
+        .await;
+
+    let total_faces = total_faces.into_inner();
+    let total_objects = total_objects.into_inner();
 
     tracing::info!(
         photos = unprocessed.len(),
@@ -210,39 +322,64 @@ async fn process_batch(
         "AI processor: batch complete"
     );
 
-    // After processing a batch, re-run clustering for any users that had new detections
-    let users_with_new: Vec<(String,)> =
-        sqlx::query_as("SELECT DISTINCT user_id FROM face_detections WHERE cluster_id IS NULL")
-            .fetch_all(pool)
-            .await?;
+    Ok(unprocessed.len())
+}
 
-    for (user_id,) in &users_with_new {
-        if let Err(e) = run_clustering(pool, user_id, config.face_similarity_threshold).await {
-            tracing::warn!(
-                "AI processor: clustering failed for user {}: {}",
-                user_id,
-                e
-            );
+/// Run one throttled clustering pass for every user that has new unclustered
+/// face or pet detections. Split out of `process_batch` so the processor loop
+/// can gate how often it runs (a full O(n²) re-cluster of a user's whole face
+/// set after every 8-photo batch pegged the CPU during large imports — item
+/// #16). Per-user failures are logged and swallowed so one bad user can't stall
+/// clustering for everyone.
+async fn run_clustering_pass(pool: &SqlitePool, config: &AiConfig) {
+    // Faces.
+    match sqlx::query_as::<_, (String,)>(
+        "SELECT DISTINCT user_id FROM face_detections WHERE cluster_id IS NULL",
+    )
+    .fetch_all(pool)
+    .await
+    {
+        Ok(users) => {
+            for (user_id,) in &users {
+                if let Err(e) =
+                    run_clustering(pool, user_id, config.face_similarity_threshold).await
+                {
+                    tracing::warn!(
+                        "AI processor: clustering failed for user {}: {}",
+                        user_id,
+                        e
+                    );
+                }
+            }
         }
+        Err(e) => tracing::warn!("AI processor: could not list users for clustering: {}", e),
     }
 
-    // Run pet clustering for users with new unclustered pet detections.
-    let users_with_new_pets: Vec<(String,)> =
-        sqlx::query_as("SELECT DISTINCT user_id FROM pet_detections WHERE cluster_id IS NULL")
-            .fetch_all(pool)
-            .await?;
-
-    for (user_id,) in &users_with_new_pets {
-        if let Err(e) = run_pet_clustering(pool, user_id, config.pet_similarity_threshold).await {
-            tracing::warn!(
-                "AI processor: pet clustering failed for user {}: {}",
-                user_id,
-                e
-            );
+    // Pets.
+    match sqlx::query_as::<_, (String,)>(
+        "SELECT DISTINCT user_id FROM pet_detections WHERE cluster_id IS NULL",
+    )
+    .fetch_all(pool)
+    .await
+    {
+        Ok(users) => {
+            for (user_id,) in &users {
+                if let Err(e) =
+                    run_pet_clustering(pool, user_id, config.pet_similarity_threshold).await
+                {
+                    tracing::warn!(
+                        "AI processor: pet clustering failed for user {}: {}",
+                        user_id,
+                        e
+                    );
+                }
+            }
         }
+        Err(e) => tracing::warn!(
+            "AI processor: could not list users for pet clustering: {}",
+            e
+        ),
     }
-
-    Ok(())
 }
 
 /// Process a single photo: detect faces and objects, save to DB.
@@ -258,82 +395,210 @@ async fn process_single_photo(
     filename: &str,
 ) -> anyhow::Result<(usize, usize)> {
     // Load the photo file (plain or encrypted)
-    let row: Option<(String, Option<String>)> = sqlx::query_as(
-        "SELECT file_path, encrypted_blob_id FROM photos WHERE id = ?1 AND user_id = ?2",
+    let row: Option<(
+        String,
+        Option<String>,
+        String,
+        i64,
+        Option<String>,
+        Option<String>,
+    )> = sqlx::query_as(
+        "SELECT file_path, encrypted_blob_id, media_type, size_bytes, thumb_path, \
+             encrypted_thumb_blob_id FROM photos WHERE id = ?1 AND user_id = ?2",
     )
     .bind(photo_id)
     .bind(user_id)
     .fetch_optional(pool)
     .await?;
 
-    let (file_path, encrypted_blob_id) = match row {
-        Some(r) => r,
-        None => {
-            tracing::debug!(photo_id = %photo_id, "AI: photo not found in DB, skipping");
-            mark_processed(pool, photo_id, user_id).await?;
-            return Ok((0, 0));
-        }
-    };
+    let (file_path, encrypted_blob_id, media_type, size_bytes, thumb_path, encrypted_thumb_blob_id) =
+        match row {
+            Some(r) => r,
+            None => {
+                tracing::debug!(photo_id = %photo_id, "AI: photo not found in DB, skipping");
+                mark_processed(pool, photo_id, user_id).await?;
+                return Ok((0, 0));
+            }
+        };
 
-    // Read the image bytes: either from plain file or from encrypted blob
-    let image_bytes = if !file_path.is_empty() {
-        let abs_path = storage_root.join(&file_path);
-        match tokio::fs::read(&abs_path).await {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                tracing::debug!(file_path = %file_path, abs_path = ?abs_path, error = %e, "AI: cannot read photo file, skipping");
-                mark_processed(pool, photo_id, user_id).await?;
-                return Ok((0, 0));
-            }
-        }
-    } else if let Some(enc_blob_id) = encrypted_blob_id.as_ref() {
-        match load_encrypted_photo_bytes(pool, storage_root, jwt_secret, enc_blob_id, user_id).await
-        {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                tracing::debug!(
-                    photo_id = %photo_id,
-                    encrypted_blob_id = %enc_blob_id,
-                    error = %e,
-                    "AI: cannot read encrypted photo, skipping"
-                );
-                mark_processed(pool, photo_id, user_id).await?;
-                return Ok((0, 0));
-            }
-        }
+    // ── Choose the decode source ──────────────────────────────────────────
+    // Videos must NEVER be read in full here: a single video blob can be
+    // several GB, and decrypting it whole into RAM just to hand it to
+    // `image::load_from_memory` (which can't decode video anyway) OOM-kills the
+    // server on large libraries — the root cause of issues #5 and #13. Run
+    // detection on the already-generated poster thumbnail instead. Oversized
+    // still images take the same path as a safety net against pathological
+    // multi-hundred-MP files.
+    const MAX_FULL_DECODE_BYTES: i64 = 128 * 1024 * 1024; // 128 MiB
+    let is_video = media_type.eq_ignore_ascii_case("video");
+    let oversized = size_bytes > MAX_FULL_DECODE_BYTES;
+
+    // item #8: for videos, first try the frame ~5 s in (sliding ±2 s) that
+    // actually contains a face — decoded directly, far better than the poster
+    // thumbnail. Any failure leaves this None and we fall back to the thumbnail
+    // path below, so the pipeline never destabilises on video handling (#16).
+    let video_selection: Option<(image::DynamicImage, Vec<crate::ai::models::FaceDetection>)> =
+        if is_video {
+            select_video_face_frame(
+                pool,
+                storage_root,
+                jwt_secret,
+                &file_path,
+                encrypted_blob_id.as_deref(),
+                user_id,
+                config.face_confidence,
+                config.allow_heuristic_fallback,
+            )
+            .await
+        } else {
+            None
+        };
+
+    // `img` + optionally precomputed face detections come from either the
+    // video-frame path (item #8) or the existing thumbnail / full-image decode.
+    let (img, precomputed_faces): (
+        image::DynamicImage,
+        Option<Vec<crate::ai::models::FaceDetection>>,
+    ) = if let Some((frame_img, faces)) = video_selection {
+        tracing::debug!(
+            photo_id = %photo_id, faces = faces.len(),
+            "AI: using ~5s video frame for detection (item #8)"
+        );
+        (frame_img, Some(faces))
     } else {
-        tracing::debug!(photo_id = %photo_id, "AI: photo has neither file_path nor encrypted_blob_id, skipping");
-        mark_processed(pool, photo_id, user_id).await?;
-        return Ok((0, 0));
-    };
+        // `full_still` = a still image we intend to full-decode (not already
+        // routed to a thumbnail for being a video or byte-oversized). Only these
+        // need the pixel-count decode-bomb guard below.
+        let full_still = !(is_video || oversized);
+        // Read the image bytes: thumbnail for video/oversized, else full media.
+        let mut image_bytes = if is_video || oversized {
+            match load_thumbnail_bytes(
+                pool,
+                storage_root,
+                jwt_secret,
+                thumb_path.as_deref(),
+                encrypted_thumb_blob_id.as_deref(),
+                user_id,
+            )
+            .await
+            {
+                Ok(Some(bytes)) => bytes,
+                Ok(None) => {
+                    tracing::debug!(
+                        photo_id = %photo_id, is_video, oversized,
+                        "AI: no thumbnail for video/oversized media — skipping (refusing to read full blob)"
+                    );
+                    mark_processed(pool, photo_id, user_id).await?;
+                    return Ok((0, 0));
+                }
+                Err(e) => {
+                    tracing::debug!(photo_id = %photo_id, error = %e, "AI: thumbnail load failed, skipping");
+                    mark_processed(pool, photo_id, user_id).await?;
+                    return Ok((0, 0));
+                }
+            }
+        } else if !file_path.is_empty() {
+            let abs_path = storage_root.join(&file_path);
+            match tokio::fs::read(&abs_path).await {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    tracing::debug!(file_path = %file_path, abs_path = ?abs_path, error = %e, "AI: cannot read photo file, skipping");
+                    mark_processed(pool, photo_id, user_id).await?;
+                    return Ok((0, 0));
+                }
+            }
+        } else if let Some(enc_blob_id) = encrypted_blob_id.as_ref() {
+            match load_encrypted_photo_bytes(pool, storage_root, jwt_secret, enc_blob_id, user_id)
+                .await
+            {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    tracing::debug!(
+                        photo_id = %photo_id,
+                        encrypted_blob_id = %enc_blob_id,
+                        error = %e,
+                        "AI: cannot read encrypted photo, skipping"
+                    );
+                    mark_processed(pool, photo_id, user_id).await?;
+                    return Ok((0, 0));
+                }
+            }
+        } else {
+            tracing::debug!(photo_id = %photo_id, "AI: photo has neither file_path nor encrypted_blob_id, skipping");
+            mark_processed(pool, photo_id, user_id).await?;
+            return Ok((0, 0));
+        };
 
-    tracing::debug!(
-        photo_id = %photo_id,
-        filename = %filename,
-        size_bytes = image_bytes.len(),
-        "AI: starting recognition"
-    );
+        tracing::debug!(
+            photo_id = %photo_id,
+            filename = %filename,
+            size_bytes = image_bytes.len(),
+            "AI: starting recognition"
+        );
 
-    // Skip very small files (probably thumbnails)
-    if image_bytes.len() < 1000 {
-        tracing::debug!(photo_id = %photo_id, size_bytes = image_bytes.len(), "AI: file too small, skipping");
-        mark_processed(pool, photo_id, user_id).await?;
-        return Ok((0, 0));
-    }
-
-    // Decode image once for both pipelines
-    let img = match image::load_from_memory(&image_bytes) {
-        Ok(img) => img,
-        Err(e) => {
-            tracing::debug!(filename = %filename, error = %e, "AI: cannot decode image, skipping");
+        // Skip very small files (probably thumbnails)
+        if image_bytes.len() < 1000 {
+            tracing::debug!(photo_id = %photo_id, size_bytes = image_bytes.len(), "AI: file too small, skipping");
             mark_processed(pool, photo_id, user_id).await?;
             return Ok((0, 0));
         }
+
+        // ── Decode-bomb guard (item #16) ──────────────────────────────────
+        // A still can be small on disk yet enormous in pixels (stitched
+        // panorama, upscaled export). Full-decoding it to RGBA can allocate
+        // >1 GB and OOM-kill the server. Read the header dimensions cheaply
+        // (no full decode) and, if over budget, fall back to the poster
+        // thumbnail; if there is none, skip rather than risk the decode.
+        if full_still {
+            if let Ok(sz) = imagesize::blob_size(&image_bytes) {
+                let pixels = sz.width as u64 * sz.height as u64;
+                if pixels > MAX_DECODE_PIXELS {
+                    match load_thumbnail_bytes(
+                        pool,
+                        storage_root,
+                        jwt_secret,
+                        thumb_path.as_deref(),
+                        encrypted_thumb_blob_id.as_deref(),
+                        user_id,
+                    )
+                    .await
+                    {
+                        Ok(Some(t)) => {
+                            tracing::debug!(
+                                photo_id = %photo_id, pixels,
+                                "AI: still exceeds pixel budget — using thumbnail (decode-bomb guard)"
+                            );
+                            image_bytes = t;
+                        }
+                        _ => {
+                            tracing::debug!(
+                                photo_id = %photo_id, pixels,
+                                "AI: still exceeds pixel budget and no thumbnail — skipping"
+                            );
+                            mark_processed(pool, photo_id, user_id).await?;
+                            return Ok((0, 0));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Decode image once for both pipelines, with a hard allocation ceiling
+        // as a safety net for files whose header dimensions couldn't be read.
+        let img = match decode_image_bounded(&image_bytes) {
+            Ok(img) => img,
+            Err(e) => {
+                tracing::debug!(filename = %filename, error = %e, "AI: cannot decode image, skipping");
+                mark_processed(pool, photo_id, user_id).await?;
+                return Ok((0, 0));
+            }
+        };
+        // Apply EXIF orientation so face/object detection sees the image upright.
+        // `image::load_from_memory` ignores EXIF; SCRFD only detects upright faces,
+        // so rotated selfies would otherwise be missed entirely.
+        let img = crate::photos::thumbnail::apply_exif_orientation_from_bytes(&image_bytes, img);
+        (img, None)
     };
-    // Apply EXIF orientation so face/object detection sees the image upright.
-    // `image::load_from_memory` ignores EXIF; SCRFD only detects upright faces,
-    // so rotated selfies would otherwise be missed entirely.
-    let img = crate::photos::thumbnail::apply_exif_orientation_from_bytes(&image_bytes, img);
     tracing::debug!(
         photo_id = %photo_id,
         width = img.width(),
@@ -344,13 +609,17 @@ async fn process_single_photo(
     // Clear any previous AI tags before re-processing
     tagging::clear_ai_tags(pool, user_id, photo_id).await?;
 
-    // Face detection
+    // Face detection. For videos we may already have detections from the
+    // ~5 s frame selection (item #8) — reuse them instead of re-running.
     let face_start = Instant::now();
-    let face_detections = face::detect_faces_from_image(
-        &img,
-        config.face_confidence,
-        config.allow_heuristic_fallback,
-    )?;
+    let face_detections = match precomputed_faces {
+        Some(faces) => faces,
+        None => face::detect_faces_from_image(
+            &img,
+            config.face_confidence,
+            config.allow_heuristic_fallback,
+        )?,
+    };
     tracing::debug!(
         photo_id = %photo_id,
         filename = %filename,
@@ -458,16 +727,27 @@ async fn process_single_photo(
                 Some(embedding) => {
                     let emb_bytes: Vec<u8> =
                         embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
+                    // The originating object detection's box is stored with the
+                    // pet row so Pet tiles can crop to the animal the way People
+                    // tiles crop to the face (#48). Migration 039 recovers it for
+                    // rows written before this line existed by joining back to
+                    // `object_detections`; that recovery only works while the pet
+                    // row keeps `det.confidence` verbatim, as it does here.
                     sqlx::query(
                         "INSERT INTO pet_detections \
-                         (photo_id, user_id, species, confidence, embedding) \
-                         VALUES (?1, ?2, ?3, ?4, ?5)",
+                         (photo_id, user_id, species, confidence, embedding, \
+                          bbox_x, bbox_y, bbox_w, bbox_h) \
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                     )
                     .bind(photo_id)
                     .bind(user_id)
                     .bind(species)
                     .bind(det.confidence)
                     .bind(&emb_bytes)
+                    .bind(det.bbox.x)
+                    .bind(det.bbox.y)
+                    .bind(det.bbox.w)
+                    .bind(det.bbox.h)
                     .execute(pool)
                     .await?;
 
@@ -511,6 +791,24 @@ async fn mark_processed(pool: &SqlitePool, photo_id: &str, user_id: &str) -> any
     Ok(())
 }
 
+/// Decode image bytes with a hard allocation ceiling so a pathological or
+/// malformed file can't OOM the server (item #16). This is the belt-and-braces
+/// net behind the pixel-count pre-check in `process_single_photo`: it catches
+/// files whose header dimensions `imagesize` couldn't read. A decode that would
+/// allocate more than [`MAX_DECODE_ALLOC_BYTES`] returns an error instead of
+/// aborting the process. EXIF orientation is applied by the caller afterwards,
+/// exactly as with the previous `image::load_from_memory` path.
+fn decode_image_bounded(bytes: &[u8]) -> anyhow::Result<image::DynamicImage> {
+    use std::io::Cursor;
+    let mut reader = image::ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|e| anyhow::anyhow!("guess format: {e}"))?;
+    let mut limits = image::Limits::no_limits();
+    limits.max_alloc = Some(MAX_DECODE_ALLOC_BYTES);
+    reader.limits(limits);
+    reader.decode().map_err(|e| anyhow::anyhow!("decode: {e}"))
+}
+
 /// Load the decrypted plaintext image bytes for a server-side-encrypted photo.
 ///
 /// The blob on disk is an AEAD-encrypted JSON envelope of the form
@@ -550,6 +848,91 @@ async fn load_encrypted_photo_bytes(
     .map_err(|e| anyhow::anyhow!("decrypt failed: {e}"))?;
 
     Ok(raw_bytes)
+}
+
+/// Load image bytes for AI detection from a photo's *thumbnail* rather than the
+/// full-resolution media. Used for videos and oversized stills so we never pull
+/// a multi-GB blob into memory (issues #5 / #13). Returns `Ok(None)` when no
+/// thumbnail is available, letting the caller simply skip the photo.
+async fn load_thumbnail_bytes(
+    pool: &SqlitePool,
+    storage_root: &PathBuf,
+    jwt_secret: &str,
+    thumb_path: Option<&str>,
+    encrypted_thumb_blob_id: Option<&str>,
+    user_id: &str,
+) -> anyhow::Result<Option<Vec<u8>>> {
+    // Prefer a plaintext thumbnail on disk when present.
+    if let Some(tp) = thumb_path {
+        if !tp.is_empty() {
+            let abs = storage_root.join(tp);
+            if let Ok(bytes) = tokio::fs::read(&abs).await {
+                if bytes.len() >= 100 {
+                    return Ok(Some(bytes));
+                }
+            }
+        }
+    }
+    // Fall back to the encrypted thumbnail blob (the server's normal mode).
+    if let Some(blob_id) = encrypted_thumb_blob_id {
+        if !blob_id.is_empty() {
+            let bytes =
+                load_encrypted_photo_bytes(pool, storage_root, jwt_secret, blob_id, user_id)
+                    .await?;
+            return Ok(Some(bytes));
+        }
+    }
+    Ok(None)
+}
+
+/// Pick the best face-detection frame from a video (item #8): try ~5 s in, then
+/// slide to 3 s and 7 s. Returns the first frame with a detected face (and its
+/// detections); if none has a face, returns the primary frame with empty
+/// detections so object detection still runs. `None` only when no frame could be
+/// produced at all, letting the caller fall back to the poster thumbnail.
+#[allow(clippy::too_many_arguments)]
+async fn select_video_face_frame(
+    pool: &SqlitePool,
+    storage_root: &PathBuf,
+    jwt_secret: &str,
+    file_path: &str,
+    encrypted_blob_id: Option<&str>,
+    user_id: &str,
+    face_confidence: f32,
+    allow_heuristic_fallback: bool,
+) -> Option<(image::DynamicImage, Vec<crate::ai::models::FaceDetection>)> {
+    let src = super::video_frame::open(
+        pool,
+        storage_root,
+        jwt_secret,
+        file_path,
+        encrypted_blob_id,
+        user_id,
+    )
+    .await?;
+
+    let mut fallback: Option<image::DynamicImage> = None;
+    for secs in src.candidate_secs() {
+        let Some(jpg) = src.frame_at(secs).await else {
+            continue;
+        };
+        let frame_img = match image::load_from_memory(&jpg) {
+            Ok(img) => img,
+            Err(_) => continue,
+        };
+        match face::detect_faces_from_image(&frame_img, face_confidence, allow_heuristic_fallback) {
+            Ok(faces) if !faces.is_empty() => return Some((frame_img, faces)),
+            Ok(_) => {
+                if fallback.is_none() {
+                    fallback = Some(frame_img);
+                }
+            }
+            Err(_) => {}
+        }
+    }
+    // No frame had a face — hand back the primary frame with empty detections so
+    // object detection still runs and the video is recorded as "no faces".
+    fallback.map(|img| (img, Vec::new()))
 }
 
 /// Run face clustering for a user.
@@ -936,4 +1319,37 @@ async fn run_pet_clustering(
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::{DynamicImage, RgbImage};
+    use std::io::Cursor;
+
+    /// Encode a small valid PNG in memory for decode tests.
+    fn tiny_png(w: u32, h: u32) -> Vec<u8> {
+        let img = DynamicImage::ImageRgb8(RgbImage::new(w, h));
+        let mut buf = Cursor::new(Vec::new());
+        img.write_to(&mut buf, image::ImageFormat::Png)
+            .expect("encode png");
+        buf.into_inner()
+    }
+
+    /// A well-formed image within the allocation ceiling decodes normally.
+    #[test]
+    fn decode_bounded_accepts_normal_image() {
+        let png = tiny_png(32, 24);
+        let img = decode_image_bounded(&png).expect("small png should decode");
+        assert_eq!(img.width(), 32);
+        assert_eq!(img.height(), 24);
+    }
+
+    /// Garbage bytes must return an error, never panic or abort the process —
+    /// the guarantee the decode-bomb guard relies on to keep the loop alive.
+    #[test]
+    fn decode_bounded_rejects_garbage() {
+        let junk = vec![0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01, 0x02, 0x03];
+        assert!(decode_image_bounded(&junk).is_err());
+    }
 }

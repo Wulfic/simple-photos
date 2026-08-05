@@ -1,0 +1,24 @@
+-- Belt-and-suspenders follow-up to 025_unlimited_storage_quota.sql.
+--
+-- Migration 025 zeroed every existing user's `storage_quota_bytes` (0 = unlimited).
+-- But three backup/recovery code paths still defaulted a *missing*
+-- `storage_quota_bytes` field to the old 10 GiB sentinel (10737418240) when
+-- upserting users synced from a primary:
+--   - backup/serve_users.rs      (POST /api/backup/upsert-user)
+--   - backup/recovery_engine.rs  (disaster-recovery user restore)
+--   - backup/recovery.rs         (disaster-recovery user restore)
+--
+-- If a primary's payload ever omitted the field, a backup/recovery server could
+-- silently re-materialize a 10 GiB cap on a user AFTER 025 had already run —
+-- reintroducing the exact `403 Storage quota exceeded` failure 025 fixed. Those
+-- fallbacks are now `unwrap_or(0)`, but any residual row written before this
+-- release must be repaired.
+--
+-- We only touch rows still holding the exact 10 GiB sentinel so we do NOT clobber
+-- a cap an operator may have deliberately set per-user via the admin API.
+--
+-- (As in 025, we intentionally do not rebuild the `users` table to change the
+-- column DEFAULT — every INSERT binds the value explicitly, and a rebuild of a
+-- table referenced by ~10 FKs, inside a foreign-keys-enforced migration
+-- transaction, is not worth the risk.)
+UPDATE users SET storage_quota_bytes = 0 WHERE storage_quota_bytes = 10737418240;

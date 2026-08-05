@@ -12,7 +12,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.simplephotos.data.SecureBlobIds
+import com.simplephotos.data.SecureSmartAlbum
+import com.simplephotos.data.SecureSmartAlbums
 import com.simplephotos.data.local.entities.PhotoEntity
+import com.simplephotos.data.remote.isConflict
 import com.simplephotos.data.remote.dto.SecureGallery
 import com.simplephotos.data.remote.dto.SecureGalleryItem
 import com.simplephotos.data.repository.AlbumRepository
@@ -81,6 +85,23 @@ class SecureGalleryViewModel @Inject constructor(
     var itemsLoading by mutableStateOf(false)
         private set
 
+    // ── Secure smart albums (built-in, media-type derived) ──────────────────
+    // The aggregate feed across ALL secure galleries, fetched once after unlock
+    // and refreshed on every mutation. Smart-album membership derives from it.
+    var allItems by mutableStateOf<List<SecureGalleryItem>>(emptyList())
+        private set
+    var allItemsLoading by mutableStateOf(false)
+        private set
+    // When a smart album is open, `selectedGallery` is null and this holds the
+    // smart id (a synthetic selection — never a fake SecureGallery instance, so
+    // smart ids can't leak into deleteGallery/addPhotosToGallery).
+    var selectedSmartAlbumId by mutableStateOf<String?>(null)
+        private set
+
+    /** Non-empty secure smart albums, recomputed from the aggregate feed. */
+    val smartAlbums: List<SecureSmartAlbum>
+        get() = SecureSmartAlbums.compute(allItems)
+
     // ── Picker source selection ─────────────────────────────────────────────
     // The "Add Photos" picker can draw from the full library OR a specific
     // album / smart album, mirroring the web flow. `pickerAlbums` are the
@@ -118,6 +139,7 @@ class SecureGalleryViewModel @Inject constructor(
                 isAuthenticated = true
                 Log.i(TAG, "Unlock successful, token obtained")
                 loadGalleries()
+                loadAllItems()
             } catch (e: Exception) {
                 Log.e(TAG, "Unlock failed", e)
                 authError = e.message ?: "Invalid password"
@@ -143,15 +165,52 @@ class SecureGalleryViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Load the aggregate item feed for the secure smart albums. If a smart album
+     * is currently open, its item list is re-derived from the fresh feed so a
+     * mutation (remove) reflects immediately.
+     */
+    fun loadAllItems() {
+        viewModelScope.launch {
+            allItemsLoading = true
+            try {
+                val res = withContext(Dispatchers.IO) {
+                    secureGalleryRepository.listAllItems(galleryToken)
+                }
+                allItems = res.items
+                Log.d(TAG, "Loaded ${allItems.size} aggregate secure items")
+                selectedSmartAlbumId?.let { items = SecureSmartAlbums.filter(allItems, it) }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to load aggregate secure items", e)
+                error = "Failed to load secure albums: ${e.message}"
+            } finally {
+                allItemsLoading = false
+            }
+        }
+    }
+
     fun selectGallery(gallery: SecureGallery) {
         Log.d(TAG, "selectGallery: id=${gallery.id} name=${gallery.name} items=${gallery.itemCount}")
+        selectedSmartAlbumId = null
         selectedGallery = gallery
         loadItems(gallery.id)
         loadPhotos()
     }
 
+    /**
+     * Open a built-in secure smart album. No per-gallery fetch and no picker
+     * prep (smart views are read-only) — items derive from the aggregate feed.
+     */
+    fun selectSmartAlbum(id: String) {
+        Log.d(TAG, "selectSmartAlbum: id=$id")
+        selectedGallery = null
+        selectedSmartAlbumId = id
+        items = SecureSmartAlbums.filter(allItems, id)
+    }
+
     fun deselectGallery() {
         selectedGallery = null
+        selectedSmartAlbumId = null
         items = emptyList()
     }
 
@@ -192,8 +251,17 @@ class SecureGalleryViewModel @Inject constructor(
                 // Photos already in ANY secure gallery must not be offered for
                 // re-adding. This is the same id set the main gallery filters on
                 // (see GalleryScreen) — originals, clones, and encrypted blobs.
-                secureBlobIds = withContext(Dispatchers.IO) {
-                    secureGalleryRepository.getSecureBlobIds()
+                // Fails CLOSED (B5). An unavailable set keeps the previous one
+                // rather than reading as "nothing is secured" — which here would
+                // offer already-secured photos back in the add picker, and let a
+                // user "add" a photo that is already inside the album.
+                when (val read = withContext(Dispatchers.IO) {
+                    secureGalleryRepository.secureBlobIds()
+                }) {
+                    is SecureBlobIds.Known -> secureBlobIds = read.ids
+                    SecureBlobIds.Unavailable -> Log.w(TAG, "secure id set " +
+                        "unavailable — picker dedup falls back to the previous " +
+                        "${secureBlobIds.size} id(s)")
                 }
                 Log.d(TAG, "Loaded ${secureBlobIds.size} secure blob ids for dedup")
 
@@ -288,6 +356,7 @@ class SecureGalleryViewModel @Inject constructor(
                     items = emptyList()
                 }
                 loadGalleries()
+                loadAllItems()
             } catch (e: Exception) {
                 Log.e(TAG, "Delete gallery failed: ${gallery.id}", e)
                 error = "Delete failed: ${e.message}"
@@ -299,23 +368,206 @@ class SecureGalleryViewModel @Inject constructor(
         val gallery = selectedGallery ?: return
         Log.d(TAG, "addPhotosToGallery: ${blobIds.size} blobs → gallery ${gallery.id}")
         viewModelScope.launch {
+            // Secure each photo independently. Previously one failing addItem made
+            // awaitAll() rethrow and cancel every sibling coroutine, aborting the
+            // whole batch — some photos moved, the rest stayed in the regular
+            // gallery ("most items removed but not all", #16). Each job now catches
+            // its own failure and reports success/failure so the batch always
+            // finishes and the user is told when photos are left behind.
+            val outcomes = withContext(Dispatchers.IO) {
+                coroutineScope {
+                    blobIds.map { blobId ->
+                        async {
+                            try {
+                                secureGalleryRepository.addItem(gallery.id, blobId)
+                                true
+                            } catch (e: Exception) {
+                                Log.e(TAG, "  add failed for blobId=$blobId", e)
+                                false
+                            }
+                        }
+                    }.awaitAll()
+                }
+            }
+            val added = outcomes.count { it }
+            val failed = outcomes.size - added
+            Log.i(TAG, "Added $added/${blobIds.size} photos to gallery ${gallery.id} ($failed failed)")
+            if (failed > 0) {
+                error = "$failed photo${if (failed != 1) "s" else ""} couldn't be secured and remain in your gallery"
+            }
+            loadItems(gallery.id)
+            loadGalleries()
+            loadAllItems()
+        }
+    }
+
+    // ── Cross-secure-album move picker (#31) ────────────────────────────────
+    // Items in the user's OTHER secure albums — the source pool for moving media
+    // into the open album. Excludes the open album's own items and any item with
+    // no owning gallery id (older rows we can't route a move for).
+    val otherSecureItems: List<SecureGalleryItem>
+        get() {
+            val current = selectedGallery?.id ?: return emptyList()
+            return allItems.filter { it.galleryId != null && it.galleryId != current }
+        }
+
+    /**
+     * Move the given items (by id) from their current secure albums into the
+     * open album (#31). Each is isolated so one failure never aborts the rest.
+     */
+    fun moveItemsIntoSelected(itemIds: List<String>) {
+        val target = selectedGallery ?: return
+        if (itemIds.isEmpty()) return
+        val pool = otherSecureItems.associateBy { it.id }
+        viewModelScope.launch {
+            val outcomes = withContext(Dispatchers.IO) {
+                coroutineScope {
+                    itemIds.mapNotNull { id ->
+                        val item = pool[id]
+                        val src = item?.galleryId
+                        if (src == null) {
+                            Log.e(TAG, "  cannot move item $id: not in pool / no source gallery")
+                            null
+                        } else {
+                            async {
+                                try {
+                                    secureGalleryRepository.moveItem(src, id, target.id)
+                                    true
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "  move failed for item $id", e)
+                                    false
+                                }
+                            }
+                        }
+                    }.awaitAll()
+                }
+            }
+            val moved = outcomes.count { it }
+            val failed = itemIds.size - moved
+            Log.i(TAG, "Moved $moved/${itemIds.size} items into ${target.id} ($failed failed)")
+            if (failed > 0) {
+                error = "$failed item${if (failed != 1) "s" else ""} couldn't be moved"
+            }
+            loadItems(target.id)
+            loadGalleries()
+            loadAllItems()
+        }
+    }
+
+    // ── Push direction (#43, an ADD since Z1) ────────────────────────────────
+    // Real albums the current selection can be filed INTO. Excludes the open
+    // album; in a smart view (`selectedGallery` null) every album is a target.
+    val addTargets: List<SecureGallery>
+        get() = SecureMovePlan.addTargets(galleries, selectedGallery?.id)
+
+    /**
+     * File the given selected items (by id) into [targetGalleryId] **without
+     * removing them from the album they are in** (Z1).
+     *
+     * This called `moveItem` until Z1e, which is the originally reported bug:
+     * the affordance was always a "+", so adding a secure photo to a second
+     * album silently emptied it out of the first. Web was switched in `56f995c`;
+     * the phone was not, so the bug stayed live there for the whole of Z1.
+     *
+     * Expands bursts so a stack travels as one, dedups by clone, and isolates
+     * each add so one failure never aborts the rest (mirrors the pull picker and
+     * secure-add). A 409 is the server answering "already in that album" —
+     * counted as a no-op, never as a failure.
+     */
+    fun pushItemsTo(itemIds: List<String>, targetGalleryId: String) {
+        if (itemIds.isEmpty()) return
+        val expanded = SecureMovePlan.expandBurstSelection(items, itemIds.toSet())
+        val adds = SecureMovePlan.planAddsToTarget(items, expanded)
+        if (adds.isEmpty()) {
+            Log.i(TAG, "pushItemsTo: nothing to add (selection resolved to no items)")
+            return
+        }
+        viewModelScope.launch {
+            val outcomes = withContext(Dispatchers.IO) {
+                coroutineScope {
+                    adds.map { ad ->
+                        async {
+                            try {
+                                secureGalleryRepository.addItem(targetGalleryId, ad.blobId)
+                                AddOutcome.ADDED
+                            } catch (e: Exception) {
+                                // 409 = already in the target album. That is the
+                                // server answering the membership question
+                                // authoritatively rather than the client guessing
+                                // it from a feed that cannot see the target — a
+                                // no-op, and reporting it as a failure would tell
+                                // the user something went wrong when nothing did.
+                                if (isConflict(e)) {
+                                    Log.i(TAG, "  item ${ad.itemId} already in $targetGalleryId (409)")
+                                    AddOutcome.ALREADY
+                                } else {
+                                    Log.e(TAG, "  push add failed for item ${ad.itemId}", e)
+                                    AddOutcome.FAILED
+                                }
+                            }
+                        }
+                    }.awaitAll()
+                }
+            }
+            val added = outcomes.count { it == AddOutcome.ADDED }
+            val already = outcomes.count { it == AddOutcome.ALREADY }
+            val failed = outcomes.count { it == AddOutcome.FAILED }
+            Log.i(
+                TAG,
+                "Added $added/${adds.size} items to $targetGalleryId " +
+                    "($already already there, $failed failed)"
+            )
+            if (failed > 0) {
+                error = "$failed item${if (failed != 1) "s" else ""} couldn't be added"
+            }
+            loadAllItems()
+            loadGalleries()
+            selectedGallery?.let { loadItems(it.id) }
+        }
+    }
+
+    /** Per-item result of a push add — "already there" is not a failure. */
+    private enum class AddOutcome { ADDED, ALREADY, FAILED }
+
+    /**
+     * Re-fetch both secure feeds and the album list.
+     *
+     * The recovery path for a removal blocked on unknown membership (Z1e): a
+     * re-fetch is the only thing that can turn "this server did not report which
+     * albums hold it" into a real answer. A fail-closed guard with no way out is
+     * one the next person deletes, which is why the refusal offers this rather
+     * than only a Cancel.
+     */
+    fun refreshFeeds() {
+        loadAllItems()
+        loadGalleries()
+        selectedGallery?.let { loadItems(it.id) }
+    }
+
+    /**
+     * Persist (or clear, with null) a secure item's crop/edit metadata (#31),
+     * then refresh so the tile + viewer re-render with the applied crop.
+     */
+    fun setItemCrop(item: SecureGalleryItem, cropMetadata: String?, onDone: () -> Unit = {}) {
+        val gid = item.galleryId ?: selectedGallery?.id
+        if (gid == null) {
+            Log.e(TAG, "setItemCrop: no owning gallery for item ${item.id}")
+            error = "Could not determine which album this photo belongs to."
+            return
+        }
+        viewModelScope.launch {
             try {
                 withContext(Dispatchers.IO) {
-                    coroutineScope {
-                        blobIds.map { blobId ->
-                            async {
-                                Log.d(TAG, "  adding blobId=$blobId")
-                                secureGalleryRepository.addItem(gallery.id, blobId)
-                            }
-                        }.awaitAll()
-                    }
+                    secureGalleryRepository.setItemCrop(gid, item.id, cropMetadata)
                 }
-                Log.i(TAG, "Added ${blobIds.size} photos to gallery ${gallery.id}")
-                loadItems(gallery.id)
-                loadGalleries()
+                Log.i(TAG, "Saved crop for secure item ${item.id} (hasCrop=${cropMetadata != null})")
+                loadAllItems()
+                selectedGallery?.let { loadItems(it.id) }
             } catch (e: Exception) {
-                Log.e(TAG, "Add photos failed", e)
-                error = "Add photos failed: ${e.message}"
+                Log.e(TAG, "setItemCrop failed for ${item.id}", e)
+                error = "Save failed: ${e.message}"
+            } finally {
+                onDone()
             }
         }
     }
@@ -327,33 +579,52 @@ class SecureGalleryViewModel @Inject constructor(
     fun removeItem(item: SecureGalleryItem) = removeItems(listOf(item))
 
     /**
-     * Remove items from the selected secure gallery, returning their originals
-     * to the regular gallery (mirrors the web's per-item removal).
+     * Remove items from the selected secure gallery (mirrors the web's per-item
+     * removal).
+     *
+     * Whether the originals return to the regular gallery depends on whether
+     * this was their LAST secure membership — see
+     * [SecureGalleryRepository.removeItem]. The UI must have said which outcome
+     * it is before calling this; that verdict comes from `AlbumRemoval`.
      *
      * Burst-aware: any target that belongs to a burst pulls in ALL sibling
-     * frames sharing its `burst_id`. The grid and viewer collapse a burst to a
+     * frames sharing its `burst_id`, via the same [SecureMovePlan.expandForRemoval]
+     * the confirmation dialog counts. The grid and viewer collapse a burst to a
      * single tile/page, so a naive single-item delete would strand the other
      * frames in the album while only the cover returned to the gallery — the
      * exact bug this fixes.
      */
     fun removeItems(targets: List<SecureGalleryItem>) {
-        val gallery = selectedGallery ?: return
         if (targets.isEmpty()) return
-        val burstIds = targets.mapNotNull { it.burstId }.filter { it.isNotEmpty() }.toSet()
-        val toRemove = (targets + items.filter { !it.burstId.isNullOrEmpty() && it.burstId in burstIds })
-            .distinctBy { it.id }
+        // Route each item to its OWNING album: in a smart view `selectedGallery`
+        // is null and items span multiple galleries, so we can't assume one
+        // target gallery. Fall back to the selected real gallery when an item
+        // predates gallery_id (older server).
+        val fallbackGalleryId = selectedGallery?.id
+        // Burst expansion lives in SecureMovePlan so the confirmation dialog can
+        // describe the SAME set this removes — see `expandForRemoval`.
+        val toRemove = SecureMovePlan.expandForRemoval(items, targets)
         viewModelScope.launch {
             try {
                 withContext(Dispatchers.IO) {
                     coroutineScope {
-                        toRemove.map { item ->
-                            async { secureGalleryRepository.removeItem(gallery.id, item.id) }
+                        toRemove.mapNotNull { item ->
+                            val gid = item.galleryId ?: fallbackGalleryId
+                            if (gid == null) {
+                                Log.e(TAG, "  cannot remove item ${item.id}: no owning gallery id")
+                                null
+                            } else {
+                                async { secureGalleryRepository.removeItem(gid, item.id) }
+                            }
                         }.awaitAll()
                     }
                 }
-                Log.i(TAG, "Removed ${toRemove.size} item(s) from gallery ${gallery.id}")
-                loadItems(gallery.id)
+                Log.i(TAG, "Removed ${toRemove.size} item(s) from secure album(s)")
+                // Refresh the aggregate feed (re-derives smart items) and the
+                // album list; real albums also re-fetch their own items.
+                loadAllItems()
                 loadGalleries()
+                selectedGallery?.let { loadItems(it.id) }
             } catch (e: Exception) {
                 Log.e(TAG, "Remove items failed (${toRemove.size} targets)", e)
                 error = "Remove failed: ${e.message}"

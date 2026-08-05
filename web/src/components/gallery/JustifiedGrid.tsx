@@ -3,10 +3,31 @@
  * their natural aspect ratios.  Each row is a flex container whose children
  * grow proportional to their aspect ratio so the row fills the container width
  * exactly.  The last (incomplete) row uses the target height without stretching.
+ *
+ * The grid is **virtualized** (#51): only rows intersecting the viewport (plus
+ * an overscan band) are mounted, with spacer divs standing in for the rest.
+ * Rendering every tile mounted 10k+ `<div>`/`<img>` pairs on a large library,
+ * which both crashed the tab and thrashed the thumbnail cache. The layout pass
+ * already computes every row height up front, so windowing needs no measurement
+ * of rendered content and no external virtualization dependency.
  */
-import { useState, useEffect, useRef, useMemo, type ReactNode } from "react";
+import {
+  useState,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useMemo,
+  useCallback,
+  type ReactNode,
+} from "react";
 import { useThumbnailSizeStore } from "../../store/thumbnailSize";
 import { clampTileAspect } from "../../utils/thumbnailCss";
+import {
+  computeRowOffsets,
+  computeGridWindow,
+  type LayoutRow,
+  type GridWindow,
+} from "./gridWindow";
 
 export interface JustifiedGridProps<T> {
   /** Items to lay out. */
@@ -21,10 +42,22 @@ export interface JustifiedGridProps<T> {
   gap?: number;
 }
 
-interface LayoutRow {
-  startIdx: number;
-  count: number;
-  height: number;
+/**
+ * How much to render beyond the viewport, as a fraction of viewport height,
+ * on each side. Half a screen in each direction keeps tiles decoded before a
+ * fast scroll reaches them without inflating the mounted set.
+ */
+const OVERSCAN_RATIO = 0.5;
+
+const EMPTY_WINDOW: GridWindow = { startRow: 0, endRow: 0, padTop: 0, padBottom: 0 };
+
+function sameWindow(a: GridWindow, b: GridWindow): boolean {
+  return (
+    a.startRow === b.startRow &&
+    a.endRow === b.endRow &&
+    a.padTop === b.padTop &&
+    a.padBottom === b.padBottom
+  );
 }
 
 /** Row height for a run of items that must fill `containerWidth` exactly. */
@@ -163,9 +196,79 @@ export default function JustifiedGrid<T>({
     [aspectRatios, containerWidth, targetRowHeight, gap],
   );
 
+  // Prefix-summed row offsets — the basis for both windowing and the spacers
+  // that hold the scroll height steady.
+  const offsets = useMemo(() => computeRowOffsets(rows, gap), [rows, gap]);
+
+  const [renderWindow, setWindow] = useState<GridWindow>(EMPTY_WINDOW);
+
+  // Read through a ref so `recompute` keeps a stable identity. Nearly every
+  // call site passes an inline `getAspectRatio`, so `aspectRatios` — and with it
+  // `rows` and `offsets` — is a fresh array on every render. Closing over
+  // `offsets` directly would therefore re-attach the scroll listeners of every
+  // day-group grid on the page each time any of them re-rendered.
+  const offsetsRef = useRef(offsets);
+  offsetsRef.current = offsets;
+
+  const recompute = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    // Grid-local viewport coordinates. Re-reading our own rect (rather than
+    // caching a document offset) keeps this correct when banners, headers or
+    // preceding day-groups above us change height.
+    const gridTop = -el.getBoundingClientRect().top;
+    const viewportHeight = window.innerHeight;
+    const next = computeGridWindow(
+      offsetsRef.current,
+      gridTop,
+      gridTop + viewportHeight,
+      Math.round(viewportHeight * OVERSCAN_RATIO),
+    );
+    // Only re-render when the slice actually moved. The main gallery mounts one
+    // grid per day-group, so without this every grid on the page would re-render
+    // on every scroll frame.
+    setWindow((prev) => (sameWindow(prev, next) ? prev : next));
+  }, []);
+
+  // Listeners attach once per mount — `recompute` is stable by construction.
+  useEffect(() => {
+    let frame = 0;
+    const schedule = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        recompute();
+      });
+    };
+
+    // Capture phase: scroll events do not bubble, so this is what catches a
+    // scrollable ancestor as well as the document itself.
+    window.addEventListener("scroll", schedule, { passive: true, capture: true });
+    window.addEventListener("resize", schedule);
+    return () => {
+      if (frame) cancelAnimationFrame(frame);
+      window.removeEventListener("scroll", schedule, { capture: true });
+      window.removeEventListener("resize", schedule);
+    };
+  }, [recompute]);
+
+  // Re-window whenever the layout itself changed. Keyed on the row count and
+  // total height rather than the `offsets` identity, which churns every render.
+  // useLayoutEffect so the first window lands before paint — otherwise the grid
+  // flashes empty on mount and scroll restoration races a zero-height page.
+  const totalHeight = offsets[offsets.length - 1];
+  useLayoutEffect(() => {
+    recompute();
+  }, [recompute, rows.length, totalHeight]);
+
+  const visibleRows = rows.slice(renderWindow.startRow, renderWindow.endRow);
+
   return (
     <div ref={containerRef} data-testid="justified-grid">
-      {rows.map((row) => {
+      {renderWindow.padTop > 0 && (
+        <div aria-hidden="true" style={{ height: `${renderWindow.padTop}px` }} />
+      )}
+      {visibleRows.map((row) => {
         const rowItems = items.slice(row.startIdx, row.startIdx + row.count);
         const rowAspects = aspectRatios.slice(row.startIdx, row.startIdx + row.count);
         const isLastRow = row.startIdx + row.count >= items.length;
@@ -208,6 +311,9 @@ export default function JustifiedGrid<T>({
           </div>
         );
       })}
+      {renderWindow.padBottom > 0 && (
+        <div aria-hidden="true" style={{ height: `${renderWindow.padBottom}px` }} />
+      )}
     </div>
   );
 }

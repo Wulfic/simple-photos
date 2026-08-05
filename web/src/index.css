@@ -124,6 +124,64 @@
   }
 }
 
+/* ── Safe-area insets (#50) ──────────────────────────────────────────────────
+ *
+ * Edge-anchored controls must clear the phone's navigation bar, home indicator
+ * and notch. `index.html` opts the page into edge-to-edge with
+ * `viewport-fit=cover` — REQUIRED, or every `env()` below resolves to 0 and
+ * these classes do nothing at all (pinned by `viewportFit.test.ts`).
+ *
+ * Every rule is `base + env(...)`, so on any device with no inset — desktop,
+ * a browser tab, a non-notched phone — it computes to exactly the base value
+ * it replaced. The change is a no-op everywhere except where the bug is.
+ *
+ * The `0px` fallback inside env() is not decoration: a browser that does not
+ * recognise the keyword would otherwise invalidate the whole `calc()` and drop
+ * the padding entirely, which is worse than the overlap.
+ *
+ * Defined once here rather than as repeated `pb-[calc(...)]` arbitrary values
+ * at seven call sites — two copies of one formula is how `computeFaceCropStyle`
+ * and `FaceCrop` drifted apart (#48). */
+@layer utilities {
+  /* Bottom control bars: each matches the `pb-*` it replaces. */
+  .safe-pb-3 { padding-bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px)); }
+  .safe-pb-4 { padding-bottom: calc(1rem + env(safe-area-inset-bottom, 0px)); }
+  /* Bottom sheets/panels that own their own vertical rhythm (`py-3`). */
+  .safe-py-3 {
+    padding-top: 0.75rem;
+    padding-bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
+  }
+  /* Inset only, no base. For a bottom sheet's scroll container: the sheet's
+   * background still reaches the screen edge (correct — a gap under a sheet
+   * looks broken), while its content scrolls clear of the home indicator. */
+  .safe-pb { padding-bottom: env(safe-area-inset-bottom, 0px); }
+  /* Floating elements positioned with `bottom-N`. */
+  .safe-bottom-4 { bottom: calc(1rem + env(safe-area-inset-bottom, 0px)); }
+  .safe-bottom-6 { bottom: calc(1.5rem + env(safe-area-inset-bottom, 0px)); }
+  /* Top bars, under the status bar / notch. Named by role, not by scale,
+   * because each carries the base padding it replaces — stated here so the
+   * two numbers cannot drift apart at the call site.
+   *
+   * The top edge is not optional collateral of this change. On iOS the app
+   * ALREADY opted in via `apple-mobile-web-app-status-bar-style=black-translucent`
+   * and never added the padding, so that overlap predates #50; and
+   * `viewport-fit=cover` now extends it to every other platform, so shipping
+   * the bottom fix alone would trade one overlap for another. */
+  .safe-top-bar {          /* viewer top bar, base py-3 */
+    padding-top: calc(0.75rem + env(safe-area-inset-top, 0px));
+    padding-bottom: 0.75rem;
+  }
+  .safe-top-banner {       /* fixed top-0 status banners, base py-1.5 */
+    padding-top: calc(0.375rem + env(safe-area-inset-top, 0px));
+    padding-bottom: 0.375rem;
+  }
+  /* Landscape notch — the orientation video is actually watched in. */
+  .safe-px {
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+  }
+}
+
 @layer base {
   /* ── Semantic color tokens ─────────────────────────────────────────────────
    * Channel triplets (space-separated R G B) consumed by tailwind.config.js via
@@ -134,6 +192,7 @@
    * block re-points the same tokens at the original hand-tuned gray ramp, so
    * existing dark mode is preserved 1:1. */
   :root {
+    color-scheme: light;
     --canvas: 248 250 252; /* slate-50  — page background */
     --surface: 255 255 255; /* white     — cards, header, modals, menus */
     --surface-raised: 248 250 252; /* slate-50  — tiles / secondary panels above a surface */
@@ -170,6 +229,43 @@
   .dark select:focus,
   .dark textarea:focus {
     @apply ring-accent-400 border-accent-400;
+  }
+
+  /* ── Visible, themed scrollbars for large libraries (#13) ──────────────────
+   * The gallery/albums/search pages scroll the window (plus a few inner scroll
+   * containers). On overlay-scrollbar platforms (macOS, some mobile) the native
+   * bar stays hidden until you scroll, which makes very large libraries feel
+   * unscrollable. Force a persistent, accessible bar — sized for pointer + touch,
+   * themed via the semantic edge tokens (so it follows light/dark), with a stable
+   * gutter so content doesn't shift when it appears. Firefox uses `scrollbar-*`;
+   * WebKit uses `::-webkit-scrollbar`. Keyboard scrolling (arrows / PageUp-Down /
+   * Space) works natively on the focused scroll container. */
+  html {
+    scrollbar-gutter: stable;
+    scrollbar-width: auto;
+    scrollbar-color: rgb(var(--edge-strong)) transparent;
+  }
+
+  ::-webkit-scrollbar {
+    width: 12px;
+    height: 12px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background-color: rgb(var(--edge-strong));
+    border-radius: 8px;
+    /* Transparent border + content-box clip renders the thumb as an inset pill
+     * with breathing room from the track edges. */
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: rgb(var(--fg-subtle));
+  }
+  ::-webkit-scrollbar-corner {
+    background: transparent;
   }
 }
 

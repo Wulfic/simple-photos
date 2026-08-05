@@ -1,0 +1,58 @@
+-- #40: retire a file that fails conversion three times, instead of re-running a
+-- full transcode on it every autoscan pass forever.
+--
+-- Numbered 038, NOT 034 as the plan in todo.md said. 034 was never created (a
+-- numbering slip between 033 and 035), and sqlx tracks applied migrations by the
+-- integer version in the filename. Filling the gap now would insert a version
+-- BELOW three migrations already applied on any developer database. It would
+-- probably work — sqlx only validates applied-but-missing, not out-of-order —
+-- but "probably" is not a reason to reuse a number when the next free one is
+-- free. The number is a label, not a semantic.
+--
+-- ── Why this extends the 031 cache rather than adding a table ──────────────
+--
+-- `scan_skipped_paths` already keys on (user_id, rel_path), already stores
+-- size_bytes + mtime, and already invalidates when either changes — which is
+-- exactly the retry semantics this cap needs ("if the file is replaced, try
+-- again"). A separate conversion-failure table would duplicate all three and
+-- then have to be taught the same invalidation.
+--
+-- ── What the failure actually is ───────────────────────────────────────────
+--
+-- A conversion failure does NOT normally loop: `ingest::process_candidate`
+-- registers the ORIGINAL on failure, so the file lands in `photos.file_path` and
+-- the next pass skips it via `existing_set`. The forever-loop is the narrower
+-- set of paths that run a transcode and leave **no row at all**:
+--
+--   * conversion failed AND the original's hash collides with an already-
+--     registered photo (ingest.rs, the `dup_exists` early return) — the common
+--     case on a Google Takeout library, where the same bytes appear in the date
+--     folder and in every album folder;
+--   * conversion succeeded but the DB insert errored;
+--   * conversion succeeded but `INSERT OR IGNORE` collided on the photo_hash
+--     unique index, so the row that exists describes a DIFFERENT file path.
+--
+-- Every one of those costs a full ffprobe + GPU attempt + CPU fallback (each
+-- capped at 600 s) on every single pass, on a file that can never succeed.
+--
+-- ── No CHECK constraint to widen ──────────────────────────────────────────
+--
+-- The plan also said this migration must "allow reason = 'conversion_failed'".
+-- It does not: 031 declared `reason TEXT NOT NULL` with the permitted values
+-- named only in a comment. There is nothing to relax, so the sole schema change
+-- here is the counter.
+
+-- Attempts charged against this path. Only ever non-zero for
+-- reason = 'conversion_failed'; the deterministic verdicts ('hash_duplicate',
+-- 'gallery_hidden') are terminal on sight and never charge an attempt, so they
+-- keep the DEFAULT 0. See `crate::photos::scan_skip::skip_verdict`, which is the
+-- single place that reads this column's meaning.
+--
+-- Charged BEFORE the encode runs, not after it fails: a file that OOMs or
+-- hard-kills ffmpeg never reaches an error handler, and that is precisely the
+-- file that needs retiring. Same argument as the rendition attempt cap in 036.
+ALTER TABLE scan_skipped_paths ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0;
+
+-- The walk loads every skip row for a user on each pass and the conversion pass
+-- filters them by reason; existing rows are all terminal verdicts, so the
+-- backfill is the DEFAULT and there is no data migration to watch here.

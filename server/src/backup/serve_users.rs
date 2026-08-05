@@ -63,7 +63,7 @@ pub async fn backup_upsert_user(
     let quota = body
         .get("storage_quota_bytes")
         .and_then(|v| v.as_i64())
-        .unwrap_or(10_737_418_240); // 10 GiB default
+        .unwrap_or(0); // 0 = unlimited (storage quotas were removed; never re-impose a cap)
     let created_at = body
         .get("created_at")
         .and_then(|v| v.as_str())

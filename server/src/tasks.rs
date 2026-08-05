@@ -27,6 +27,7 @@ pub fn spawn_all(
     audit_tx: &tokio::sync::broadcast::Sender<AuditBroadcast>,
     storage_available: &Arc<AtomicBool>,
     ai_active: &Arc<AtomicBool>,
+    ai_health: &Arc<crate::state::AiHealth>,
     geo_active: &Arc<AtomicBool>,
     geo_dataset_available: &Arc<AtomicBool>,
     geo_dataset_downloading: &Arc<AtomicBool>,
@@ -52,6 +53,7 @@ pub fn spawn_all(
     );
     spawn_broadcast(pool.clone(), config.server.port);
     spawn_discovery_listener(pool.clone(), Arc::new(config.clone()));
+    spawn_heartbeat_sender(pool.clone(), Arc::new(config.clone()));
     spawn_auto_scan(
         pool.clone(),
         storage_root_swap.clone(),
@@ -65,10 +67,17 @@ pub fn spawn_all(
         config.storage.root.clone(),
         config.auth.jwt_secret.clone(),
     );
+    spawn_conversion_watchdog(
+        pool.clone(),
+        storage_root_swap.clone(),
+        config.auth.jwt_secret.clone(),
+        config.scan.conversion_stall_timeout_secs,
+    );
     spawn_export_cleanup(pool.clone(), storage_root_swap.clone());
     spawn_storage_health_monitor(storage_root_swap.clone(), storage_available.clone());
     spawn_dimension_repair(pool.clone(), config.storage.root.clone());
     spawn_thumbnail_orientation_repair(pool.clone(), config.storage.root.clone());
+    spawn_vertical_pano_repair(pool.clone());
     spawn_photo_subtype_backfill(pool.clone(), config.storage.root.clone());
     crate::ai::processor::spawn_ai_processor(
         pool.clone(),
@@ -76,6 +85,7 @@ pub fn spawn_all(
         config.storage.root.clone(),
         config.auth.jwt_secret.clone(),
         ai_active.clone(),
+        ai_health.clone(),
     );
     crate::geo::processor::spawn_geo_processor(
         pool.clone(),
@@ -90,14 +100,16 @@ pub fn spawn_all(
 // ── Individual task spawners ─────────────────────────────────────────
 
 /// Hourly housekeeping: purge expired refresh tokens, trim audit log
-/// (90 days) and client diagnostic logs (14 days) in a single transaction.
+/// (30 days) and client diagnostic logs (14 days) in a single transaction,
+/// then prune sync change-log tombstones (90 days) in its own.
+/// Runs every hour, so the 30-day audit cutoff is enforced well within a day.
 fn spawn_housekeeping(pool: SqlitePool) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
         loop {
             interval.tick().await;
             let now = chrono::Utc::now().to_rfc3339();
-            let audit_cutoff = (chrono::Utc::now() - chrono::Duration::days(90)).to_rfc3339();
+            let audit_cutoff = (chrono::Utc::now() - chrono::Duration::days(30)).to_rfc3339();
             let log_cutoff = (chrono::Utc::now() - chrono::Duration::days(14)).to_rfc3339();
 
             match pool.begin().await {
@@ -129,7 +141,7 @@ fn spawn_housekeeping(pool: SqlitePool) {
                     {
                         Ok(r) if r.rows_affected() > 0 => {
                             tracing::info!(
-                                "Cleaned up {} old audit log entries (> 90 days)",
+                                "Cleaned up {} old audit log entries (> 30 days)",
                                 r.rows_affected()
                             );
                         }
@@ -164,6 +176,32 @@ fn spawn_housekeeping(pool: SqlitePool) {
                     }
                 }
                 Err(e) => tracing::error!("Housekeeping: failed to begin transaction: {}", e),
+            }
+
+            // 4. Sync change-log tombstones (#38 A2).
+            //
+            // Deliberately OUTSIDE the transaction above. This one carries a
+            // policy — it raises the retention floor that `fetch_delta`
+            // enforces — and it must commit or roll back as a unit of its own;
+            // sharing a transaction with the audit trim would let an unrelated
+            // failure there discard a floor whose rows were already gone, which
+            // is the one state that produces silent ghost rows on clients.
+            match crate::gallery::retention::prune_change_log(
+                &pool,
+                crate::gallery::retention::TOMBSTONE_RETENTION_DAYS,
+            )
+            .await
+            {
+                Ok(outcome) if outcome.pruned > 0 => {
+                    tracing::info!(
+                        "Pruned {} sync change-log tombstones (> {} days); retention floor now {}",
+                        outcome.pruned,
+                        crate::gallery::retention::TOMBSTONE_RETENTION_DAYS,
+                        outcome.floor,
+                    );
+                }
+                Ok(_) => {}
+                Err(e) => tracing::error!("Failed to prune sync change log: {}", e),
             }
         }
     });
@@ -235,6 +273,14 @@ fn spawn_discovery_listener(pool: SqlitePool, config: Arc<AppConfig>) {
     });
 }
 
+/// Periodic authenticated peer heartbeat + self-healing over the discovery port
+/// (item #10). No-op in practice until backup peers with shared keys exist.
+fn spawn_heartbeat_sender(pool: SqlitePool, config: Arc<AppConfig>) {
+    tokio::spawn(async move {
+        crate::backup::heartbeat::run_heartbeat_sender(pool, config).await;
+    });
+}
+
 /// Periodic filesystem scan that registers new files.
 fn spawn_auto_scan(
     pool: SqlitePool,
@@ -254,6 +300,67 @@ fn spawn_auto_scan(
             geo_trigger,
         )
         .await;
+    });
+}
+
+/// Conversion stuck-job watchdog (#18).
+///
+/// Periodically inspects the conversion pipeline. If it reports "converting" but
+/// has made **zero** progress for longer than `stall_timeout_secs`, the pass is
+/// wedged — a future hung outside the per-file 600s ffmpeg timeout, or a client
+/// that declared an upload batch then disconnected. When that happens the
+/// watchdog:
+///   1. Logs the stall loudly (escalation signal for operators/monitoring).
+///   2. Force-recovers via [`crate::conversion::force_reset`] — clears the
+///      "converting" flag and any client batch pin so the AI/geo processors and
+///      the banner resume ("system resumes subsequent jobs").
+///   3. Kicks a fresh conversion pass to retry any files the wedged pass left
+///      behind (best-effort: if the old pass still holds the conversion lock
+///      this just queues a follow-up sweep).
+///
+/// `stall_timeout_secs == 0` disables the watchdog (the task isn't spawned).
+fn spawn_conversion_watchdog(
+    pool: SqlitePool,
+    storage_root_swap: Arc<arc_swap::ArcSwap<PathBuf>>,
+    jwt_secret: String,
+    stall_timeout_secs: u64,
+) {
+    if stall_timeout_secs == 0 {
+        tracing::info!("[WATCHDOG] Conversion stuck-job watchdog disabled (timeout = 0)");
+        return;
+    }
+    tokio::spawn(async move {
+        // Poll at a fraction of the threshold so detection latency stays small
+        // relative to the timeout, floored/capped to sane bounds.
+        let check_every = (stall_timeout_secs / 10).clamp(30, 300);
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(check_every));
+        tracing::info!(
+            stall_timeout_secs,
+            check_every,
+            "[WATCHDOG] Conversion stuck-job watchdog started"
+        );
+        loop {
+            interval.tick().await;
+            if let Some(idle_secs) = crate::conversion::stall_check(stall_timeout_secs) {
+                tracing::error!(
+                    idle_secs,
+                    stall_timeout_secs,
+                    "[WATCHDOG] Conversion pipeline STALLED — no progress for {}s \
+                     (threshold {}s). Force-recovering so AI/geo processing resumes.",
+                    idle_secs,
+                    stall_timeout_secs
+                );
+                crate::conversion::force_reset("watchdog: no progress past stall timeout");
+
+                // Best-effort retry of any files the wedged pass left behind.
+                let pool = pool.clone();
+                let root = (**storage_root_swap.load()).clone();
+                let jwt = jwt_secret.clone();
+                tokio::spawn(async move {
+                    crate::ingest::run_conversion_pass(pool, root, jwt).await;
+                });
+            }
+        }
     });
 }
 
@@ -457,6 +564,16 @@ fn spawn_dimension_repair(pool: SqlitePool, storage_root: PathBuf) {
 fn spawn_thumbnail_orientation_repair(pool: SqlitePool, storage_root: PathBuf) {
     tokio::spawn(async move {
         crate::photos::thumbnail::repair_thumbnail_orientation(&pool, &storage_root).await;
+    });
+}
+
+/// One-time startup task (item #29): clear the `panorama` subtype off tall
+/// (`height > width`) photos that the retired vertical-pano heuristic mistagged.
+/// Runs before the subtype backfill (which has a 15 s delay) so the NULLed rows
+/// get re-evaluated and only genuine GPano panos are re-tagged.
+fn spawn_vertical_pano_repair(pool: SqlitePool) {
+    tokio::spawn(async move {
+        crate::photos::metadata::repair_vertical_pano_mistags(&pool).await;
     });
 }
 

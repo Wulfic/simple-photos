@@ -11,11 +11,14 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import android.util.Base64
+import com.simplephotos.data.repository.AuthRepository
 import org.json.JSONObject
 import javax.inject.Inject
 
@@ -26,7 +29,10 @@ import javax.inject.Inject
  */
 @HiltViewModel
 class NavViewModel @Inject constructor(
-    private val dataStore: DataStore<Preferences>
+    // Public so screens that render the shared AppHeader navbar (#35) can drive
+    // the theme toggle through it, matching AlbumViewModel.dataStore.
+    val dataStore: DataStore<Preferences>,
+    private val authRepository: AuthRepository,
 ) : ViewModel() {
 
     companion object {
@@ -47,6 +53,10 @@ class NavViewModel @Inject constructor(
     private val _isAdmin = MutableStateFlow(false)
     val isAdmin: StateFlow<Boolean> = _isAdmin
 
+    // Logged-in username for the shared AppHeader avatar/dropdown (#35).
+    private val _username = MutableStateFlow("")
+    val username: StateFlow<String> = _username
+
     init {
         viewModelScope.launch {
             val prefs = dataStore.data.first()
@@ -56,12 +66,25 @@ class NavViewModel @Inject constructor(
             // Decode role from JWT access token
             val token = prefs[KEY_ACCESS_TOKEN]
             _isAdmin.value = decodeAdminFromJwt(token)
+            _username.value = prefs[KEY_USERNAME] ?: ""
 
             _startDestination.value = when {
                 !serverConfigured -> Screen.ServerSetup.route
                 !hasToken -> Screen.Login.route
                 else -> Screen.Gallery.route
             }
+        }
+    }
+
+    /** Sign out (clears tokens server- and client-side), then invoke [onLoggedOut]
+     *  to navigate. Mirrors AlbumViewModel.logout so the navbar Sign Out behaves
+     *  identically from every screen (#35). */
+    fun logout(onLoggedOut: () -> Unit) {
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { authRepository.logout() }
+            } catch (_: Exception) {}
+            onLoggedOut()
         }
     }
 

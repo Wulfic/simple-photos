@@ -118,8 +118,46 @@ pub async fn collect_database_stats(pool: &SqlitePool, db_path: &Path) -> Databa
     }
 }
 
-/// Collect storage usage: directory walk + disk capacity.
+/// How long a storage-stats result stays fresh. The walk is a whole-tree scan
+/// over the (often SMB) storage root — the single most expensive diagnostics
+/// collector — and a minute-stale byte count is fine for a stats panel, so
+/// repeated diagnostics loads (and the page's 10s auto-refresh) reuse it instead
+/// of re-walking the tree each time.
+const STORAGE_STATS_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Cache keyed by storage root so a runtime storage-path change (setup wizard)
+/// busts it immediately rather than serving a stale tree's numbers.
+fn storage_stats_cache(
+) -> &'static std::sync::Mutex<Option<(std::time::Instant, std::path::PathBuf, StorageStats)>> {
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<Option<(std::time::Instant, std::path::PathBuf, StorageStats)>>,
+    > = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// Collect storage usage: directory walk + disk capacity. Cached for
+/// [`STORAGE_STATS_TTL`] (see above) — the walk is the ~13s "Storage" red bar.
 pub async fn collect_storage_stats(storage_root: &Path) -> StorageStats {
+    if let Ok(guard) = storage_stats_cache().lock() {
+        if let Some((at, path, stats)) = guard.as_ref() {
+            if path == storage_root && at.elapsed() < STORAGE_STATS_TTL {
+                return stats.clone();
+            }
+        }
+    }
+    let stats = compute_storage_stats(storage_root).await;
+    if let Ok(mut guard) = storage_stats_cache().lock() {
+        *guard = Some((
+            std::time::Instant::now(),
+            storage_root.to_path_buf(),
+            stats.clone(),
+        ));
+    }
+    stats
+}
+
+/// Uncached storage-stats computation (directory walk + disk capacity).
+async fn compute_storage_stats(storage_root: &Path) -> StorageStats {
     let (dir_bytes, file_count) = dir_usage(storage_root).await;
     let root = storage_root.to_path_buf();
     let (disk_total, disk_available) = tokio::task::spawn_blocking(move || disk_stats(&root))
@@ -169,10 +207,26 @@ pub async fn collect_photo_stats(pool: &SqlitePool) -> PhotoStats {
         .fetch_one(pool)
         .await
         .unwrap_or(0);
-    let encrypted_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM photos")
-        .fetch_one(pool)
-        .await
-        .unwrap_or(0);
+    // `encrypted_count` was a verbatim copy of the `total_photos` query above —
+    // no predicate at all — so the admin Diagnostics "Encrypted" card reported
+    // 100% coverage unconditionally and could not have shown otherwise. On the
+    // live library that read "15,014 of 15,014 encrypted" while 2,500 of those
+    // rows were plaintext originals on disk (B3a). A stat that cannot disagree
+    // with its own denominator is not a stat.
+    let encrypted_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM photos WHERE encrypted_blob_id IS NOT NULL")
+            .fetch_one(pool)
+            .await
+            .unwrap_or(0);
+    // Split the complement, because the two halves need different responses:
+    // `unencrypted_count` is a queue that drains on its own, `parked_count` is
+    // the subset nothing will ever retry and an operator must act on.
+    let unencrypted_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM photos WHERE encrypted_blob_id IS NULL")
+            .fetch_one(pool)
+            .await
+            .unwrap_or(0);
+    let parked_count: i64 = crate::photos::server_migrate::count_parked(pool, None).await;
     let total_file_bytes: i64 =
         sqlx::query_scalar("SELECT COALESCE(SUM(size_bytes), 0) FROM photos")
             .fetch_one(pool)
@@ -213,6 +267,8 @@ pub async fn collect_photo_stats(pool: &SqlitePool) -> PhotoStats {
     PhotoStats {
         total_photos,
         encrypted_count,
+        unencrypted_count,
+        parked_count,
         total_file_bytes,
         total_thumb_bytes,
         photos_with_thumbs,
@@ -561,5 +617,112 @@ pub async fn collect_full_diagnostics(
         backup: backup_summary,
         performance,
         timings,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::str::FromStr;
+
+    async fn test_pool() -> SqlitePool {
+        let opts = sqlx::sqlite::SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .foreign_keys(true);
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO users (id, username, password_hash, created_at) \
+             VALUES ('u1', 'u1', 'x', '2026-01-01T00:00:00Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool
+    }
+
+    async fn insert_photo(pool: &SqlitePool, id: &str, blob: Option<&str>, parked: bool) {
+        sqlx::query(
+            "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
+             size_bytes, created_at, encrypted_blob_id, encryption_deferred) \
+             VALUES (?, 'u1', ?, ?, 'image/jpeg', 'photo', 1024, '2026-01-01T00:00:00Z', ?, ?)",
+        )
+        .bind(id)
+        .bind(format!("{id}.jpg"))
+        .bind(format!("uploads/{id}.jpg"))
+        .bind(blob)
+        .bind(i64::from(parked))
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    /// The "Encrypted" card on the admin Diagnostics page ran `SELECT COUNT(*)
+    /// FROM photos` — the exact query behind `total_photos`, with no predicate.
+    /// It therefore reported full encryption coverage on any library, including
+    /// the live one that had 2,500 plaintext originals at the time (B3a).
+    ///
+    /// Asserting the two counts *differ* is the point: a test that only checked
+    /// `encrypted_count == 1` would have passed against the broken query on a
+    /// single-row fixture.
+    #[tokio::test]
+    async fn encrypted_count_does_not_just_echo_the_total() {
+        let pool = test_pool().await;
+        insert_photo(&pool, "p_enc", Some("blob-1"), false).await;
+        insert_photo(&pool, "p_plain", None, false).await;
+        insert_photo(&pool, "p_parked", None, true).await;
+
+        let stats = collect_photo_stats(&pool).await;
+
+        assert_eq!(stats.total_photos, 3);
+        assert_eq!(
+            stats.encrypted_count, 1,
+            "only the row holding an encrypted blob is encrypted"
+        );
+        assert_ne!(
+            stats.encrypted_count, stats.total_photos,
+            "encrypted_count must be able to disagree with its own denominator"
+        );
+    }
+
+    /// Parked rows are a strict subset of the unencrypted ones, and the split
+    /// is what makes the number actionable: a backlog drains on its own, a
+    /// parked set never does.
+    #[tokio::test]
+    async fn parked_photos_are_reported_as_a_subset_of_the_unencrypted() {
+        let pool = test_pool().await;
+        insert_photo(&pool, "p_enc", Some("blob-1"), false).await;
+        insert_photo(&pool, "p_draining", None, false).await;
+        insert_photo(&pool, "p_parked", None, true).await;
+
+        let stats = collect_photo_stats(&pool).await;
+
+        assert_eq!(stats.unencrypted_count, 2);
+        assert_eq!(stats.parked_count, 1);
+        assert_eq!(
+            stats.encrypted_count + stats.unencrypted_count,
+            stats.total_photos,
+            "every photo is either encrypted or not; the two must partition the library"
+        );
+        assert!(stats.parked_count <= stats.unencrypted_count);
+    }
+
+    /// A clean library reports zero, so a non-zero parked count is always a real
+    /// signal rather than background noise the operator learns to ignore.
+    #[tokio::test]
+    async fn a_fully_encrypted_library_reports_no_gap() {
+        let pool = test_pool().await;
+        insert_photo(&pool, "p1", Some("blob-1"), false).await;
+        insert_photo(&pool, "p2", Some("blob-2"), false).await;
+
+        let stats = collect_photo_stats(&pool).await;
+
+        assert_eq!(stats.encrypted_count, 2);
+        assert_eq!(stats.unencrypted_count, 0);
+        assert_eq!(stats.parked_count, 0);
     }
 }

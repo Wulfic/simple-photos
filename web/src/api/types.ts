@@ -99,6 +99,11 @@ export interface DiagnosticsResponse {
   photos: {
     total_photos: number;
     encrypted_count: number;
+    /** Rows with no encrypted blob — the plaintext-at-rest set. */
+    unencrypted_count: number;
+    /** The subset nothing will ever retry. Non-zero is a standing
+     *  confidentiality gap, not a backlog. */
+    parked_count: number;
     total_file_bytes: number;
     total_thumb_bytes: number;
     photos_with_thumbs: number;
@@ -218,6 +223,8 @@ export interface AuditLogParams {
   before?: string;
   limit?: number;
   source_server?: string;
+  /** Return only failure events (#45). Resolved server-side from FAILURE_EVENTS. */
+  failures_only?: boolean;
 }
 
 export interface ClientLogEntry {

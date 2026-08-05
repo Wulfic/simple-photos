@@ -17,9 +17,13 @@ export interface ThumbnailSource {
   serverPhotoId?: string;
   /** True when the photo is unencrypted on the server */
   serverSide?: boolean;
-  /** Pre-loaded thumbnail data from IDB (avoids redundant lookups) */
-  thumbnailData?: ArrayBuffer;
-  /** MIME type of the thumbnail data */
+  /**
+   * MIME type of the cached thumbnail, when the caller's row already knows it.
+   *
+   * Ids only — no bytes. `useThumbnailLoader` reads the bytes itself from the
+   * `thumbs` table once the tile is on screen; passing them in meant every list
+   * had to load every thumbnail before it could render one.
+   */
   thumbnailMimeType?: string;
 }
 

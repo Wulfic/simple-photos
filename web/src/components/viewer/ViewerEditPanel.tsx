@@ -1,6 +1,8 @@
 /** Photo editing panel — brightness, rotation, crop controls with live canvas preview. */
 import { useRef, useEffect, useCallback } from "react";
 import type { MediaType } from "../../db";
+import { formatTimecode } from "../../utils/formatters";
+import { supportsInPlaceEditSave } from "../../gallery/utils/gifDetection";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -49,6 +51,13 @@ interface ViewerEditPanelProps {
   onSave: () => void;
   /** Save Copy creates a new metadata-only version */
   onSaveCopy: () => void;
+  /**
+   * Secure-album edit (#31): the item is an encrypted clone with no "duplicate"
+   * endpoint, so Save Copy is hidden and Save (a pure metadata write to the
+   * secure item, applied non-destructively at display time) is always offered —
+   * including for GIFs, which have no server re-bake here but still crop via CSS.
+   */
+  secureEdit?: boolean;
   /** Reset clears all edits */
   onClear: () => void;
   /** Cancel exits edit mode without saving */
@@ -56,18 +65,6 @@ interface ViewerEditPanelProps {
   /** Ref to the panel root so the Viewer can measure its height and keep the
    *  media area clear of the panel (the panel is an absolute bottom overlay). */
   rootRef?: React.Ref<HTMLDivElement>;
-}
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-/** Format seconds as MM:SS or HH:MM:SS */
-function formatTime(secs: number): string {
-  const s = Math.max(0, Math.round(secs));
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = s % 60;
-  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
-  return `${m}:${String(sec).padStart(2, "0")}`;
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -90,15 +87,20 @@ export default function ViewerEditPanel({
   onSaveCopy,
   onClear,
   onCancel,
+  secureEdit,
   rootRef,
 }: ViewerEditPanelProps) {
   // Determine which tabs are available for this media type
   const isPhoto = mediaType === "photo";
+  const isGif = mediaType === "gif";
   const isVideo = mediaType === "video";
   const isAudio = mediaType === "audio";
-  const showCrop = isPhoto || isVideo;
-  const showBrightness = isPhoto || isVideo;
-  const showRotate = isPhoto || isVideo;
+  // GIFs support the same still-image edits (crop/brightness/rotate). They have
+  // no trim tab, and bakes are re-encoded server-side via ffmpeg so the
+  // animation is preserved.
+  const showCrop = isPhoto || isGif || isVideo;
+  const showBrightness = isPhoto || isGif || isVideo;
+  const showRotate = isPhoto || isGif || isVideo;
   const showTrim = isVideo || isAudio;
 
   // ── Trim range slider refs for dual-thumb control ──────────────────────
@@ -164,7 +166,7 @@ export default function ViewerEditPanel({
   }, [isAudio, editTab, setEditTab]);
 
   return (
-    <div ref={rootRef} className="absolute bottom-0 left-0 right-0 z-30 bg-black/90 border-t border-white/10 px-4 py-3 space-y-3">
+    <div ref={rootRef} className="absolute bottom-0 left-0 right-0 z-30 bg-black/90 border-t border-white/10 px-4 safe-px safe-py-3 space-y-3">
       {/* Tab switcher */}
       <div className="flex items-center justify-center gap-2">
         {showCrop && (
@@ -270,11 +272,11 @@ export default function ViewerEditPanel({
         <div className="max-w-lg mx-auto space-y-2">
           {/* Time labels */}
           <div className="flex justify-between text-xs text-gray-400 tabular-nums">
-            <span>{formatTime(trimStart)}</span>
+            <span>{formatTimecode(trimStart)}</span>
             <span className="text-white font-medium">
-              {formatTime(trimEnd - trimStart)} selected
+              {formatTimecode(trimEnd - trimStart)} selected
             </span>
-            <span>{formatTime(trimEnd)}</span>
+            <span>{formatTimecode(trimEnd)}</span>
           </div>
           {/* Track */}
           <div
@@ -307,7 +309,7 @@ export default function ViewerEditPanel({
           </div>
           {/* Full duration label */}
           <div className="text-center text-xs text-gray-500">
-            Full duration: {formatTime(duration)}
+            Full duration: {formatTimecode(duration)}
           </div>
         </div>
       )}
@@ -327,19 +329,30 @@ export default function ViewerEditPanel({
 
       {/* ── Action buttons ───────────────────────────────────────────── */}
       <div className="flex items-center justify-center gap-2">
-        <button
-          onClick={onSave}
-          className="btn btn-primary btn-md"
-        >
-          Save
-        </button>
-        <button
-          onClick={onSaveCopy}
-          className="btn btn-success btn-md"
-          title="Save as a new copy — keeps the original unchanged"
-        >
-          Save Copy
-        </button>
+        {/* GIFs have no in-place Save. A metadata-only Save never re-bakes the
+            animated-GIF thumbnail (the tile transform is unreliable for animated
+            drawables — issue #14/#18), so GIF edits must go through Save Copy,
+            which re-encodes the GIF via ffmpeg AND regenerates a cropped
+            thumbnail. Users can delete the original copy manually if desired. */}
+        {(supportsInPlaceEditSave(mediaType) || secureEdit) && (
+          <button
+            onClick={onSave}
+            className="btn btn-primary btn-md"
+          >
+            Save
+          </button>
+        )}
+        {/* Secure items have no server-side duplicate, so Save Copy is hidden —
+            secure edits are a pure metadata write applied non-destructively. */}
+        {!secureEdit && (
+          <button
+            onClick={onSaveCopy}
+            className={supportsInPlaceEditSave(mediaType) ? "btn btn-secondary btn-md" : "btn btn-primary btn-md"}
+            title="Save as a new copy — keeps the original unchanged"
+          >
+            Save Copy
+          </button>
+        )}
         {cropData && (
           <button
             onClick={onClear}

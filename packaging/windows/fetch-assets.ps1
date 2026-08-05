@@ -63,7 +63,7 @@ function Build-FullToml {
         '# Default scaffold path. The first-run setup wizard (web UI) is where the',
         '# operator chooses the final photo storage root.',
         ("root = '{0}'" -f $storage),
-        'default_quota_bytes = 10737418240',
+        'default_quota_bytes = 0',
         'max_blob_size_bytes = 5368709120',
         '',
         '[auth]',

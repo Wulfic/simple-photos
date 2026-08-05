@@ -15,19 +15,33 @@ import com.simplephotos.data.collapseBursts
 import com.simplephotos.data.local.AppDatabase
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.local.entities.SyncStatus
+import com.simplephotos.data.media.renditionsEqual
 import com.simplephotos.data.remote.ApiService
 import com.simplephotos.data.remote.dto.DuplicatePhotoRequest
 import com.simplephotos.data.remote.dto.DuplicatePhotoResponse
+import com.simplephotos.data.remote.dto.EncryptedSyncRecord
 import com.simplephotos.data.remote.dto.FavoriteToggleResponse
 import com.simplephotos.data.remote.dto.FullMetadataResponse
 import com.simplephotos.data.remote.dto.MetadataUpdateRequest
 import com.simplephotos.data.remote.dto.MetadataUpdateResponse
 import com.simplephotos.data.remote.dto.SetCropRequest
+import com.simplephotos.data.remote.dto.toDomain
 import com.simplephotos.data.remote.dto.WriteExifResponse
+import com.simplephotos.data.sync.SyncCursorStore
+import com.simplephotos.data.sync.SyncMode
+import com.simplephotos.data.sync.decideSyncMode
+import com.simplephotos.data.sync.isDeltaFeed
+import com.simplephotos.data.sync.tombstoneVictims
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_SERVER_URL
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -39,6 +53,50 @@ import java.time.LocalDateTime
 import java.time.ZoneOffset
 import javax.inject.Inject
 import javax.inject.Singleton
+
+/** One encrypted byte-range read of a blob plus the blob's total encrypted size. */
+data class BlobRange(val bytes: ByteArray, val encryptedTotal: Long)
+
+/**
+ * What one `encrypted-sync` pass actually did (#38).
+ *
+ * [mode] is the mode the pass **finished** in, which is not always the one it
+ * started in: a delta downgrades itself to [SyncMode.FULL] when the server turns
+ * out not to speak `since`. Callers must branch on this rather than on what they
+ * requested, because it decides whether [serverPhotoIds] is the whole library
+ * (safe to set-difference against) or merely the changed set (catastrophic to
+ * set-difference against).
+ */
+data class EncryptedSyncOutcome(
+    val mode: SyncMode,
+    /** Rows imported plus rows merged — what the caller reports as "changed". */
+    val changed: Int,
+    /** Every photo id seen. The whole library on [SyncMode.FULL]; only what
+     *  changed on [SyncMode.DELTA]. */
+    val serverPhotoIds: Set<String>,
+    /** Photo ids the server named as gone. Always empty on a full walk, which
+     *  expresses departures by omission instead. */
+    val tombstones: List<String>,
+    /** The FIRST page's head sequence, or null if the server did not report one.
+     *  Null keeps the client on full walks — correct, just not fast. */
+    val headAtStart: Long?,
+)
+
+/**
+ * Narrow surface the streaming video DataSource ([com.simplephotos.ui.screens.viewer.MediaBlobDataSource])
+ * needs, decoupled from the full repository. Lets encrypted video stream + seek
+ * by fetching and decrypting only the frames ExoPlayer reads (issue #17).
+ */
+interface EncryptedBlobStream {
+    /** Fetch encrypted bytes `[start, endInclusive]`; also reports the total encrypted size. */
+    suspend fun fetchRange(blobId: String, start: Long, endInclusive: Long): BlobRange
+
+    /** Decrypt one AES-GCM frame (`[nonce][ciphertext+tag]`). Synchronous. */
+    fun decryptFrame(frame: ByteArray): ByteArray
+
+    /** Full decrypted media bytes (both container formats) — the v1 (< 32 MiB) fallback. */
+    suspend fun fetchWholePlaintext(blobId: String): ByteArray
+}
 
 /**
  * Central photo/video management: upload (encrypted), download, decrypt,
@@ -55,9 +113,16 @@ class PhotoRepository @Inject constructor(
     private val crypto: CryptoManager,
     private val dataStore: DataStore<Preferences>,
     @ApplicationContext private val context: Context
-) {
+) : EncryptedBlobStream {
+    /** The #38 delta cursor. Backed by the same Room DB as the mirror, so it
+     *  cannot outlive the rows it makes claims about — see [SyncCursorStore]. */
+    private val syncCursor = SyncCursorStore(db)
+
     companion object {
         private const val TAG = "PhotoRepository"
+        /** Bounded concurrency for thumbnail downloads during sync. Keeps the
+         *  network busy without opening thousands of sockets at once. (#3) */
+        private const val THUMB_SYNC_CONCURRENCY = 8
     }
     /** Expose the API service for banner polling in the gallery. */
     val apiService: ApiService get() = api
@@ -146,6 +211,13 @@ class PhotoRepository @Inject constructor(
 
     suspend fun getPhoto(id: String): PhotoEntity? = db.photoDao().getById(id)
 
+    /** How many photos the local mirror currently holds. */
+    suspend fun countPhotos(): Int = db.photoDao().countAll()
+
+    /** Items still queued for upload on this device — fed to the server's unified
+     *  encryption banner as this device's contribution (TODO #2/#5). */
+    suspend fun countPendingUploads(): Int = db.photoDao().countPendingUploads()
+
     /**
      * Resolve the ordered photo list for an album — handles BOTH virtual
      * "smart" albums (favorites/photos/gifs/videos/audio/recents) AND
@@ -181,8 +253,25 @@ class PhotoRepository @Inject constructor(
         return photoIds.mapNotNull { id -> getPhoto(id) }
     }
 
+    /**
+     * Batch-resolve server photo ids against the local mirror.
+     *
+     * Chunked: a face cluster or a trip can name far more than SQLite's 999
+     * bound-parameter ceiling, and the un-chunked version threw on exactly the
+     * large clusters this lookup exists to serve. Returns a subset in arbitrary
+     * order — see [com.simplephotos.data.album.gridPhotoIds] for the projection
+     * that restores the caller's order.
+     */
     suspend fun getPhotosByServerPhotoIds(ids: List<String>): List<PhotoEntity> =
-        db.photoDao().getByServerPhotoIds(ids)
+        ids.chunked(SQLITE_VARIABLE_CHUNK).flatMap { db.photoDao().getByServerPhotoIds(it) }
+
+    /**
+     * Batch-resolve photo localIds against the local mirror. Same chunking rule
+     * and same arbitrary ordering as [getPhotosByServerPhotoIds]; the viewer
+     * handoff restores order via [com.simplephotos.data.album.orderPhotosBy].
+     */
+    suspend fun getPhotosByLocalIds(ids: List<String>): List<PhotoEntity> =
+        ids.chunked(SQLITE_VARIABLE_CHUNK).flatMap { db.photoDao().getByIds(it) }
 
     /**
      * Expand a selection of photo localIds so that any burst-stack
@@ -569,6 +658,36 @@ class PhotoRepository @Inject constructor(
         return crypto.decrypt(encrypted)
     }
 
+    // ── EncryptedBlobStream (streaming video DataSource, issue #17) ───────────
+
+    /**
+     * Fetch encrypted bytes `[start, endInclusive]` of a blob and the blob's
+     * total encrypted size (from the 206 `Content-Range`). Bounded: a caller only
+     * ever requests one ~4 MiB frame block or a 12-byte header probe, so reading
+     * the range body fully into memory is safe.
+     */
+    override suspend fun fetchRange(blobId: String, start: Long, endInclusive: Long): BlobRange {
+        val resp = api.downloadBlobRange(blobId, "bytes=$start-$endInclusive")
+        if (!resp.isSuccessful) {
+            throw java.io.IOException("blob range ${resp.code()} for $blobId ($start-$endInclusive)")
+        }
+        val body = resp.body() ?: throw java.io.IOException("empty range body for $blobId")
+        val bytes = body.byteStream().use { it.readBytes() }
+        val total = parseContentRangeTotal(resp.headers()["Content-Range"])
+            ?: resp.headers()["Content-Length"]?.toLongOrNull()?.let { start + it }
+            ?: (start + bytes.size)
+        return BlobRange(bytes, total)
+    }
+
+    override fun decryptFrame(frame: ByteArray): ByteArray = crypto.decrypt(frame)
+
+    override suspend fun fetchWholePlaintext(blobId: String): ByteArray =
+        downloadAndDecryptMediaBytes(blobId)
+
+    /** Parse the total size out of a `Content-Range: bytes START-END/TOTAL` header. */
+    private fun parseContentRangeTotal(header: String?): Long? =
+        header?.substringAfterLast('/', "")?.trim()?.toLongOrNull()
+
     /**
      * Download a blob and decrypt it into raw **media bytes**, handling both the
      * v1 monolithic envelope and the v2 chunked container (large files). Used
@@ -615,6 +734,34 @@ class PhotoRepository @Inject constructor(
      * This is used for video/audio where the raw bytes are large.
      * Photos still use [downloadAndDecryptBlob] since Coil needs a ByteArray.
      */
+    /**
+     * Stream the original, UNCONVERTED source file (the pre-conversion original
+     * the server retains for converted media) to [outputFile].
+     *
+     * Served as plaintext by `GET /photos/{id}/source-file` with a
+     * Content-Disposition attachment header — no decryption needed, unlike the
+     * encrypted blob path. Returns true on success, false if the photo was never
+     * converted (404) or the stream fails.
+     */
+    suspend fun downloadSourceFileToFile(serverPhotoId: String, outputFile: File): Boolean {
+        return try {
+            val response = api.photoSourceFile(serverPhotoId)
+            response.byteStream().use { input ->
+                outputFile.outputStream().buffered().use { output ->
+                    input.copyTo(output, bufferSize = 8192)
+                }
+            }
+            true
+        } catch (e: Exception) {
+            android.util.Log.w(
+                "PhotoRepository",
+                "[download] source-file failed for $serverPhotoId: ${e.message}",
+            )
+            if (outputFile.exists()) outputFile.delete()
+            false
+        }
+    }
+
     suspend fun downloadAndDecryptBlobToFile(blobId: String, outputFile: File) {
         // Step 1: Stream the encrypted blob to a temp file (near-zero heap)
         val encryptedTempFile = File.createTempFile("enc_", ".tmp", context.cacheDir)
@@ -722,18 +869,121 @@ class PhotoRepository @Inject constructor(
 
     // ── Sync from server ─────────────────────────────────────────────────
 
-    /** Pull photos from the server (always encrypted). */
+    /**
+     * Pull photos from the server (always encrypted), by the cheapest route that
+     * is provably correct (#38).
+     *
+     * ## The pruning step is why this cannot be a one-line change
+     *
+     * [reconcileServerDeletions] takes the ids a pass saw and deletes every
+     * synced local row **not** in that set. That is correct for a full walk,
+     * whose id set is the entire library — and catastrophic for a delta, whose
+     * id set is only what changed. Handing a delta's ids to it would delete the
+     * whole mirror on the first pass after this feature ships.
+     *
+     * So the set difference is reachable **only** from [SyncMode.FULL]. A delta
+     * prunes from explicit tombstones instead, and the two paths are kept in
+     * agreement by [tombstoneVictims] reusing the full walk's own guard.
+     *
+     * Web has no equivalent trap: its full and delta passes are separate
+     * functions with separate pruning, so there is nothing to accidentally
+     * share. Here they are one function feeding one reconciler.
+     */
     suspend fun syncFromServer(): Int {
+        val cursor = syncCursor.read()
+        val headSeq = fetchHeadSeq()
+        val mode = decideSyncMode(cursor, headSeq)
+
+        if (mode == SyncMode.SKIPPED) {
+            // The steady state, and the entire point of the issue: a library
+            // that has not changed costs one small JSON request. Note what is
+            // NOT run here — no manifest pagination, no dedup table scan, and
+            // no cropSync/favoriteSync, all of which were O(library) every pass.
+            //
+            // Skipping the last two is safe because `033`'s trigger is
+            // `AFTER UPDATE ON photos` with no column list: a crop or favourite
+            // toggled anywhere moves `head_seq`, so an unchanged head proves
+            // there is nothing for them to fetch.
+            android.util.Log.d(TAG, "syncFromServer: head unchanged at $cursor — skipping")
+            return 0
+        }
+
         deduplicateLocalEntities()
-        val imported = syncFromServerEncrypted()
-        // Remove local entries for photos that were deleted on server
-        // (e.g. trashed from web or another device).
-        reconcileServerDeletions()
-        // Also pull crop_metadata updates for already-synced photos so
-        // non-destructive edits from web/other devices are reflected.
-        val cropUpdated = syncCropMetadata()
-        val favUpdated = syncFavorites()
-        return imported + cropUpdated + favUpdated
+
+        val result = syncFromServerEncrypted(
+            since = if (mode == SyncMode.DELTA) cursor else null,
+        )
+
+        if (result.mode == SyncMode.FULL) {
+            // Only a full walk's id set is the whole library, so only a full
+            // walk may set-difference against it.
+            reconcileServerDeletions(result.serverPhotoIds)
+        } else {
+            applyTombstones(result.tombstones)
+        }
+
+        // Crop and favourite state rides the sync record itself and is applied
+        // inline for both modes. These two whole-library endpoints are kept for
+        // the full walk only, as part of what makes it the self-healing recovery
+        // path; running them on every delta would reintroduce two O(library)
+        // fetches per pass, which is most of what #38 is about.
+        var extra = 0
+        if (result.mode == SyncMode.FULL) {
+            extra += syncCropMetadata()
+            extra += syncFavorites()
+        }
+
+        // Persist the cursor ONLY now, once the mirror actually reflects it. A
+        // throw anywhere above propagates before this line and the next pass
+        // retries from the old cursor.
+        result.headAtStart?.let { syncCursor.write(it) }
+
+        return result.changed + extra
+    }
+
+    /**
+     * The server's current change-log head, or null if it cannot be established.
+     *
+     * Failure is non-fatal: it costs the skip shortcut, not correctness. A pass
+     * still runs, and the delta response carries its own head.
+     */
+    private suspend fun fetchHeadSeq(): Long? = try {
+        api.photosSummary().headSeq
+    } catch (e: Exception) {
+        android.util.Log.w(TAG, "could not read head_seq; syncing without the fast path: ${e.message}")
+        null
+    }
+
+    /**
+     * Remove rows the server has explicitly named as gone.
+     *
+     * Deletes the cached thumbnail file too. Those are decrypted image bytes on
+     * disk — leaving them behind keeps the visible content of a deleted photo
+     * and grows without bound, which is the same leak the web client had to fix
+     * in its own prune path.
+     */
+    private suspend fun applyTombstones(photoIds: List<String>) {
+        if (photoIds.isEmpty()) return
+        try {
+            val rows = db.photoDao().getByServerPhotoIds(photoIds)
+            val victims = tombstoneVictims(rows, photoIds.toSet())
+            for (victim in victims) {
+                victim.thumbnailPath?.let { File(it).delete() }
+                db.photoDao().deleteById(victim.localId)
+            }
+            android.util.Log.i(
+                TAG,
+                "applyTombstones: ${photoIds.size} tombstones removed ${victims.size} rows",
+            )
+        } catch (e: Exception) {
+            // Rethrow: the cursor is written only after this returns, so failing
+            // here leaves the cursor where it was and the next pass re-delivers
+            // these same tombstones. Swallowing it would advance past a prune
+            // that never happened, and no future response would mention these
+            // ids again.
+            android.util.Log.e(TAG, "applyTombstones: failed to prune — ${e.message}", e)
+            throw e
+        }
     }
 
     /**
@@ -748,18 +998,16 @@ class PhotoRepository @Inject constructor(
      * This ensures locally-captured photos that haven't been uploaded yet
      * are never deleted during reconciliation.
      */
-    private suspend fun reconcileServerDeletions() {
+    private suspend fun reconcileServerDeletions(serverPhotoIds: Set<String>) {
         try {
-            // Collect ALL server photo IDs from the encrypted-sync endpoint
-            val serverPhotoIds = mutableSetOf<String>()
-            var after: String? = null
-            do {
-                val result = api.encryptedSync(after = after, limit = 500)
-                for (photo in result.photos) {
-                    serverPhotoIds.add(photo.id)
-                }
-                after = result.nextCursor
-            } while (result.nextCursor != null)
+            // serverPhotoIds is the full set already collected by
+            // syncFromServerEncrypted's pagination — no second manifest fetch.
+            // An empty set means the sync produced no manifest (e.g. it threw
+            // before paging); skip reconciliation so we never wrongly delete.
+            if (serverPhotoIds.isEmpty()) {
+                android.util.Log.w(TAG, "reconcileServerDeletions: empty server id set — skipping")
+                return
+            }
 
             // Find local entries synced from server that no longer exist there
             val localSynced = db.photoDao().getByStatus(SyncStatus.SYNCED)
@@ -842,17 +1090,72 @@ class PhotoRepository @Inject constructor(
      * blob — it reads photo metadata directly from the server's photos table
      * and then downloads only the small thumbnail blobs (~30 KB each).
      */
-    private suspend fun syncFromServerEncrypted(): Int {
+    private suspend fun syncFromServerEncrypted(since: Long?): EncryptedSyncOutcome {
         var imported = 0
         var merged = 0
         var after: String? = null
-        android.util.Log.i("PhotoRepository", "syncFromServerEncrypted: starting sync")
+        // Every server photo id seen across all pages. Meaningful to the caller
+        // ONLY on a full walk, where it is the whole library; on a delta it is
+        // just the changed set and must never reach reconcileServerDeletions.
+        val allServerIds = HashSet<String>()
+        val tombstones = ArrayList<String>()
+        var headAtStart: Long? = null
+        // Downgraded to FULL the moment the server proves it does not speak
+        // `since`. Tracked separately from the requested mode because that
+        // discovery happens mid-pass.
+        var mode = if (since != null) SyncMode.DELTA else SyncMode.FULL
+        var effectiveSince = since
+        android.util.Log.i(TAG, "syncFromServerEncrypted: starting sync (since=$since)")
 
-        do {
-            val result = api.encryptedSync(after = after, limit = 500)
+        // `while (true)` rather than `do/while (nextCursor != null)`: the
+        // handshake failure below has to restart pagination from scratch, and a
+        // `continue` in a do/while still evaluates the condition — a single-page
+        // full walk would exit having just discarded everything it holds.
+        while (true) {
+            val result = api.encryptedSync(after = after, limit = 500, since = effectiveSince)
             android.util.Log.d("PhotoRepository", "syncFromServerEncrypted: fetched page with ${result.photos.size} photos, nextCursor=${result.nextCursor}")
 
+            if (mode == SyncMode.DELTA && !isDeltaFeed(result.deleted)) {
+                // The handshake failed: this server ignored `since` and handed
+                // back a full walk. Its `photos` look exactly like a delta's, so
+                // reading them as one would prune nothing while believing we had
+                // pruned, and then persist a cursor making that permanent.
+                //
+                // Restart cleanly rather than reinterpreting what we hold: the
+                // rows received so far are real records and were safe to write,
+                // but the pagination cursor belongs to the server's own walk and
+                // the id set must be complete before anything set-differences
+                // against it.
+                android.util.Log.w(
+                    TAG,
+                    "syncFromServerEncrypted: server ignored since=$since (no `deleted` array) — " +
+                        "restarting as a full walk",
+                )
+                mode = SyncMode.FULL
+                effectiveSince = null
+                after = null
+                headAtStart = null
+                allServerIds.clear()
+                tombstones.clear()
+                continue
+            }
+
+            // Keep the FIRST page's head, never the last. A change committed
+            // while this multi-page walk is in flight lands at a sequence above
+            // the first page's head; keeping the first re-delivers it on the
+            // next pass, whereas keeping the last steps over it and loses it
+            // permanently.
+            if (headAtStart == null) headAtStart = result.headSeq
+            result.deleted?.let { tombstones.addAll(it) }
+
+            // Genuinely-new records (not already local, no local entity to merge)
+            // — their thumbnails are downloaded+decrypted IN PARALLEL below. The
+            // old code did one serial ~30 KB blob round-trip per photo, so a
+            // first sync of thousands of photos took ~20 min. (#3)
+            val newRecords = ArrayList<EncryptedSyncRecord>()
+
             for (photo in result.photos) {
+                allServerIds.add(photo.id)
                 val blobId = photo.encryptedBlobId ?: continue
 
                 // Skip if already in local DB — use serverPhotoId (unique per
@@ -874,6 +1177,35 @@ class PhotoRepository @Inject constructor(
                             burstId = photo.burstId,
                             motionBlobId = photo.motionVideoBlobId,
                         )
+                    }
+                    // Land the #49 ladder on rows that synced before their rung
+                    // existed. This is not an edge case — it is the ONLY case
+                    // that matters: rungs are produced by a background sweep
+                    // long after the photo synced, so without this branch every
+                    // video already in the mirror (i.e. all of them) keeps an
+                    // empty ladder forever and the picker never appears. The
+                    // equality guard is what keeps this from rewriting every
+                    // video on every pass.
+                    val incoming = photo.renditions.toDomain()
+                    if (!renditionsEqual(existing.renditions, incoming)) {
+                        db.photoDao().updateRenditions(photo.id, incoming)
+                    }
+                    // Crop and favourite state arrive on the sync record, so
+                    // apply them here rather than leaving them to the two
+                    // whole-library endpoints. Those are the reason a delta pass
+                    // can stop calling `cropSync`/`favoriteSync` at all: without
+                    // this branch, an edit made on the web would reach a device
+                    // that has already synced the photo only on its next FULL
+                    // walk — which, post-#38, may never come.
+                    //
+                    // Server-wins is not a new rule here; `syncCropMetadata` and
+                    // `syncFavorites` have always clobbered local state this way,
+                    // on every pass. Only the feed driving it has changed.
+                    if (existing.cropMetadata != photo.cropMetadata) {
+                        db.photoDao().updateCropMetadata(existing.localId, photo.cropMetadata)
+                    }
+                    if (existing.isFavorite != photo.isFavorite) {
+                        db.photoDao().updateFavorite(existing.localId, photo.isFavorite)
                     }
                     continue
                 }
@@ -911,81 +1243,126 @@ class PhotoRepository @Inject constructor(
                             motionBlobId = photo.motionVideoBlobId,
                         )
                     }
+                    // mergeServerPhoto writes only the identity columns, so the
+                    // ladder needs the same separate write as the branch above.
+                    val mergedRenditions = photo.renditions.toDomain()
+                    if (mergedRenditions.isNotEmpty()) {
+                        db.photoDao().updateRenditions(photo.id, mergedRenditions)
+                    }
                     android.util.Log.d("PhotoRepository", "syncFromServerEncrypted: merged server photo '${photo.filename}' (${photo.id}) into local entity ${localMatch.localId}")
                     merged++
                     continue
                 }
 
-                val localId = java.util.UUID.randomUUID().toString()
-                android.util.Log.d("PhotoRepository", "syncFromServerEncrypted: importing '${photo.filename}' serverTs='$serverTimestamp' → takenAtMs=$takenAtMs blobId=$blobId")
+                newRecords.add(photo)
+            }
 
-                // Download and decrypt thumbnail blob if available
-                var thumbPath: String? = null
-                val thumbBlobId = photo.encryptedThumbBlobId
-                if (!thumbBlobId.isNullOrEmpty()) {
-                    try {
-                        val thumbDecrypted = downloadAndDecryptBlob(thumbBlobId)
-                        decodeThumbEnvelope(thumbDecrypted)?.let { thumbBytes ->
-                            thumbPath = saveThumbnailToDisk(localId, thumbBytes)
-                        }
-                    } catch (e: Exception) {
-                        android.util.Log.w("PhotoRepository", "Thumbnail download failed for blob $blobId: ${e.message}")
-                    }
+            // Download thumbnails + build entities concurrently (bounded), then
+            // insert sequentially. The DB reads/merges above stayed serial; only
+            // the network-bound thumbnail step is parallelised, so the on-disk
+            // end state is identical to the old serial loop. (#3)
+            if (newRecords.isNotEmpty()) {
+                val entities = coroutineScope {
+                    val gate = Semaphore(THUMB_SYNC_CONCURRENCY)
+                    newRecords.map { rec ->
+                        async(Dispatchers.IO) { gate.withPermit { buildSyncedEntity(rec) } }
+                    }.awaitAll()
                 }
-
-                // If the photo has crop_metadata with 90°/270° rotation, swap
-                // width/height so the grid tile reflects the edited orientation.
-                var w = photo.width.toInt()
-                var h = photo.height.toInt()
-                if (!photo.cropMetadata.isNullOrEmpty()) {
-                    try {
-                        val cm = org.json.JSONObject(photo.cropMetadata)
-                        val rot = ((cm.optInt("rotate", 0) % 360) + 360) % 360
-                        if ((rot == 90 || rot == 270) && w > 0 && h > 0) {
-                            val tmp = w; w = h; h = tmp
-                        }
-                    } catch (_: Exception) { /* ignore malformed JSON */ }
+                for (entity in entities) {
+                    db.photoDao().insert(entity)
+                    imported++
                 }
-
-                val entity = PhotoEntity(
-                    localId = localId,
-                    serverBlobId = blobId,
-                    thumbnailBlobId = thumbBlobId,
-                    filename = photo.filename,
-                    takenAt = takenAtMs,
-                    // Library import order — mirror the server's created_at (the
-                    // web stores this as `addedAt`). Without this, createdAt
-                    // defaulted to the LOCAL insert time, so "Recently Added"
-                    // reflected device-sync order instead of server-add order
-                    // and never matched the web/server recents list.
-                    createdAt = parseIsoToEpochMs(photo.createdAt),
-                    mimeType = photo.mimeType,
-                    mediaType = photo.mediaType,
-                    width = w,
-                    height = h,
-                    durationSecs = photo.durationSecs?.toFloat(),
-                    sizeBytes = photo.sizeBytes,
-                    localPath = null,
-                    thumbnailPath = thumbPath,
-                    syncStatus = SyncStatus.SYNCED,
-                    isFavorite = photo.isFavorite,
-                    cropMetadata = photo.cropMetadata,
-                    photoHash = photo.photoHash,
-                    serverPhotoId = photo.id,
-                    photoSubtype = photo.photoSubtype,
-                    burstId = photo.burstId,
-                    motionVideoBlobId = photo.motionVideoBlobId,
-                    sourcePath = photo.sourcePath
-                )
-                db.photoDao().insert(entity)
-                imported++
             }
 
             after = result.nextCursor
-        } while (result.nextCursor != null)
+            if (after == null) break
+        }
 
-        android.util.Log.i("PhotoRepository", "syncFromServerEncrypted: finished — imported $imported, merged $merged photos")
-        return imported + merged
+        android.util.Log.i(
+            TAG,
+            "syncFromServerEncrypted: finished as $mode — imported $imported, merged $merged, " +
+                "${tombstones.size} tombstones, head=$headAtStart",
+        )
+        return EncryptedSyncOutcome(
+            mode = mode,
+            changed = imported + merged,
+            serverPhotoIds = allServerIds,
+            tombstones = tombstones,
+            headAtStart = headAtStart,
+        )
+    }
+
+    /**
+     * Build the local [PhotoEntity] for a freshly-discovered server photo,
+     * including downloading + decrypting its thumbnail blob to disk. Performs NO
+     * database writes, so many of these can run concurrently during sync. (#3)
+     */
+    private suspend fun buildSyncedEntity(photo: EncryptedSyncRecord): PhotoEntity {
+        val blobId = photo.encryptedBlobId!!
+        val localId = java.util.UUID.randomUUID().toString()
+        val serverTimestamp = photo.takenAt ?: photo.createdAt
+        val takenAtMs = parseIsoToEpochMs(serverTimestamp)
+        android.util.Log.d("PhotoRepository", "syncFromServerEncrypted: importing '${photo.filename}' serverTs='$serverTimestamp' → takenAtMs=$takenAtMs blobId=$blobId")
+
+        // Download and decrypt thumbnail blob if available
+        var thumbPath: String? = null
+        val thumbBlobId = photo.encryptedThumbBlobId
+        if (!thumbBlobId.isNullOrEmpty()) {
+            try {
+                val thumbDecrypted = downloadAndDecryptBlob(thumbBlobId)
+                decodeThumbEnvelope(thumbDecrypted)?.let { thumbBytes ->
+                    thumbPath = saveThumbnailToDisk(localId, thumbBytes)
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("PhotoRepository", "Thumbnail download failed for blob $blobId: ${e.message}")
+            }
+        }
+
+        // If the photo has crop_metadata with 90°/270° rotation, swap
+        // width/height so the grid tile reflects the edited orientation.
+        var w = photo.width.toInt()
+        var h = photo.height.toInt()
+        if (!photo.cropMetadata.isNullOrEmpty()) {
+            try {
+                val cm = org.json.JSONObject(photo.cropMetadata)
+                val rot = ((cm.optInt("rotate", 0) % 360) + 360) % 360
+                if ((rot == 90 || rot == 270) && w > 0 && h > 0) {
+                    val tmp = w; w = h; h = tmp
+                }
+            } catch (_: Exception) { /* ignore malformed JSON */ }
+        }
+
+        return PhotoEntity(
+            localId = localId,
+            serverBlobId = blobId,
+            thumbnailBlobId = thumbBlobId,
+            filename = photo.filename,
+            takenAt = takenAtMs,
+            // Library import order — mirror the server's created_at (the
+            // web stores this as `addedAt`). Without this, createdAt
+            // defaulted to the LOCAL insert time, so "Recently Added"
+            // reflected device-sync order instead of server-add order
+            // and never matched the web/server recents list.
+            createdAt = parseIsoToEpochMs(photo.createdAt),
+            mimeType = photo.mimeType,
+            mediaType = photo.mediaType,
+            width = w,
+            height = h,
+            durationSecs = photo.durationSecs?.toFloat(),
+            sizeBytes = photo.sizeBytes,
+            localPath = null,
+            thumbnailPath = thumbPath,
+            syncStatus = SyncStatus.SYNCED,
+            isFavorite = photo.isFavorite,
+            cropMetadata = photo.cropMetadata,
+            photoHash = photo.photoHash,
+            serverPhotoId = photo.id,
+            photoSubtype = photo.photoSubtype,
+            burstId = photo.burstId,
+            motionVideoBlobId = photo.motionVideoBlobId,
+            sourcePath = photo.sourcePath,
+            renditions = photo.renditions.toDomain()
+        )
     }
 
     /**

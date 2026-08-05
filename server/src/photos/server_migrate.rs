@@ -278,13 +278,32 @@ async fn record_encryption_failure(
         return;
     }
 
-    let attempts: i64 =
-        sqlx::query_scalar("SELECT encryption_attempts FROM photos WHERE id = ? AND user_id = ?")
-            .bind(photo_id)
-            .bind(user_id)
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0);
+    // Filename comes back with the attempt count rather than in a second query:
+    // an audit row naming only a UUID answers "something failed" but not "which
+    // file", which is the entire complaint behind #45.
+    let (attempts, filename): (i64, String) = sqlx::query_as(
+        "SELECT encryption_attempts, filename FROM photos WHERE id = ? AND user_id = ?",
+    )
+    .bind(photo_id)
+    .bind(user_id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or((0, String::new()));
+
+    // Audited on EVERY attempt, not just the terminal one. A file that quietly
+    // fails twice and is then deferred looks identical to one that was never
+    // seen, and the deferral is precisely the moment a user needs the history.
+    crate::audit::log_background(
+        pool,
+        crate::audit::AuditEvent::EncryptionFailure,
+        Some(serde_json::json!({
+            "photo_id": photo_id,
+            "filename": filename,
+            "error": truncated,
+            "attempts": attempts,
+            "deferred": attempts >= MIGRATION_MAX_ATTEMPTS,
+        })),
+    );
 
     if attempts >= MIGRATION_MAX_ATTEMPTS {
         let _ =
@@ -294,9 +313,98 @@ async fn record_encryption_failure(
                 .execute(pool)
                 .await;
         tracing::error!(
-            "[SERVER_MIG] photo {photo_id} deferred after {attempts} failed encryption attempts: {truncated}"
+            "[SERVER_MIG] photo {photo_id} deferred after {attempts} failed encryption attempts: \
+             the original stays UNENCRYPTED at rest until an admin retries it \
+             (POST /api/admin/encryption/retry-parked): {truncated}"
+        );
+
+        // Terminal, and deliberately a separate event from the per-attempt
+        // failure above — the same distinction #40 draws between
+        // `media_convert_failure` and `conversion_retired`. "This attempt went
+        // wrong" and "we have stopped trying, and the file is still plaintext"
+        // are different questions, and only the second one is a standing
+        // confidentiality gap. Folding it into the first is how 2,500 parked
+        // photos went unnoticed for a month.
+        crate::audit::log_background(
+            pool,
+            crate::audit::AuditEvent::EncryptionParked,
+            Some(serde_json::json!({
+                "photo_id": photo_id,
+                "filename": filename,
+                "error": truncated,
+                "attempts": attempts,
+            })),
         );
     }
+}
+
+// ── Parked rows — the operator's view of them ───────────────────────────────
+
+/// Count photos parked by [`MIGRATION_MAX_ATTEMPTS`]: still holding a
+/// **plaintext original at rest**, and never retried by anything.
+///
+/// `user_id` scopes the count: `Some(uid)` for a per-user surface (the
+/// encryption status endpoint), `None` for a whole-server one (admin
+/// diagnostics). One function rather than two queries on purpose — the repo has
+/// a standing habit of letting two derivations of one count drift apart (#42
+/// alone had three definitions of "count"), and a parked row that one surface
+/// sees and another does not is precisely the blindness B3a exists to fix.
+///
+/// Returns 0 on a query error. A failure to *count* parked rows must not break
+/// the surface that reports encryption progress; the error is logged instead.
+pub async fn count_parked(pool: &sqlx::SqlitePool, user_id: Option<&str>) -> i64 {
+    let result = match user_id {
+        Some(uid) => {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM photos WHERE encryption_deferred = 1 AND user_id = ?",
+            )
+            .bind(uid)
+            .fetch_one(pool)
+            .await
+        }
+        None => {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM photos WHERE encryption_deferred = 1",
+            )
+            .fetch_one(pool)
+            .await
+        }
+    };
+
+    result.unwrap_or_else(|e| {
+        tracing::warn!("[SERVER_MIG] could not count parked photos: {e}");
+        0
+    })
+}
+
+/// Clear the parked marker on every parked photo belonging to `user_id`, so the
+/// next migration pass retries them from a full attempt budget.
+///
+/// This is the operator escape hatch that pairs with the automatic cap, exactly
+/// as `/admin/conversion/retry-failed` does for #40's three-strike conversion
+/// cap. The cap has no automatic escape: nothing ever re-examines a parked row,
+/// so a file parked by a *server-side* defect — the pre-`SPCHNKB2` whole-file
+/// encrypt that needed ~5x RAM and OOM-aborted on large videos — stays a
+/// plaintext original forever even after the server is fixed. On the live
+/// library that was 2,500 photos, ~17% of it.
+///
+/// Resetting `encryption_attempts` alongside the marker is deliberate: leaving
+/// it at the cap would let a single fresh failure re-park the row immediately,
+/// which is indistinguishable from the retry never having happened. The cap
+/// itself is untouched, so a genuinely un-encryptable file re-parks after three
+/// more attempts rather than looping — the infinite-retry → re-OOM loop that
+/// migration 024 introduced parking to stop cannot come back through this door.
+pub async fn retry_parked(pool: &sqlx::SqlitePool, user_id: &str) -> Result<u64, sqlx::Error> {
+    let cleared = sqlx::query(
+        "UPDATE photos SET encryption_deferred = 0, encryption_attempts = 0, \
+         encryption_error = NULL WHERE user_id = ? AND encryption_deferred = 1",
+    )
+    .bind(user_id)
+    .execute(pool)
+    .await?
+    .rows_affected();
+
+    Ok(cleared)
 }
 
 // ── Public entry points ─────────────────────────────────────────────────────
@@ -479,4 +587,164 @@ pub async fn auto_migrate_after_scan(
     );
 
     run_migration_from_stored_key(key, pool, storage_root).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::str::FromStr;
+
+    async fn test_pool() -> sqlx::SqlitePool {
+        let opts = sqlx::sqlite::SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .foreign_keys(true);
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        for uid in ["u1", "u2"] {
+            sqlx::query(
+                "INSERT INTO users (id, username, password_hash, created_at) \
+                 VALUES (?, ?, 'x', '2026-01-01T00:00:00Z')",
+            )
+            .bind(uid)
+            .bind(uid)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        pool
+    }
+
+    /// Insert one photo. `parked` mirrors what `record_encryption_failure`
+    /// leaves behind at the attempt cap: no blob, deferred, attempts spent.
+    async fn insert_photo(pool: &sqlx::SqlitePool, id: &str, user_id: &str, parked: bool) {
+        sqlx::query(
+            "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
+             size_bytes, created_at, encryption_deferred, encryption_attempts, encryption_error) \
+             VALUES (?, ?, ?, ?, 'image/jpeg', 'photo', 1024, '2026-01-01T00:00:00Z', ?, ?, ?)",
+        )
+        .bind(id)
+        .bind(user_id)
+        .bind(format!("{id}.jpg"))
+        .bind(format!("uploads/{id}.jpg"))
+        .bind(i64::from(parked))
+        .bind(if parked { 3_i64 } else { 0 })
+        .bind(if parked { Some("OOM") } else { None })
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn is_parked(pool: &sqlx::SqlitePool, id: &str) -> bool {
+        sqlx::query_scalar::<_, i64>("SELECT encryption_deferred FROM photos WHERE id = ?")
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+            == 1
+    }
+
+    /// The whole point of B3a: parked rows must be *countable*. They were
+    /// excluded from every pending query so the progress bar could not wedge,
+    /// and then reported nowhere — which is how 2,500 plaintext originals (~17%
+    /// of the live library) stayed invisible for a month.
+    #[tokio::test]
+    async fn parked_photos_are_counted_per_user_and_server_wide() {
+        let pool = test_pool().await;
+        insert_photo(&pool, "p_ok", "u1", false).await;
+        insert_photo(&pool, "p_parked_a", "u1", true).await;
+        insert_photo(&pool, "p_parked_b", "u1", true).await;
+        insert_photo(&pool, "p_parked_other", "u2", true).await;
+
+        assert_eq!(count_parked(&pool, Some("u1")).await, 2);
+        assert_eq!(count_parked(&pool, Some("u2")).await, 1);
+        assert_eq!(
+            count_parked(&pool, None).await,
+            3,
+            "the admin diagnostics view is server-wide; scoping it to one user \
+             would under-report the confidentiality gap"
+        );
+    }
+
+    /// A parked row is not pending work. This is the invariant that lets the
+    /// count be surfaced at all: `count_migratable` must keep ignoring parked
+    /// rows even now that something else reports them, or the migration loop
+    /// spins forever on files it cannot encrypt.
+    #[tokio::test]
+    async fn parked_photos_are_never_migratable() {
+        let pool = test_pool().await;
+        insert_photo(&pool, "p_ok", "u1", false).await;
+        insert_photo(&pool, "p_parked", "u1", true).await;
+
+        assert_eq!(count_migratable(&pool).await.unwrap(), 1);
+    }
+
+    /// The un-park clears the marker AND the spent attempts. Leaving attempts at
+    /// the cap would let one fresh failure re-park the row immediately, which is
+    /// indistinguishable from the retry never having run.
+    #[tokio::test]
+    async fn retry_parked_restores_a_full_attempt_budget() {
+        let pool = test_pool().await;
+        insert_photo(&pool, "p_parked", "u1", true).await;
+
+        assert_eq!(retry_parked(&pool, "u1").await.unwrap(), 1);
+
+        let (deferred, attempts, error): (i64, i64, Option<String>) = sqlx::query_as(
+            "SELECT encryption_deferred, encryption_attempts, encryption_error \
+             FROM photos WHERE id = 'p_parked'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(deferred, 0);
+        assert_eq!(attempts, 0, "a retry with no attempt budget is not a retry");
+        assert_eq!(
+            error, None,
+            "a stale error outlives the failure it describes"
+        );
+        assert_eq!(
+            count_migratable(&pool).await.unwrap(),
+            1,
+            "an un-parked row must re-enter the migration queue"
+        );
+    }
+
+    /// Scoped to the caller. The endpoint is admin-gated, but "admin" is not
+    /// "owns every row" — un-parking another user's photos would silently start
+    /// re-encrypting a library the caller never asked about.
+    #[tokio::test]
+    async fn retry_parked_leaves_other_users_alone() {
+        let pool = test_pool().await;
+        insert_photo(&pool, "p_mine", "u1", true).await;
+        insert_photo(&pool, "p_theirs", "u2", true).await;
+
+        assert_eq!(retry_parked(&pool, "u1").await.unwrap(), 1);
+
+        assert!(!is_parked(&pool, "p_mine").await);
+        assert!(is_parked(&pool, "p_theirs").await);
+    }
+
+    /// Idempotent, and reports honestly when there is nothing to do — the
+    /// handler keys its "did anything happen" branch on this number, and a
+    /// non-zero answer would kick a pointless migration pass on every click.
+    #[tokio::test]
+    async fn retry_parked_is_idempotent_and_reports_zero_when_clean() {
+        let pool = test_pool().await;
+        insert_photo(&pool, "p_ok", "u1", false).await;
+        insert_photo(&pool, "p_parked", "u1", true).await;
+
+        assert_eq!(retry_parked(&pool, "u1").await.unwrap(), 1);
+        assert_eq!(
+            retry_parked(&pool, "u1").await.unwrap(),
+            0,
+            "the second call has nothing left to un-park; reporting 1 again \
+             would kick a migration pass on every click and tell the operator \
+             work happened when none did"
+        );
+        assert_eq!(count_parked(&pool, Some("u1")).await, 0);
+    }
 }

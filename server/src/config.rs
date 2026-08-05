@@ -190,11 +190,30 @@ pub struct ScanConfig {
     /// Default: 300 (5 minutes). Set to 0 to disable background scanning.
     #[serde(default = "ScanConfig::default_interval")]
     pub auto_scan_interval_secs: u64,
+
+    /// Conversion stuck-job watchdog threshold (#18). When the conversion
+    /// pipeline reports "converting" but makes **zero** progress for this many
+    /// seconds, the watchdog force-recovers it — clearing the stuck flag so the
+    /// AI/geo processors (gated by `ingest_pipeline_busy`) and the conversion
+    /// banner resume — and kicks a fresh pass to retry any remaining files.
+    ///
+    /// Default: 7200 (2 hours). Deliberately well below the "8 hours" in the
+    /// original spec: every individual ffmpeg call is already capped at 600s, so
+    /// a *whole pipeline* making zero progress for 2h is an unambiguous wedge,
+    /// and recovering in 2h beats starving AI/geo for 8. Raise it if you
+    /// routinely import single files too large to upload+convert within the
+    /// window; set 0 to disable the watchdog entirely.
+    #[serde(default = "ScanConfig::default_stall_timeout")]
+    pub conversion_stall_timeout_secs: u64,
 }
 
 impl ScanConfig {
     fn default_interval() -> u64 {
         300
+    }
+
+    fn default_stall_timeout() -> u64 {
+        7200
     }
 }
 
@@ -202,6 +221,7 @@ impl Default for ScanConfig {
     fn default() -> Self {
         Self {
             auto_scan_interval_secs: 300,
+            conversion_stall_timeout_secs: 7200,
         }
     }
 }

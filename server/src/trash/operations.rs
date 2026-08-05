@@ -151,6 +151,10 @@ pub async fn soft_delete_photo(
     )
     .await;
 
+    // Notify the user's other clients so the photo disappears from their gallery
+    // promptly (item #11).
+    state.emit_sync(&auth.user_id, "trash", &photo_id);
+
     Ok(Json(serde_json::json!({
         "trash_id": trash_id,
         "expires_at": expires_at.to_rfc3339(),
@@ -337,6 +341,12 @@ pub async fn soft_delete_blob(
         blob_id,
         expires_at.to_rfc3339()
     );
+
+    // Notify the user's other clients so the item leaves their gallery (item #11).
+    state.emit_sync(&auth.user_id, "trash", &blob_id);
+
+    // The photos-table row was deleted — drop the cached count summary.
+    state.summary_cache.invalidate(&auth.user_id);
 
     Ok(Json(serde_json::json!({
         "trash_id": trash_id,

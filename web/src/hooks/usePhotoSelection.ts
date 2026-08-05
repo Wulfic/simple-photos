@@ -13,6 +13,9 @@ export interface PhotoSelection {
   selectedIds: Set<string>;
   /** Enter selection mode seeded with one id. */
   enter: (id: string) => void;
+  /** Enter selection mode with an empty set — for a toolbar "Select" button,
+   *  where the user then taps tiles to build the selection. */
+  enterEmpty: () => void;
   /** Toggle one id; exits selection mode when the set becomes empty. */
   toggle: (id: string) => void;
   /** Replace the selection with the given ids (enters mode if non-empty). */
@@ -28,6 +31,11 @@ export function usePhotoSelection(): PhotoSelection {
   const enter = useCallback((id: string) => {
     setSelectionMode(true);
     setSelectedIds(new Set([id]));
+  }, []);
+
+  const enterEmpty = useCallback(() => {
+    setSelectionMode(true);
+    setSelectedIds(new Set());
   }, []);
 
   const toggle = useCallback((id: string) => {
@@ -50,5 +58,5 @@ export function usePhotoSelection(): PhotoSelection {
     setSelectedIds(new Set());
   }, []);
 
-  return { selectionMode, selectedIds, enter, toggle, setAll, clear };
+  return { selectionMode, selectedIds, enter, enterEmpty, toggle, setAll, clear };
 }

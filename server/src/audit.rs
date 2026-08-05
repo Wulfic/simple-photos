@@ -15,10 +15,23 @@
 use axum::http::HeaderMap;
 use serde_json::Value as JsonValue;
 use sqlx::SqlitePool;
+use std::sync::OnceLock;
 use uuid::Uuid;
 
 use crate::state::AppState;
 use crate::state::AuditBroadcast;
+
+/// Process-wide handle to the SSE broadcast channel, registered once at startup
+/// via [`register_broadcast`]. This lets background-task audit writes (which
+/// only have a pool, not an `AppState`) still stream live to the Server Logs
+/// tab instead of only appearing on the next page fetch.
+static AUDIT_TX: OnceLock<tokio::sync::broadcast::Sender<AuditBroadcast>> = OnceLock::new();
+
+/// Register the global broadcast sender. Call once at startup with
+/// `state.audit_tx.clone()`. Idempotent — later calls are ignored.
+pub fn register_broadcast(tx: tokio::sync::broadcast::Sender<AuditBroadcast>) {
+    let _ = AUDIT_TX.set(tx);
+}
 
 /// All auditable event types.
 #[derive(Debug, Clone, Copy)]
@@ -59,6 +72,52 @@ pub enum AuditEvent {
     BlobUpload,
     /// Blob deleted
     BlobDelete,
+    /// Media file transcoded to a browser-native format (image/video/audio)
+    MediaConvert,
+
+    // ── Pipeline failures (#45) ──────────────────────────────────────
+    // Until these existed, the failure paths in `ingest.rs` emitted only
+    // `tracing::warn!`, which goes to the process log — NOT the `audit` table
+    // the Server Logs tab reads. The success path audited, the failure path did
+    // not, so the one question a user actually asks ("which file failed?") was
+    // the one question the UI could not answer. Every other conversion fix in
+    // this area is guesswork without them.
+    //
+    // These are deliberately separate variants rather than a `success: false`
+    // field on the existing ones: the logs tab filters by `event_type`, so a
+    // "show me only failures" filter is a cheap indexed query instead of a JSON
+    // scan, and an existing dashboard counting `media_convert` does not silently
+    // start counting failures as successes.
+    /// Transcode of a media file failed. Details carry the filename, category
+    /// and the error, because "a conversion failed" alone is not actionable.
+    MediaConvertFailure,
+    /// A file could not be registered in the `photos` table. Distinct from a
+    /// convert failure: the bytes are fine, the DB write is not, and a file
+    /// that leaves no row is re-walked and re-failed on every autoscan pass.
+    ImportFailure,
+    /// Encryption of a stored file failed.
+    EncryptionFailure,
+    /// A photo exhausted its encryption attempts and was parked
+    /// (`encryption_deferred = 1`). **Terminal**, and the same distinction
+    /// `ConversionRetired` draws for #40 — but with a sharper consequence: a
+    /// parked photo keeps its **plaintext original at rest**, and nothing ever
+    /// retries it. On the live library this silently held 2,500 photos (~17%)
+    /// unencrypted for a month, because the only signal was a per-attempt
+    /// `EncryptionFailure` indistinguishable from a transient one. Clearable by
+    /// `POST /api/admin/encryption/retry-parked`.
+    EncryptionParked,
+    /// Thumbnail generation failed. Non-fatal — the photo is still registered
+    /// and downloadable — but it renders as a placeholder forever, which
+    /// otherwise looks like a client bug.
+    ThumbnailFailure,
+    /// A file exhausted its conversion attempts (#40) and will not be tried
+    /// again until it changes on disk. **Terminal**, and deliberately distinct
+    /// from `MediaConvertFailure`: the per-attempt failures say "this went
+    /// wrong", this one says "we have stopped trying", and a user looking for
+    /// why a file never appeared needs to see the second one. Without it a file
+    /// retired after three failures is indistinguishable from one that was
+    /// never scanned.
+    ConversionRetired,
 
     // ── Photos ───────────────────────────────────────────────────────
     /// Photo registered from disk
@@ -137,6 +196,30 @@ pub enum AuditEvent {
     AdminAction,
 }
 
+/// Every event that represents something going wrong, for the Server Logs tab's
+/// "Failures only" filter (#45).
+///
+/// Defined here, next to the enum, rather than as a literal in the diagnostics
+/// handler or — worse — in the web client. A new failure variant added without
+/// updating this list silently fails to appear under the filter that exists
+/// precisely to surface it, and `failure_filter_covers_every_failure_variant`
+/// pins that.
+///
+/// Auth failures are deliberately included: a user asking "what is going wrong
+/// on my server" does not mean "only in the media pipeline".
+pub const FAILURE_EVENTS: &[AuditEvent] = &[
+    AuditEvent::MediaConvertFailure,
+    AuditEvent::ImportFailure,
+    AuditEvent::EncryptionFailure,
+    AuditEvent::EncryptionParked,
+    AuditEvent::ThumbnailFailure,
+    AuditEvent::ConversionRetired,
+    AuditEvent::LoginFailure,
+    AuditEvent::TotpLoginFailure,
+    AuditEvent::RateLimited,
+    AuditEvent::AccountLocked,
+];
+
 impl AuditEvent {
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -158,6 +241,13 @@ impl AuditEvent {
             // Blobs
             AuditEvent::BlobUpload => "blob_upload",
             AuditEvent::BlobDelete => "blob_delete",
+            AuditEvent::MediaConvert => "media_convert",
+            AuditEvent::MediaConvertFailure => "media_convert_failure",
+            AuditEvent::ImportFailure => "import_failure",
+            AuditEvent::EncryptionFailure => "encryption_failure",
+            AuditEvent::EncryptionParked => "encryption_parked",
+            AuditEvent::ThumbnailFailure => "thumbnail_failure",
+            AuditEvent::ConversionRetired => "conversion_retired",
             // Photos
             AuditEvent::PhotoRegister => "photo_register",
             AuditEvent::PhotoFavorite => "photo_favorite",
@@ -238,6 +328,9 @@ pub async fn log(
 
     // Own the values that reference borrowed data so the spawned task is 'static.
     let pool = state.pool.clone();
+    // Username lookup uses the read pool so it never contends with the write
+    // pool during high-frequency events (e.g. a bulk upload's blob_upload flood).
+    let read_pool = state.read_pool.clone();
     let audit_tx = state.audit_tx.clone();
     let event_str = event.as_str().to_string();
     let user_id_owned = user_id.map(|s| s.to_string());
@@ -260,11 +353,17 @@ pub async fn log(
         if let Err(e) = result {
             tracing::error!(event = event_str.as_str(), error = %e, "Failed to write audit log");
         } else {
+            // Resolve the display name so live SSE rows show the real username
+            // instead of the raw UUID. The paginated fetch does this via a JOIN;
+            // the broadcast has to do it explicitly. Best-effort — a lookup
+            // failure just leaves `username` None (UI falls back to the UUID).
+            let username = resolve_username(&read_pool, user_id_owned.as_deref()).await;
             // Broadcast to SSE subscribers — ignore send errors (no receivers = ok)
             let _ = audit_tx.send(AuditBroadcast {
                 id: id.clone(),
                 event_type: event_str.clone(),
                 user_id: user_id_owned.clone(),
+                username,
                 ip_address: ip.clone(),
                 user_agent: user_agent.clone(),
                 details: details_str.clone(),
@@ -297,7 +396,9 @@ pub fn log_background_with_tx(
 
     let pool = pool.clone();
     let event_str = event.as_str().to_string();
-    let audit_tx = audit_tx.cloned();
+    // Prefer an explicitly-passed sender; otherwise fall back to the globally
+    // registered one so background events still stream live to the log tab.
+    let audit_tx = audit_tx.cloned().or_else(|| AUDIT_TX.get().cloned());
 
     tokio::spawn(async move {
         let result = sqlx::query(
@@ -318,6 +419,7 @@ pub fn log_background_with_tx(
                 id: id.clone(),
                 event_type: event_str.clone(),
                 user_id: None,
+                username: None,
                 ip_address: "background".to_string(),
                 user_agent: "system".to_string(),
                 details: details_str.clone(),
@@ -326,6 +428,20 @@ pub fn log_background_with_tx(
             });
         }
     });
+}
+
+/// Resolve a user's display name from their id for the SSE broadcast.
+///
+/// Returns `None` when `user_id` is absent, the user no longer exists, or the
+/// query fails — callers treat a missing name as "fall back to the UUID".
+async fn resolve_username(pool: &SqlitePool, user_id: Option<&str>) -> Option<String> {
+    let uid = user_id?;
+    sqlx::query_scalar::<_, String>("SELECT username FROM users WHERE id = ?")
+        .bind(uid)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
 }
 
 /// Extract the client IP address from request headers.
@@ -362,4 +478,146 @@ fn extract_ip(headers: &HeaderMap, trust_proxy: bool) -> String {
         }
     }
     "unknown".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn media_convert_event_string_is_stable() {
+        // The web EVENT_COLORS map and any log filters key off this exact
+        // string — changing it silently would break the Server Logs tab.
+        assert_eq!(AuditEvent::MediaConvert.as_str(), "media_convert");
+    }
+
+    #[test]
+    fn failure_event_strings_are_stable() {
+        // Same contract as above, and load-bearing for #45's "Failures" filter:
+        // the client selects these by string, so a rename here silently empties
+        // the filter rather than failing to compile.
+        assert_eq!(
+            AuditEvent::MediaConvertFailure.as_str(),
+            "media_convert_failure"
+        );
+        assert_eq!(AuditEvent::ImportFailure.as_str(), "import_failure");
+        assert_eq!(AuditEvent::EncryptionFailure.as_str(), "encryption_failure");
+        assert_eq!(AuditEvent::EncryptionParked.as_str(), "encryption_parked");
+        assert_eq!(AuditEvent::ThumbnailFailure.as_str(), "thumbnail_failure");
+    }
+
+    /// Anything whose event string ends in `_failure` must be in
+    /// `FAILURE_EVENTS`.
+    ///
+    /// This is the drift guard. The realistic mistake is adding a fifth failure
+    /// variant, wiring it into `ingest.rs`, and forgetting this list — at which
+    /// point the failure is written to the table but is invisible under the one
+    /// filter built to surface it, which is #45 reintroduced by the fix for #45.
+    ///
+    /// Rust has no enum iteration without a derive, so the candidate list is
+    /// spelled out; `failure_events_have_no_strays` catches the other direction.
+    #[test]
+    fn failure_filter_covers_every_failure_variant() {
+        let all_failure_shaped = [
+            AuditEvent::MediaConvertFailure,
+            AuditEvent::ImportFailure,
+            AuditEvent::EncryptionFailure,
+            AuditEvent::ThumbnailFailure,
+            AuditEvent::LoginFailure,
+            AuditEvent::TotpLoginFailure,
+        ];
+        let covered: std::collections::HashSet<&str> =
+            FAILURE_EVENTS.iter().map(|e| e.as_str()).collect();
+        for ev in all_failure_shaped {
+            assert!(
+                covered.contains(ev.as_str()),
+                "{} is a failure event but is missing from FAILURE_EVENTS, so the \
+                 'Failures only' filter will never show it",
+                ev.as_str()
+            );
+        }
+    }
+
+    /// The **terminal** events must be in `FAILURE_EVENTS` too, and no
+    /// name-shaped rule can enforce it.
+    ///
+    /// `failure_filter_covers_every_failure_variant` keys off the `_failure`
+    /// suffix, which is exactly why it does not protect these two: a file the
+    /// server has GIVEN UP on is named for the giving-up, not for the failing.
+    /// Both are the row a user goes to "Failures only" to find — `_retired`
+    /// answers "why did this file never appear", `_parked` answers "why is this
+    /// photo still plaintext on disk" — and both would be silently filtered out
+    /// of the one view built to surface them.
+    #[test]
+    fn failure_filter_covers_the_terminal_events() {
+        let covered: std::collections::HashSet<&str> =
+            FAILURE_EVENTS.iter().map(|e| e.as_str()).collect();
+        for ev in [AuditEvent::ConversionRetired, AuditEvent::EncryptionParked] {
+            assert!(
+                covered.contains(ev.as_str()),
+                "{} is terminal but is missing from FAILURE_EVENTS, so the \
+                 'Failures only' filter will never show it",
+                ev.as_str()
+            );
+        }
+    }
+
+    /// The list must not contain duplicates — a duplicate would bind one extra
+    /// placeholder for no reason and quietly suggest the list is unreviewed.
+    #[test]
+    fn failure_events_have_no_strays() {
+        let strs: Vec<&str> = FAILURE_EVENTS.iter().map(|e| e.as_str()).collect();
+        let unique: std::collections::HashSet<_> = strs.iter().collect();
+        assert_eq!(
+            unique.len(),
+            strs.len(),
+            "duplicate in FAILURE_EVENTS: {strs:?}"
+        );
+    }
+
+    /// Every failure variant must be distinguishable from every success
+    /// variant, and from each other.
+    ///
+    /// The realistic mistake this catches is a copy-paste in the `as_str` match
+    /// arm — two variants mapping to one string. That compiles, passes any test
+    /// that only checks one of them, and makes a whole class of failure
+    /// invisible in the logs tab by folding it into another.
+    #[test]
+    fn failure_events_are_distinct_from_successes() {
+        let strs = [
+            AuditEvent::MediaConvert.as_str(),
+            AuditEvent::MediaConvertFailure.as_str(),
+            AuditEvent::ImportFailure.as_str(),
+            AuditEvent::EncryptionFailure.as_str(),
+            // The per-attempt failure and the terminal park are the pair most
+            // at risk of a copy-paste collision, and folding them together is
+            // what makes a permanently-plaintext photo look like a transient
+            // hiccup.
+            AuditEvent::EncryptionParked.as_str(),
+            AuditEvent::ThumbnailFailure.as_str(),
+            AuditEvent::PhotoRegister.as_str(),
+        ];
+        let unique: std::collections::HashSet<_> = strs.iter().collect();
+        assert_eq!(
+            unique.len(),
+            strs.len(),
+            "duplicate audit event string: {strs:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_username_is_none_without_user_id() {
+        // Background/system events pass no user_id; the resolver must short
+        // out before touching the pool (the pool arg is never used here).
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            // A pool is required by the signature; an in-memory DB with no
+            // `users` table proves the None arm never queries it.
+            let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+            assert_eq!(resolve_username(&pool, None).await, None);
+        });
+    }
 }

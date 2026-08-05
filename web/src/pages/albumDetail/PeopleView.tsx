@@ -3,10 +3,14 @@
  * views are thin configs over the shared SmartClusterList / SmartAlbumDetail
  * modules (the detail view enables rename).
  */
+import { useSearchParams } from "react-router-dom";
 import { api } from "../../api/client";
+import { aiApi, type FaceCluster } from "../../api/ai";
+import { useAppNavigate } from "../../hooks/useAppNavigate";
 import SmartClusterList from "./SmartClusterList";
 import SmartAlbumDetail from "./SmartAlbumDetail";
 import { resolvePhotosByServerId } from "./resolveServerPhotos";
+import { clusterFaceCropStyle } from "../../utils/thumbnailCss";
 
 const PersonIcon = (
   <svg className="w-10 h-10 text-fg-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -15,20 +19,50 @@ const PersonIcon = (
 );
 
 export function PeopleView() {
+  const [searchParams] = useSearchParams();
+  const navigate = useAppNavigate();
+
+  // Assign mode: launched from the photo info panel's "Select Person" button.
+  // `detection` is the face to move; picking a person reassigns it and returns.
+  const assigning = searchParams.get("assign") === "1";
+  const detectionId = Number(searchParams.get("detection"));
+  const assignDetection = assigning && Number.isFinite(detectionId) ? detectionId : null;
+
+  const handlePick = async (cluster: FaceCluster) => {
+    if (assignDetection == null) return;
+    try {
+      await aiApi.assignFace(assignDetection, cluster.id);
+    } catch (e) {
+      console.error("Failed to reassign face", e);
+    } finally {
+      // Return to the photo the user came from.
+      navigate(-1);
+    }
+  };
+
   return (
     <SmartClusterList
-      title="People"
+      title={assignDetection != null ? "Assign to person" : "People"}
       emptyTitle="No faces detected yet"
       emptyHint="Enable AI processing in Settings to detect faces"
       variant="avatar"
       placeholder={PersonIcon}
       load={() => api.ai.listFaceClusters()}
+      onCardClick={assignDetection != null ? handlePick : undefined}
+      notice={
+        assignDetection != null ? (
+          <div className="mb-4 rounded-lg border border-accent-500/30 bg-accent-500/10 px-4 py-3 text-sm text-fg">
+            Choose the correct person for this face.
+          </div>
+        ) : undefined
+      }
       toCard={(cluster) => ({
         key: cluster.id,
         photoId: cluster.representative,
         href: `/albums/smart-people/${cluster.id}`,
         title: cluster.label || "Unknown Person",
         alt: cluster.label || "Unknown",
+        imgStyle: clusterFaceCropStyle(cluster),
         meta: (
           <p className="text-xs text-fg-muted text-center">
             {cluster.photo_count} photo{cluster.photo_count !== 1 ? "s" : ""}

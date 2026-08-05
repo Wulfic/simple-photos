@@ -260,6 +260,86 @@ fn build_ffmpeg_args_with_plan(
     args
 }
 
+/// Build a complete `ffmpeg` argument list for baking crop/rotation/brightness
+/// edits into an **animated GIF** while preserving every frame.
+///
+/// Static-image renderers (the `image` crate in [`super::image_render`]) decode
+/// only the first frame of a GIF, which silently destroys the animation. To keep
+/// all frames we re-encode through ffmpeg, reusing the shared rotate→crop→
+/// brightness [`build_video_filters`] chain and running a two-pass
+/// `palettegen`/`paletteuse` so the re-encode keeps acceptable colour fidelity.
+///
+/// `-loop 0` preserves infinite looping (the default for the GIF muxer, set
+/// explicitly so a future ffmpeg default change can't break it).
+///
+/// `-gifflags -transdiff-offsetting` forces every output frame to be stored as a
+/// full, fully-opaque image. ffmpeg's GIF muxer defaults to `+transdiff` (encode
+/// only the pixels that changed since the previous frame, leaving the rest
+/// transparent) and `+offsetting` (crop each frame to the changed rectangle) for
+/// inter-frame compression. Both rely on the player compositing each frame over
+/// the previous one. The in-app Android GIF renderer (and the thumbnail pass)
+/// instead fill that transparency with their own background, so frames late in
+/// the loop — where little changes between frames — render as a mostly black
+/// (viewer) / white (thumbnail) void. Storing whole frames sidesteps the
+/// mis-compositing entirely, at the cost of a larger file, which is acceptable
+/// for an explicitly-edited copy.
+pub fn build_gif_render_args(source: &Path, dest: &Path, meta: &CropMeta) -> Vec<String> {
+    let mut args: Vec<String> = Vec::with_capacity(12);
+    args.push("-y".into());
+    args.push("-i".into());
+    args.push(source.to_string_lossy().into_owned());
+
+    // GIF has no trim tab and no audio, so only the rotate/crop/brightness
+    // filters apply. The caller only invokes this when real edits exist, so the
+    // chain is non-empty in practice — but guard the empty case anyway.
+    let user_filters = build_video_filters(meta).join(",");
+    let fc = if user_filters.is_empty() {
+        "split[a][b];[a]palettegen[p];[b][p]paletteuse".to_string()
+    } else {
+        format!("{user_filters},split[a][b];[a]palettegen[p];[b][p]paletteuse")
+    };
+    args.push("-filter_complex".into());
+    args.push(fc);
+    // Disable inter-frame transparency diffing / offsetting so every frame is a
+    // self-contained, opaque image — see the doc comment above for why.
+    args.push("-gifflags".into());
+    args.push("-transdiff-offsetting".into());
+    args.push("-loop".into());
+    args.push("0".into());
+    args.push(dest.to_string_lossy().into_owned());
+    args
+}
+
+/// Render an animated GIF with crop/rotation/brightness edits baked in,
+/// preserving all frames. Returns an error if ffmpeg is missing or fails so the
+/// caller can decide whether to fall back to a single-frame render.
+pub async fn run_gif_render(source: &Path, dest: &Path, meta: &CropMeta) -> Result<(), AppError> {
+    let args = build_gif_render_args(source, dest, meta);
+    tracing::info!(
+        "[editing/ffmpeg] GIF render: src={}, dst={}, args={:?}",
+        source.display(),
+        dest.display(),
+        args,
+    );
+
+    let mut cmd = Command::new("ffmpeg");
+    cmd.args(&args);
+    let output = run_with_timeout(&mut cmd, FFMPEG_RENDER_TIMEOUT)
+        .await
+        .map_err(|e| AppError::Internal(format!("ffmpeg gif render: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        tracing::error!("[editing/ffmpeg] gif render failed:\n{}", stderr);
+        let last_line = stderr.lines().last().unwrap_or("unknown error").to_string();
+        return Err(AppError::Internal(format!(
+            "ffmpeg gif render failed: {last_line}"
+        )));
+    }
+
+    Ok(())
+}
+
 /// Run ffmpeg with the given edit metadata, writing the result to `dest`.
 ///
 /// Uses [`crate::process::run_with_timeout`] with the standard 120 s timeout,
@@ -478,6 +558,47 @@ mod tests {
         // Audio: no -vf, no libx264
         assert!(!args.contains(&"-vf".to_string()));
         assert!(!args.contains(&"libx264".to_string()));
+    }
+
+    // ── GIF render argument construction ─────────────────────────────
+
+    #[test]
+    fn gif_render_uses_palettegen_paletteuse() {
+        let src = PathBuf::from("/tmp/in.gif");
+        let dst = PathBuf::from("/tmp/out.gif");
+        let m = meta(r#"{"brightness":30}"#);
+        let args = build_gif_render_args(&src, &dst, &m);
+        // filter_complex carries the user filter + palette two-pass
+        let fc_idx = args.iter().position(|s| s == "-filter_complex").unwrap();
+        let fc = &args[fc_idx + 1];
+        assert!(fc.starts_with("eq=brightness="), "user filter first: {fc}");
+        assert!(fc.contains("palettegen"), "palettegen present: {fc}");
+        assert!(fc.contains("paletteuse"), "paletteuse present: {fc}");
+        // Infinite loop preserved, no audio/video encoder flags needed.
+        assert!(args.windows(2).any(|w| w == ["-loop", "0"]));
+        assert!(!args.iter().any(|s| s == "libx264"));
+        // Full-frame output: inter-frame transparency diff/offsetting disabled so
+        // late-loop frames don't render as a transparent (black/white) void.
+        assert!(args
+            .windows(2)
+            .any(|w| w == ["-gifflags", "-transdiff-offsetting"]));
+    }
+
+    #[test]
+    fn gif_render_orders_rotate_crop_brightness_before_palette() {
+        let src = PathBuf::from("/tmp/in.gif");
+        let dst = PathBuf::from("/tmp/out.gif");
+        let m = meta(r#"{"x":0.1,"y":0,"width":0.8,"height":1,"rotate":90,"brightness":20}"#);
+        let args = build_gif_render_args(&src, &dst, &m);
+        let fc_idx = args.iter().position(|s| s == "-filter_complex").unwrap();
+        let fc = &args[fc_idx + 1];
+        assert!(
+            fc.starts_with("transpose=1,crop="),
+            "rotate→crop first: {fc}"
+        );
+        let split_pos = fc.find("split").unwrap();
+        let crop_pos = fc.find("crop=").unwrap();
+        assert!(crop_pos < split_pos, "user filters precede split: {fc}");
     }
 
     // ── DDT: GPU encoder plan selection ──────────────────────────────

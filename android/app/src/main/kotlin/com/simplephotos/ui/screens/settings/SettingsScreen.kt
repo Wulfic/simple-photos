@@ -3,6 +3,7 @@
  */
 package com.simplephotos.ui.screens.settings
 
+import com.simplephotos.BuildConfig
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -15,7 +16,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import android.util.Log
+import android.widget.Toast
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -64,6 +68,23 @@ fun SettingsScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            val uriHandler = LocalUriHandler.current
+            val browserContext = LocalContext.current
+            // Open a URL in the external browser, logging + toasting on failure
+            // (e.g. no browser installed → ActivityNotFoundException). The path
+            // is appended to serverUrl with any trailing slash trimmed.
+            val openInBrowser: (String) -> Unit = openInBrowser@{ path ->
+                val base = viewModel.serverUrl.trimEnd('/')
+                if (base.isBlank()) return@openInBrowser
+                val url = if (path.isBlank()) base else "$base/${path.trimStart('/')}"
+                try {
+                    uriHandler.openUri(url)
+                } catch (e: Exception) {
+                    Log.e("SettingsScreen", "Failed to open $url in browser", e)
+                    Toast.makeText(browserContext, "No app found to open $url", Toast.LENGTH_LONG).show()
+                }
+            }
+
             // ── Account ──────────────────────────────────────────────────
             SettingsCard(title = "Account", icon = Icons.Default.Person) {
                 SettingsRow("Server", viewModel.serverUrl)
@@ -291,7 +312,7 @@ fun SettingsScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column {
+                    Column(modifier = Modifier.weight(1f, fill = false).padding(end = 12.dp)) {
                         Text("Thumbnail Size")
                         Text(
                             if (viewModel.thumbnailSize == "large") "Large — fewer, bigger thumbnails"
@@ -300,10 +321,16 @@ fun SettingsScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(
+                        modifier = Modifier.wrapContentWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
                         Text(
                             "Normal",
                             style = MaterialTheme.typography.labelSmall,
+                            softWrap = false,
+                            maxLines = 1,
                             color = if (viewModel.thumbnailSize == "normal") MaterialTheme.colorScheme.primary
                                     else MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -314,10 +341,40 @@ fun SettingsScreen(
                         Text(
                             "Large",
                             style = MaterialTheme.typography.labelSmall,
+                            softWrap = false,
+                            maxLines = 1,
                             color = if (viewModel.thumbnailSize == "large") MaterialTheme.colorScheme.primary
                                     else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
+                }
+                Spacer(Modifier.height(16.dp))
+                // ── Cellular data saver (#49) ────────────────────────────
+                Text(
+                    "Play videos at a lower resolution on mobile data. Turn this " +
+                        "off to always play the highest quality available.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f, fill = false).padding(end = 12.dp)) {
+                        Text("Cellular Data Saver")
+                        Text(
+                            if (viewModel.cellularDataSaver) "Videos capped at 1080p on mobile data"
+                            else "Always play the highest quality",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = viewModel.cellularDataSaver,
+                        onCheckedChange = { viewModel.toggleCellularDataSaver() }
+                    )
                 }
             }
 
@@ -450,7 +507,7 @@ fun SettingsScreen(
 
             // ── Active Server ────────────────────────────────────────────
             SettingsCard(title = "Active Server", icon = Icons.Default.Dns) {
-                SettingsRow("URL", viewModel.serverUrl)
+                SettingsRow("URL", viewModel.serverUrl, onClick = { openInBrowser("") })
                 SettingsRow("Status", "Connected")
             }
 
@@ -463,10 +520,12 @@ fun SettingsScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(Modifier.height(8.dp))
-                    Text(
-                        "Open ${viewModel.serverUrl} in a browser to manage users.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary
+                    SpButton(
+                        "Manage Users in Browser",
+                        onClick = { openInBrowser("settings") },
+                        variant = SpButtonVariant.Secondary,
+                        fontSize = 14,
+                        modifier = Modifier.fillMaxWidth()
                     )
                 }
             }
@@ -475,10 +534,19 @@ fun SettingsScreen(
             // ── About ────────────────────────────────────────────────────
             SettingsCard(title = "About", icon = Icons.Default.Info) {
                 Text("Simple Photos", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Text("Version 1.0.0", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                // Read from BuildConfig so the bump-version script (which edits
+                // build.gradle.kts versionName/versionCode) is the single source
+                // of truth — no more hardcoded string drifting out of date.
+                Text(
+                    "Version ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "A self-hosted photo storage solution with optional end-to-end encryption.",
+                    // Encryption is always on — it is not optional — matching the
+                    // README and web app copy.
+                    "A self-hosted photo & video library with end-to-end encryption.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

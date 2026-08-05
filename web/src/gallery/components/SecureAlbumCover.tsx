@@ -44,7 +44,6 @@ export default function SecureAlbumCover({
           encryptedThumbBlobId: first.encrypted_thumb_blob_id ?? undefined,
           serverPhotoId: cached?.serverPhotoId,
           serverSide: cached?.serverSide,
-          thumbnailData: cached?.thumbnailData,
           thumbnailMimeType: cached?.thumbnailMimeType,
         });
       } catch {

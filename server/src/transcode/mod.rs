@@ -8,5 +8,11 @@
 pub mod ffmpeg_gpu;
 pub mod gpu_probe;
 pub mod handlers;
+pub mod ladder;
+pub mod orphan_sweep;
+pub mod probe;
+pub mod renditions;
+pub mod rung_generate;
+pub mod rung_queue;
 
 pub use gpu_probe::HwAccelCapability;

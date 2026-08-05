@@ -11,20 +11,18 @@
 //! separate conversion pass for non-native formats.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use axum::extract::State;
 use axum::Json;
+use futures_util::stream::{self, StreamExt};
 use futures_util::TryStreamExt;
-use uuid::Uuid;
 
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
 use crate::media::{is_media_file, mime_from_extension};
-use crate::photos::metadata::{extract_media_metadata_async, extract_xmp_subtype_async};
-use crate::photos::thumbnail::generate_thumbnail_file;
-use crate::photos::utils::compute_photo_hash_streaming;
 use crate::state::AppState;
 
 /// Background task: automatically scan the storage directory for new files
@@ -88,13 +86,38 @@ pub async fn background_auto_scan_task(
                 )
                 .await;
             }
-            crate::ingest::run_conversion_pass(pool_clone, root_clone, jwt_clone).await;
+            crate::ingest::run_conversion_pass(
+                pool_clone.clone(),
+                root_clone.clone(),
+                jwt_clone.clone(),
+            )
+            .await;
+            // Ladder rungs last (#49): a secondary rendition must never delay a
+            // video becoming playable in the first place.
+            crate::transcode::rung_generate::generate_rungs_after_scan(
+                pool_clone, root_clone, jwt_clone,
+            )
+            .await;
         });
     }
 
     // Then scan on a configurable interval
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
     tracing::info!("Auto-scan interval: every {} seconds", interval_secs);
+
+    // How many idle interval ticks (scan found nothing new) to skip before doing
+    // a full-tree conversion sweep anyway, so a pure NON-native drop-in (e.g. a
+    // HEIC copied straight into the storage folder, which the native scan never
+    // registers) is still eventually converted. `run_conversion_pass` walks the
+    // ENTIRE tree + queries every known path; doing that every tick on a large
+    // HDD library was the "after import the server thrashes the disk with
+    // nothing processing" report — an idle conversion pass that always finds
+    // zero work but re-walks tens of thousands of files. We keep the walk
+    // immediate whenever a scan registered new files (an import is in flight, so
+    // there are likely accompanying convertibles), and otherwise throttle the
+    // idle sweep to roughly hourly.
+    let idle_sweep_every_ticks: u32 = ((3600 / interval_secs.max(1)) as u32).max(1);
+    let mut idle_ticks: u32 = 0;
 
     loop {
         interval.tick().await;
@@ -122,8 +145,30 @@ pub async fn background_auto_scan_task(
             geo_trigger.notify_one();
         }
 
+        // Decide whether this tick should run the (disk-heavy) conversion sweep.
+        // New native files → run now (encrypt them + pick up any convertibles
+        // that arrived with them). Otherwise only sweep every ~hour so an idle
+        // server isn't re-walking the whole library every few minutes.
+        let run_conversion = if count > 0 {
+            idle_ticks = 0;
+            true
+        } else {
+            idle_ticks += 1;
+            if idle_ticks >= idle_sweep_every_ticks {
+                idle_ticks = 0;
+                true
+            } else {
+                tracing::debug!(
+                    idle_ticks,
+                    idle_sweep_every_ticks,
+                    "[DIAG:AUTOSCAN] Idle tick — skipping conversion sweep to spare disk I/O"
+                );
+                false
+            }
+        };
+
         // Trigger encryption then conversion ingest engine.
-        {
+        if run_conversion {
             let pool_clone = pool.clone();
             let root_clone = root.clone();
             let jwt_clone = jwt_secret.clone();
@@ -136,7 +181,16 @@ pub async fn background_auto_scan_task(
                     )
                     .await;
                 }
-                crate::ingest::run_conversion_pass(pool_clone, root_clone, jwt_clone).await;
+                crate::ingest::run_conversion_pass(
+                    pool_clone.clone(),
+                    root_clone.clone(),
+                    jwt_clone.clone(),
+                )
+                .await;
+                crate::transcode::rung_generate::generate_rungs_after_scan(
+                    pool_clone, root_clone, jwt_clone,
+                )
+                .await;
             });
         }
     }
@@ -208,7 +262,16 @@ pub async fn trigger_auto_scan(
                 )
                 .await;
             }
-            crate::ingest::run_conversion_pass(pool_clone, root_clone, jwt_secret).await;
+            crate::ingest::run_conversion_pass(
+                pool_clone.clone(),
+                root_clone.clone(),
+                jwt_secret.clone(),
+            )
+            .await;
+            crate::transcode::rung_generate::generate_rungs_after_scan(
+                pool_clone, root_clone, jwt_secret,
+            )
+            .await;
         });
     }
 
@@ -228,6 +291,7 @@ pub async fn run_auto_scan_public(pool: &sqlx::SqlitePool, storage_root: &std::p
 
 /// Scan storage directory and register any unregistered media files for ALL users.
 async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) -> i64 {
+    let scan_start = std::time::Instant::now();
     // Skip scanning while a disaster-recovery push is in-flight to avoid
     // creating duplicate photo rows that race with the incoming sync.
     let recovering: bool = sqlx::query_scalar(
@@ -265,6 +329,11 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
 
     // Check audio-backup toggle — skip audio files unless enabled.
     let audio_enabled: bool = crate::photos::utils::audio_backup_enabled(pool).await;
+
+    // Panorama-detection sensitivity for dropped-in files, resolved once per
+    // scan (item #7): precise thresholds unless AI categorisation is off.
+    let pano_sensitivity =
+        crate::photos::metadata::pano_sensitivity_for_user(pool, &admin_id).await;
 
     // Build set of already-registered paths (from both active photos and trash)
     // using a streaming cursor so we never hold the full Vec<String> + HashSet
@@ -330,10 +399,92 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
         return 0;
     }
 
-    let mut new_count = 0i64;
+    // ── Phase 1: walk the tree and collect unregistered native files ──
+    // The walk is cheap (directory reads + names/metadata), so it stays
+    // sequential; the expensive per-file work (EXIF, full-file hashing, ffmpeg
+    // thumbnails) is fanned out with bounded concurrency below. This was
+    // previously ONE fully-sequential loop, which throttled a 100GB import to
+    // many hours.
+    use crate::photos::register::{register_native_file, NativeCandidate, RegisterContext};
+
+    // Load previously scan-rejected paths (Takeout album-copy duplicates +
+    // gallery-hidden originals) so the walk skips re-hashing them over the
+    // storage mount every pass — the fix for the "server never goes idle after
+    // import" disk thrash (migration 031). Keyed by rel_path → (size, mtime); a
+    // hit with unchanged size+mtime means "known dead end, don't touch".
+    let mut skip_map: std::collections::HashMap<String, crate::photos::scan_skip::SkipRow> =
+        std::collections::HashMap::new();
+    {
+        let mut rows = sqlx::query_as::<_, (String, i64, Option<String>, String, i64)>(
+            "SELECT rel_path, size_bytes, mtime, reason, attempt_count \
+             FROM scan_skipped_paths WHERE user_id = ?",
+        )
+        .bind(&admin_id)
+        .fetch(pool);
+        while let Some((rel_path, size_bytes, mtime, reason, attempt_count)) =
+            rows.try_next().await.unwrap_or(None)
+        {
+            skip_map.insert(
+                rel_path,
+                crate::photos::scan_skip::SkipRow {
+                    size_bytes,
+                    mtime,
+                    reason,
+                    attempt_count,
+                },
+            );
+        }
+    }
+    tracing::info!(
+        "[DIAG:AUTOSCAN] run_auto_scan: {} known scan-skip paths loaded",
+        skip_map.len()
+    );
+
+    // Per-pass tallies for the single summary line (Phase 3 log hygiene).
+    let mut walked: u64 = 0;
+    let mut shadowed_count: u64 = 0;
+    let mut already_registered: u64 = 0;
+    let mut known_skipped: u64 = 0;
+    // Skip rows whose file changed on disk (size/mtime differ) — cleared after
+    // the walk so the candidate gets a fresh evaluation.
+    let mut stale_skip_paths: Vec<String> = Vec::new();
+
+    let mut candidates: Vec<NativeCandidate> = Vec::new();
     let mut queue = vec![storage_root.to_path_buf()];
 
     while let Some(dir) = queue.pop() {
+        // Google Photos Takeout: a first, names-only pass over this directory
+        // serves two look-aheads a single streaming walk can't do —
+        //   (1) "-edited" dedup (#19): spot the edited/original pair before
+        //       registering, keep the edited copy, drop the unedited original;
+        //   (2) sidecar + album pairing: index this folder's `.json` sidecars so
+        //       each media file can resolve its Takeout metadata (capture date,
+        //       GPS, album) below.
+        let (shadowed_originals, takeout_ctx) = {
+            let mut media_names: Vec<String> = Vec::new();
+            let mut json_names: Vec<String> = Vec::new();
+            if let Ok(mut probe) = tokio::fs::read_dir(&dir).await {
+                while let Ok(Some(e)) = probe.next_entry().await {
+                    let n = e.file_name().to_string_lossy().to_string();
+                    if n.starts_with('.') {
+                        continue;
+                    }
+                    if is_media_file(&n) {
+                        media_names.push(n);
+                    } else if n.to_lowercase().ends_with(".json") {
+                        json_names.push(n);
+                    }
+                }
+            }
+            let shadowed =
+                crate::media::edited_shadowed_originals(media_names.iter().map(|s| s.as_str()));
+            let ctx = crate::import::sidecar::TakeoutDirContext::new(json_names, &dir);
+            (shadowed, ctx)
+        };
+        // The album's real title, read once per directory (and only for genuine
+        // album directories) rather than per file.
+        let album_title = takeout_ctx.resolve_album_title(&dir).await;
+
         let mut entries = match tokio::fs::read_dir(&dir).await {
             Ok(e) => e,
             Err(e) => {
@@ -348,164 +499,410 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
                 continue;
             }
 
-            if let Ok(ft) = entry.file_type().await {
-                if ft.is_dir() {
-                    queue.push(entry.path());
-                } else if ft.is_file() && is_media_file(&name) {
-                    let abs_path = entry.path();
-                    // Normalize to forward slashes so DB paths are consistent across OS
-                    let rel_path = abs_path
-                        .strip_prefix(storage_root)
-                        .unwrap_or(&abs_path)
-                        .to_string_lossy()
-                        .replace('\\', "/");
+            let Ok(ft) = entry.file_type().await else {
+                continue;
+            };
+            if ft.is_dir() {
+                queue.push(entry.path());
+                continue;
+            }
+            if !(ft.is_file() && is_media_file(&name)) {
+                continue;
+            }
+            walked += 1;
 
-                    if existing_set.contains(&rel_path) {
+            // Skip the unedited Google Photos original when its baked-in
+            // "-edited" sibling is in this same folder (#19).
+            if shadowed_originals.contains(&name.to_lowercase()) {
+                shadowed_count += 1;
+                tracing::debug!(
+                    file = %name,
+                    "[DIAG:AUTOSCAN] Skipping unedited Google Photos original ('-edited' sibling present)"
+                );
+                continue;
+            }
+
+            let abs_path = entry.path();
+            // Normalize to forward slashes so DB paths are consistent across OS.
+            let rel_path = abs_path
+                .strip_prefix(storage_root)
+                .unwrap_or(&abs_path)
+                .to_string_lossy()
+                .replace('\\', "/");
+
+            if existing_set.contains(&rel_path) {
+                already_registered += 1;
+                continue;
+            }
+
+            let file_meta = entry.metadata().await.ok();
+            let size = file_meta.as_ref().map(|m| m.len() as i64).unwrap_or(0);
+            let modified = file_meta.and_then(|m| {
+                m.modified().ok().map(|t| {
+                    let dt: chrono::DateTime<chrono::Utc> = t.into();
+                    crate::photos::utils::normalize_iso_timestamp(&dt.to_rfc3339())
+                })
+            });
+
+            // Known scan-reject (Takeout album copy / gallery-hidden) with an
+            // identical size+mtime — skip the expensive re-hash entirely. This is
+            // the change that stops the 4,254-file re-hash loop at idle. If either
+            // size or mtime differs the file was replaced/edited, so we clear the
+            // stale row and fall through to re-evaluate it.
+            // The comparison moved into `photos::scan_skip::skip_verdict` when
+            // #40 added a reason whose verdict depends on an attempt count. This
+            // walk only ever writes terminal verdicts, so `Retry` is unreachable
+            // here today — but it is handled rather than lumped in with `Skip`,
+            // because the conversion walk does produce it and silently treating
+            // a retryable row as terminal is precisely the one-strike bug the
+            // shared function exists to prevent.
+            if let Some(row) = skip_map.get(&rel_path) {
+                match crate::photos::scan_skip::skip_verdict(row, size, modified.as_deref()) {
+                    crate::photos::scan_skip::SkipVerdict::Skip => {
+                        known_skipped += 1;
                         continue;
                     }
-
-                    let file_meta = entry.metadata().await.ok();
-                    let size = file_meta.as_ref().map(|m| m.len() as i64).unwrap_or(0);
-                    let modified = file_meta.and_then(|m| {
-                        m.modified().ok().map(|t| {
-                            let dt: chrono::DateTime<chrono::Utc> = t.into();
-                            crate::photos::utils::normalize_iso_timestamp(&dt.to_rfc3339())
-                        })
-                    });
-
-                    // Native format — determine MIME and media type directly.
-                    let mime = mime_from_extension(&name).to_string();
-                    let media_type: &str = if mime.starts_with("video/") {
-                        "video"
-                    } else if mime.starts_with("audio/") {
-                        "audio"
-                    } else if mime == "image/gif" {
-                        "gif"
-                    } else {
-                        "photo"
-                    };
-
-                    if media_type == "audio" && !audio_enabled {
-                        continue;
+                    crate::photos::scan_skip::SkipVerdict::Stale => {
+                        stale_skip_paths.push(rel_path.clone());
                     }
-
-                    let photo_id = Uuid::new_v4().to_string();
-                    let now = crate::photos::utils::utc_now_iso();
-                    // Use .thumb.gif for GIFs so the thumbnail preserves animation
-                    let thumb_ext = if mime == "image/gif" { "gif" } else { "jpg" };
-                    let thumb_rel = format!(".thumbnails/{photo_id}.thumb.{thumb_ext}");
-
-                    // Extract dimensions, camera model, GPS, and date from file
-                    let (img_w, img_h, cam_model, exif_lat, exif_lon, exif_taken) =
-                        extract_media_metadata_async(abs_path.clone()).await;
-
-                    // Extract XMP subtype (motion, panorama, 360, HDR, burst)
-                    let mut subtype_info = extract_xmp_subtype_async(abs_path.clone()).await;
-
-                    // Aspect-ratio fallback for panoramas / 360° photos whose
-                    // XMP GPano markers are missing or stripped (real-world
-                    // stitched/exported panoramas frequently lack them). Without
-                    // this, files dropped into the storage folder were the ONLY
-                    // ingest path missing the fallback — scan/upload/ingest all
-                    // apply it — so XMP-less panoramas never got a subtype.
-                    crate::photos::metadata::apply_aspect_subtype_fallback(
-                        &mut subtype_info,
-                        img_w,
-                        img_h,
-                    );
-
-                    if let Some(ref st) = subtype_info.photo_subtype {
-                        tracing::info!(
-                            file = %rel_path,
-                            photo_subtype = %st,
-                            burst_id = ?subtype_info.burst_id,
-                            motion_video_offset = ?subtype_info.motion_video_offset,
-                            "[DIAG:AUTOSCAN] Special photo subtype detected"
-                        );
-                    }
-
-                    let final_taken_at = exif_taken
-                        .map(|t| crate::photos::utils::normalize_iso_timestamp(&t))
-                        .or(modified);
-
-                    let photo_hash = compute_photo_hash_streaming(&abs_path).await;
-
-                    // Skip files whose content hash matches a gallery-hidden original.
-                    if let Some(ref h) = photo_hash {
-                        if gallery_hashes.contains(h) {
-                            tracing::info!(
-                                "[DIAG:AUTOSCAN] Skipping {} — content hash {} matches gallery-hidden original",
-                                rel_path, h
-                            );
-                            continue;
-                        }
-                    }
-
-                    let insert_result = sqlx::query(
-                        "INSERT OR IGNORE INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
-                         size_bytes, width, height, taken_at, latitude, longitude, camera_model, thumb_path, \
-                         created_at, photo_hash, photo_subtype, burst_id) \
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    )
-                    .bind(&photo_id)
-                    .bind(&admin_id)
-                    .bind(&name)
-                    .bind(&rel_path)
-                    .bind(&mime)
-                    .bind(media_type)
-                    .bind(size)
-                    .bind(img_w)
-                    .bind(img_h)
-                    .bind(&final_taken_at)
-                    .bind(exif_lat)
-                    .bind(exif_lon)
-                    .bind(&cam_model)
-                    .bind(&thumb_rel)
-                    .bind(&now)
-                    .bind(&photo_hash)
-                    .bind(&subtype_info.photo_subtype)
-                    .bind(&subtype_info.burst_id)
-                    .execute(pool)
-                    .await;
-
-                    match insert_result {
-                        Ok(result) if result.rows_affected() == 0 => {
-                            tracing::debug!(file = %rel_path, "Already registered (concurrent scan), skipping");
-                            continue;
-                        }
-                        Err(e) => {
-                            tracing::error!(
-                                "Autoscan: failed to register photo {}: {}",
-                                rel_path,
-                                e
-                            );
-                            continue;
-                        }
-                        Ok(_) => { /* inserted successfully */ }
-                    }
-
-                    // Generate thumbnail
-                    {
-                        let thumb_abs = storage_root.join(&thumb_rel);
-                        if generate_thumbnail_file(&abs_path, &thumb_abs, &mime, None).await {
-                            tracing::debug!(file = %rel_path, "Autoscan: generated thumbnail");
-                        } else {
-                            tracing::warn!(file = %rel_path, "Autoscan: failed to generate thumbnail");
-                        }
-                    }
-
-                    new_count += 1;
-                    tracing::info!(
-                        "[DIAG:AUTOSCAN] Registered: {} (type={}, mime={}, size={})",
-                        name,
-                        media_type,
-                        mime,
-                        size
-                    );
+                    crate::photos::scan_skip::SkipVerdict::Retry => {}
                 }
             }
+
+            // Native format — determine MIME and media type directly.
+            let mime = mime_from_extension(&name).to_string();
+            let media_type: &'static str = if mime.starts_with("video/") {
+                "video"
+            } else if mime.starts_with("audio/") {
+                "audio"
+            } else if mime == "image/gif" {
+                "gif"
+            } else {
+                "photo"
+            };
+
+            if media_type == "audio" && !audio_enabled {
+                continue;
+            }
+
+            let sidecar_abs = takeout_ctx.resolve_sidecar(&name).map(|j| dir.join(j));
+            let album_name = takeout_ctx.album_name().map(|s| s.to_string());
+
+            candidates.push(NativeCandidate {
+                abs_path,
+                rel_path,
+                name,
+                mime,
+                media_type,
+                size,
+                modified,
+                sidecar_abs,
+                album_name,
+                album_title: album_title.clone(),
+            });
         }
     }
 
-    new_count
+    tracing::debug!(
+        "[DIAG:AUTOSCAN] run_auto_scan: {} new candidate files to register",
+        candidates.len()
+    );
+
+    // Clear skip rows whose file changed on disk since we last rejected it, so
+    // the fresh evaluation below isn't shadowed by a stale "already a dup" row.
+    // Rare (only genuinely-changed files land here), so a per-path delete is
+    // fine; if the file is still a duplicate, register re-records the row.
+    for stale in &stale_skip_paths {
+        if let Err(e) =
+            sqlx::query("DELETE FROM scan_skipped_paths WHERE user_id = ? AND rel_path = ?")
+                .bind(&admin_id)
+                .bind(stale)
+                .execute(pool)
+                .await
+        {
+            tracing::warn!(rel_path = %stale, error = %e, "Failed to clear stale scan-skip row");
+        }
+    }
+
+    // ── Phase 2: register candidates with bounded concurrency ──
+    // Registration is memory-light (header metadata, streaming hash, one INSERT,
+    // a subprocess thumbnail); encryption is a separate, memory-budgeted pass —
+    // so scaling this with CPU cores speeds a large import up without adding the
+    // decode/OOM pressure a naive fan-out would. Shared with the manual `/scan`
+    // path via crate::photos::register (single source of truth).
+    let candidates_len = candidates.len();
+    let ctx = Arc::new(RegisterContext {
+        user_id: admin_id,
+        pano_sensitivity,
+        gallery_hashes: Arc::new(gallery_hashes),
+    });
+    let new_count = Arc::new(AtomicI64::new(0));
+
+    stream::iter(candidates)
+        .map(|cand| {
+            let pool = pool.clone();
+            let storage_root = storage_root.to_path_buf();
+            let ctx = ctx.clone();
+            let new_count = new_count.clone();
+            async move {
+                // Inner spawn keeps multi-core parallelism and isolates a
+                // per-file panic from the rest of the pass.
+                let _ = tokio::spawn(async move {
+                    if register_native_file(&pool, &storage_root, &cand, &ctx).await {
+                        new_count.fetch_add(1, Ordering::Relaxed);
+                    }
+                })
+                .await;
+            }
+        })
+        .buffer_unordered(crate::photos::scan::scan_parallelism())
+        .for_each(|_| async {})
+        .await;
+
+    let registered = new_count.load(Ordering::Relaxed);
+    // One summary line per pass instead of thousands of per-file INFO lines. At
+    // idle steady-state this reports 0 candidates / 0 registered and finishes in
+    // well under a second — the signal that the disk-thrash loop is dead.
+    tracing::info!(
+        "[DIAG:AUTOSCAN] scan pass: {} media walked, {} shadowed, {} already-registered, \
+         {} known-dups skipped, {} stale-rechecked, {} candidates, {} registered, took {:.1}s",
+        walked,
+        shadowed_count,
+        already_registered,
+        known_skipped,
+        stale_skip_paths.len(),
+        candidates_len,
+        registered,
+        scan_start.elapsed().as_secs_f64(),
+    );
+    registered
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::str::FromStr;
+
+    /// In-memory DB with all migrations + one admin user (the scan assigns new
+    /// photos to the first admin). `max_connections(1)` keeps the single
+    /// in-memory database alive across the whole test.
+    async fn test_pool() -> sqlx::SqlitePool {
+        let opts = sqlx::sqlite::SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .foreign_keys(true);
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO users (id, username, password_hash, created_at, role) \
+             VALUES ('admin-1', 'admin', 'x', '2020-01-01T00:00:00.000Z', 'admin')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool
+    }
+
+    /// THE disk-thrash fix, end to end: a Takeout date-folder photo and its
+    /// identical album-folder copy. The first scan registers one photo and
+    /// remembers the copy; the second scan must find and skip the copy WITHOUT
+    /// re-hashing it — proven by a sentinel on the skip row that a re-run of
+    /// `register` (which `INSERT OR REPLACE`s the row) would have overwritten.
+    #[tokio::test]
+    async fn scan_remembers_dup_and_skips_it_next_pass() {
+        let pool = test_pool().await;
+        let root = std::env::temp_dir().join(format!("sp-autoscan-{}", uuid::Uuid::new_v4()));
+        let year = root.join("Photos from 2020");
+        let album = root.join("Cats");
+        tokio::fs::create_dir_all(&year).await.unwrap();
+        tokio::fs::create_dir_all(&album).await.unwrap();
+        let bytes = b"identical-cat-bytes-in-date-and-album-folders";
+        tokio::fs::write(year.join("cat.jpg"), bytes).await.unwrap();
+        tokio::fs::write(album.join("cat.jpg"), bytes)
+            .await
+            .unwrap();
+
+        let first = run_auto_scan(&pool, &root).await;
+        assert_eq!(first, 1, "identical bytes dedup to a single new photo");
+
+        let (photos,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM photos")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(photos, 1);
+
+        let (skips,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM scan_skipped_paths")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(skips, 1, "the duplicate copy is remembered exactly once");
+        let reason: String = sqlx::query_scalar("SELECT reason FROM scan_skipped_paths")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(reason, "hash_duplicate");
+
+        // If the next pass re-hashes the copy, `register` runs again and its
+        // INSERT OR REPLACE overwrites this sentinel. Survival == it was skipped.
+        sqlx::query("UPDATE scan_skipped_paths SET created_at = 'SENTINEL'")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let second = run_auto_scan(&pool, &root).await;
+        assert_eq!(second, 0, "steady state registers nothing new");
+
+        let (survived,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM scan_skipped_paths WHERE created_at = 'SENTINEL'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            survived, 1,
+            "the copy was skipped without re-hashing (register never re-ran)"
+        );
+
+        let _ = tokio::fs::remove_dir_all(&root).await;
+    }
+
+    /// A skip row is a cache keyed by size+mtime: if the file on disk changes, it
+    /// must be re-evaluated, never wrongly suppressed. Change the remembered copy
+    /// to unique content and it must register as a new photo.
+    #[tokio::test]
+    async fn changed_file_is_reevaluated_despite_stale_skip() {
+        let pool = test_pool().await;
+        let root = std::env::temp_dir().join(format!("sp-autoscan-{}", uuid::Uuid::new_v4()));
+        let year = root.join("Photos from 2020");
+        let album = root.join("Cats");
+        tokio::fs::create_dir_all(&year).await.unwrap();
+        tokio::fs::create_dir_all(&album).await.unwrap();
+        let bytes = b"identical-cat-bytes-A";
+        tokio::fs::write(year.join("cat.jpg"), bytes).await.unwrap();
+        tokio::fs::write(album.join("cat.jpg"), bytes)
+            .await
+            .unwrap();
+
+        assert_eq!(run_auto_scan(&pool, &root).await, 1);
+
+        // Change whichever copy got the skip row (registration order is racy).
+        let skipped_rel: String = sqlx::query_scalar("SELECT rel_path FROM scan_skipped_paths")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        tokio::fs::write(
+            root.join(&skipped_rel),
+            b"now-a-totally-different-and-much-longer-image-payload",
+        )
+        .await
+        .unwrap();
+
+        // Size differs from the remembered row → stale → re-evaluated → unique
+        // content now → registers.
+        assert_eq!(
+            run_auto_scan(&pool, &root).await,
+            1,
+            "a changed file must not stay wrongly skipped"
+        );
+
+        let (photos,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM photos")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(photos, 2);
+
+        // Stale row cleared; new content is unique so no fresh dup skip.
+        let (skips,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM scan_skipped_paths")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(skips, 0);
+
+        let _ = tokio::fs::remove_dir_all(&root).await;
+    }
+
+    /// Invalidation (migration 031 trigger): deleting the photo a copy deduped
+    /// against clears the copy's skip row, so the copy can register again — the
+    /// skip cache must never change observable scan behaviour.
+    #[tokio::test]
+    async fn deleting_the_deduped_photo_clears_the_skip_row() {
+        let pool = test_pool().await;
+        sqlx::query(
+            "INSERT INTO photos (id, user_id, filename, file_path, mime_type, created_at, photo_hash) \
+             VALUES ('p1','admin-1','cat.jpg','Photos from 2020/cat.jpg','image/jpeg','2020-01-01T00:00:00.000Z','HASH-1')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO scan_skipped_paths \
+             (user_id, rel_path, size_bytes, mtime, reason, photo_hash, created_at) \
+             VALUES ('admin-1','Cats/cat.jpg',10,'2020-01-01T00:00:00.000Z','hash_duplicate','HASH-1','2020-01-01T00:00:00.000Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query("DELETE FROM photos WHERE id = 'p1'")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let (skips,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM scan_skipped_paths")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            skips, 0,
+            "the photo-delete trigger cleared the copy's skip row"
+        );
+    }
+
+    /// The gallery-hidden analogue: removing a secure-gallery item un-hides its
+    /// content hash, so a matching file on disk must be allowed back next scan.
+    /// (Bare rows, FKs off — the trigger doesn't care about the parent graph.)
+    #[tokio::test]
+    async fn removing_a_gallery_item_clears_the_skip_row() {
+        let opts = sqlx::sqlite::SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .foreign_keys(false);
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO encrypted_gallery_items (id, gallery_id, blob_id, added_at, original_photo_hash) \
+             VALUES ('egi-1','g-1','b-1','2020-01-01T00:00:00.000Z','HASH-9')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO scan_skipped_paths \
+             (user_id, rel_path, size_bytes, mtime, reason, photo_hash, created_at) \
+             VALUES ('admin-1','Secret/x.jpg',10,'t','gallery_hidden','HASH-9','t')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query("DELETE FROM encrypted_gallery_items WHERE id = 'egi-1'")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let (skips,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM scan_skipped_paths")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            skips, 0,
+            "the egi-delete trigger un-hides the file for re-scan"
+        );
+    }
 }

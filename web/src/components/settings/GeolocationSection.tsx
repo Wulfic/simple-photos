@@ -2,8 +2,8 @@
 import { useState, useEffect } from "react";
 import { api } from "../../api/client";
 import { getErrorMessage } from "../../utils/formatters";
-import { Button, Toggle, StatTile } from "../ui";
-import type { GeoStatus } from "../../api/geo";
+import { Button, Toggle, StatTile, Select } from "../ui";
+import type { GeoStatus, HomeResponse, LocationEntry } from "../../api/geo";
 
 interface GeolocationSectionProps {
   error: string;
@@ -23,8 +23,16 @@ export default function GeolocationSection({
   const [togglingPrecise, setTogglingPrecise] = useState(false);
   const [scrubbing, setScrubbing] = useState(false);
 
+  // ── Home location ──────────────────────────────────────────────────
+  const [home, setHome] = useState<HomeResponse | null>(null);
+  const [cities, setCities] = useState<LocationEntry[]>([]);
+  // Selected dropdown value, encoded "country_code|city" (matches a LocationEntry).
+  const [homeChoice, setHomeChoice] = useState<string>("");
+  const [savingHome, setSavingHome] = useState(false);
+
   useEffect(() => {
     loadStatus();
+    loadHome();
   }, []);
 
   async function loadStatus() {
@@ -34,6 +42,59 @@ export default function GeolocationSection({
       setLoaded(true);
     } catch {
       // Geo endpoints may not be available
+    }
+  }
+
+  function homeKey(c: { country_code: string; city: string }): string {
+    return `${c.country_code}|${c.city}`;
+  }
+
+  async function loadHome() {
+    try {
+      const [h, locs] = await Promise.all([
+        api.geo.getHome(),
+        api.geo.listLocations(),
+      ]);
+      setHome(h);
+      setCities(locs);
+      if (h.home) setHomeChoice(homeKey(h.home));
+    } catch {
+      // Geo endpoints may not be available
+    }
+  }
+
+  async function handleSaveHome() {
+    const match = cities.find((c) => homeKey(c) === homeChoice);
+    if (!match) return;
+    setSavingHome(true);
+    setError("");
+    try {
+      const res = await api.geo.setHome({
+        city: match.city,
+        state: match.state,
+        country_code: match.country_code,
+      });
+      setHome(res);
+      setSuccess(`Home set to ${match.city}. It's now excluded from your trips.`);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
+    } finally {
+      setSavingHome(false);
+    }
+  }
+
+  async function handleClearHome() {
+    setSavingHome(true);
+    setError("");
+    try {
+      const res = await api.geo.clearHome();
+      setHome(res);
+      setHomeChoice(res.home ? homeKey(res.home) : "");
+      setSuccess("Home override cleared — using the inferred home city.");
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
+    } finally {
+      setSavingHome(false);
     }
   }
 
@@ -211,6 +272,58 @@ export default function GeolocationSection({
           <StatTile tone="purple" value={status.unique_cities} label="Cities" />
         </div>
       )}
+
+      {/* Home location — excluded from trip detection */}
+      <div className="border-t border-edge pt-4 mb-4">
+        <h3 className="text-sm font-medium text-fg-muted">Home Location</h3>
+        <p className="text-xs text-fg-muted mb-3">
+          {home?.source === "manual" && home.home
+            ? `Home is set to ${home.home.city}. Photos taken here are excluded from your Trips.`
+            : home?.source === "inferred" && home.home
+              ? `We inferred your home is ${home.home.city} (your most-photographed city). Photos there are excluded from Trips. Override it below if that's wrong.`
+              : "Set your home city so everyday local photos don't show up as Trips."}
+        </p>
+        {cities.length > 0 ? (
+          <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+            <Select
+              fullWidth
+              value={homeChoice}
+              onChange={(e) => setHomeChoice(e.target.value)}
+            >
+              <option value="">Select your home city…</option>
+              {cities.map((c) => (
+                <option key={homeKey(c)} value={homeKey(c)}>
+                  {c.city}
+                  {c.state ? `, ${c.state}` : ""} ({c.country_code})
+                </option>
+              ))}
+            </Select>
+            <div className="flex gap-2">
+              <Button
+                onClick={handleSaveHome}
+                disabled={
+                  savingHome ||
+                  !homeChoice ||
+                  (home?.source === "manual" &&
+                    !!home.home &&
+                    homeKey(home.home) === homeChoice)
+                }
+              >
+                {savingHome ? "Saving…" : "Set Home"}
+              </Button>
+              {home?.source === "manual" && (
+                <Button variant="secondary" onClick={handleClearHome} disabled={savingHome}>
+                  Use Inferred
+                </Button>
+              )}
+            </div>
+          </div>
+        ) : (
+          <p className="text-xs text-fg-muted">
+            No located photos yet — once your photos have GPS data, you can pick a home city here.
+          </p>
+        )}
+      </div>
 
       {/* Scrub all button */}
       <Button variant="danger" onClick={handleScrubAll} disabled={scrubbing}>

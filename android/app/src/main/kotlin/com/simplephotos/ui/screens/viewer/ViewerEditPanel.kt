@@ -63,11 +63,15 @@ fun ViewerEditPanel(
     ) {
         val currentMediaType = currentPhoto?.mediaType ?: "photo"
         val isPhoto = currentMediaType == "photo"
+        val isGif = currentMediaType == "gif"
         val isVideo = currentMediaType == "video"
         val isAudio = currentMediaType == "audio"
-        val showCrop = isPhoto || isVideo
-        val showBrightness = isPhoto || isVideo
-        val showRotate = isPhoto || isVideo
+        // GIFs support the same still-image edits (crop/brightness/rotate); no
+        // trim tab. Bakes are re-encoded server-side via ffmpeg so the
+        // animation survives.
+        val showCrop = isPhoto || isGif || isVideo
+        val showBrightness = isPhoto || isGif || isVideo
+        val showRotate = isPhoto || isGif || isVideo
         val showTrim = isVideo || isAudio
 
         // The viewer is always dark, so neutral SpButton variants must read the
@@ -378,8 +382,23 @@ fun ViewerEditPanel(
                     horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    SpButton("Save", onClick = onSave, variant = SpButtonVariant.Primary, fontSize = 14)
-                    SpButton("Save Copy", onClick = onSaveCopy, variant = SpButtonVariant.Success, fontSize = 14)
+                    // GIFs have no in-place Save. A metadata-only Save never
+                    // re-bakes the animated-GIF thumbnail (the graphicsLayer tile
+                    // transform is unreliable for Coil's animated drawable —
+                    // issue #18), so GIF edits must go through Save Copy, which
+                    // re-encodes the GIF via ffmpeg AND regenerates a cropped
+                    // thumbnail. Save Copy is promoted to Primary for GIFs; users
+                    // can delete the original copy manually if desired.
+                    if (!isGif) {
+                        SpButton("Save", onClick = onSave, variant = SpButtonVariant.Primary, fontSize = 14)
+                    }
+                    // Save Copy is non-destructive → theme secondary, not green (TODO #6).
+                    SpButton(
+                        "Save Copy",
+                        onClick = onSaveCopy,
+                        variant = if (isGif) SpButtonVariant.Primary else SpButtonVariant.Secondary,
+                        fontSize = 14
+                    )
                     if (currentPhoto?.cropMetadata != null) {
                         SpButton("Reset", onClick = onReset, variant = SpButtonVariant.Secondary, fontSize = 14)
                     }

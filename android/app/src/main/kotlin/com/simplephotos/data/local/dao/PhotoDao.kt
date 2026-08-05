@@ -20,11 +20,25 @@ interface PhotoDao {
     @Query("SELECT * FROM photos")
     suspend fun getAllPhotosSnapshot(): List<PhotoEntity>
 
+    /** How many photos the local mirror holds. Counts in SQLite rather than
+     *  materialising every row, so it stays cheap on large libraries. */
+    @Query("SELECT COUNT(*) FROM photos")
+    suspend fun countAll(): Int
+
     @Query("SELECT * FROM photos WHERE localId = :id")
     suspend fun getById(id: String): PhotoEntity?
 
     @Query("SELECT * FROM photos WHERE syncStatus = :status")
     suspend fun getByStatus(status: SyncStatus): List<PhotoEntity>
+
+    /**
+     * Count items still queued for upload/encryption on this device — PENDING or
+     * FAILED rows that were never successfully uploaded (no serverBlobId). Fed to
+     * the server's `/status/encryption/contribute` so the unified banner total
+     * includes local backup work the server can't see yet (TODO #2).
+     */
+    @Query("SELECT COUNT(*) FROM photos WHERE (syncStatus = 'PENDING' OR syncStatus = 'FAILED') AND serverBlobId IS NULL")
+    suspend fun countPendingUploads(): Int
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(photo: PhotoEntity)
@@ -82,6 +96,19 @@ interface PhotoDao {
         motionBlobId: String?,
     )
 
+    /**
+     * Land the #49 resolution ladder on an already-synced photo.
+     *
+     * Separate from [backfillSubtypeFields] because it fires on a different
+     * schedule: a rung is produced by a background sweep *long after* the photo
+     * synced, so the ladder arrives on a row that has been local for weeks. The
+     * caller must guard with `renditionsEqual` — the ladder is unchanged for
+     * every photo on every pass, and writing it unconditionally is the
+     * O(library) write amplification #38 spent a workstream removing.
+     */
+    @Query("UPDATE photos SET renditions = :renditions WHERE serverPhotoId = :serverPhotoId")
+    suspend fun updateRenditions(serverPhotoId: String, renditions: List<com.simplephotos.data.media.Rendition>)
+
     @Query("UPDATE photos SET thumbnailPath = :path WHERE localId = :id")
     suspend fun updateThumbnailPath(id: String, path: String)
 
@@ -103,9 +130,15 @@ interface PhotoDao {
     @Query("SELECT * FROM photos WHERE serverPhotoId = :photoId LIMIT 1")
     suspend fun getByServerPhotoId(photoId: String): PhotoEntity?
 
-    /** Batch lookup: get all photos whose serverPhotoId is in the given list. */
+    /** Batch lookup: get all photos whose serverPhotoId is in the given list.
+     *  Callers must chunk — see [com.simplephotos.data.repository.SQLITE_VARIABLE_CHUNK]. */
     @Query("SELECT * FROM photos WHERE serverPhotoId IN (:photoIds)")
     suspend fun getByServerPhotoIds(photoIds: List<String>): List<PhotoEntity>
+
+    /** Batch lookup: get all photos whose serverBlobId is in the given list.
+     *  Callers must chunk — see [com.simplephotos.data.repository.SQLITE_VARIABLE_CHUNK]. */
+    @Query("SELECT * FROM photos WHERE serverBlobId IN (:blobIds)")
+    suspend fun getByServerBlobIds(blobIds: List<String>): List<PhotoEntity>
 
     /** Batch lookup: get all photos whose localId is in the given list. */
     @Query("SELECT * FROM photos WHERE localId IN (:ids)")

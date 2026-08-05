@@ -11,19 +11,22 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.simplephotos.data.collapseBursts
+import com.simplephotos.data.album.AlbumPhotoResolver
+import com.simplephotos.data.album.VIEWER_PHOTO_IDS_KEY
+import com.simplephotos.data.album.pageIndexOf
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.local.entities.SyncStatus
 import com.simplephotos.data.remote.dto.FullMetadataResponse
 import com.simplephotos.data.remote.dto.MetadataUpdateRequest
+import com.simplephotos.data.repository.AiRepository
 import com.simplephotos.data.repository.AlbumRepository
 import com.simplephotos.data.repository.PhotoRepository
 import com.simplephotos.data.repository.TagRepository
+import com.simplephotos.data.remote.dto.PhotoFace
 import android.util.Log
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -46,6 +49,8 @@ class PhotoViewerViewModel @Inject constructor(
     private val photoRepository: PhotoRepository,
     private val albumRepository: AlbumRepository,
     private val tagRepository: TagRepository,
+    private val aiRepository: AiRepository,
+    private val resolver: AlbumPhotoResolver,
     val okHttpClient: OkHttpClient,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
@@ -60,19 +65,44 @@ class PhotoViewerViewModel @Inject constructor(
     val albumId: String? = savedStateHandle["albumId"]
 
     /**
-     * Burst-COLLAPSED photo list used for horizontal paging — one entry per
-     * burst group (the first frame / cover), exactly like the gallery grid.
-     * This is what the pager swipes through, so a 46-shot burst occupies a
-     * single page instead of hijacking 46 swipes. Individual frames are
-     * browsed via the in-viewer burst filmstrip ([burstFramesFor]).
+     * The launching grid's own resolved order, when it had one (E3a).
+     *
+     * Set by `NavGraph` from the previous back-stack entry's `SavedStateHandle`
+     * before this ViewModel is constructed — nav arguments cannot carry a list,
+     * and this is Compose Navigation's channel for one. Non-null only for
+     * Search / People / Pets / Memories / Trips, whose grids come from server
+     * endpoints and therefore have an order neither the album branch nor the
+     * gallery branch can reproduce. Null for the gallery and for albums, which
+     * the resolver already resolves identically to their grids (E3).
+     */
+    private val handoffPhotoIds: List<String>? =
+        savedStateHandle.get<ArrayList<String>>(VIEWER_PHOTO_IDS_KEY)?.takeIf { it.isNotEmpty() }
+
+    /**
+     * The list the pager swipes through — [ResolvedPhotos.photos], which is
+     * *the same list object the launching grid renders*, not a re-derivation of
+     * it (E3). Secure-excluded, burst policy applied per album kind, ordered by
+     * the album's persisted #52 sort.
+     *
+     * In the main gallery's context that means one entry per burst group, so a
+     * 46-shot burst occupies a single page instead of hijacking 46 swipes;
+     * individual frames are browsed via the burst filmstrip ([burstFramesFor]).
+     * In a regular album it means every frame, because the grid shows every
+     * frame there — matching web, whose regular albums stay faithful to the
+     * manifest the user built. On a handoff surface ([handoffPhotoIds]) it means
+     * the grid's own order with the secure exclusion applied and nothing else,
+     * because the grid already decided the rest.
      */
     var allPhotos by mutableStateOf<List<PhotoEntity>>(emptyList())
         private set
 
     /**
-     * Full, UN-collapsed photo list (every burst frame present). Source of
-     * truth; [allPhotos] is derived from this. Used to resolve burst frames
-     * for the filmstrip without an extra network round-trip.
+     * Membership before burst collapse ([ResolvedPhotos.members]). Used only to
+     * resolve a stack's frames for the filmstrip without a network round-trip.
+     *
+     * NOT the source [allPhotos] is derived from — deriving one list from the
+     * other in here is exactly the defect E3 fixed. Both come from one resolver
+     * call, and the mutation helpers below edit both in step.
      */
     private var allPhotosRaw: List<PhotoEntity> = emptyList()
 
@@ -120,6 +150,11 @@ class PhotoViewerViewModel @Inject constructor(
     var metadataError by mutableStateOf<String?>(null)
         private set
 
+    /** Faces detected in the currently viewed photo (for the People section of
+     *  the Info panel). Empty until loaded / when AI is off or none detected. */
+    var photoFaces by mutableStateOf<List<PhotoFace>>(emptyList())
+        private set
+
     init {
         loadPhotos()
     }
@@ -129,33 +164,40 @@ class PhotoViewerViewModel @Inject constructor(
             try {
                 serverBaseUrl = withContext(Dispatchers.IO) { photoRepository.getServerBaseUrl() }
 
-                val photos = if (albumId != null) {
-                    // Album context: load only photos in this album. Uses the
-                    // SAME resolver as the album grid so the pager order matches
-                    // the grid and smart albums (favorites/videos/recents/…)
-                    // resolve correctly — querying the xref table alone returns
-                    // nothing for smart albums → "Photo not found".
-                    withContext(Dispatchers.IO) {
-                        photoRepository.getAlbumPhotos(albumId)
-                    }
+                // ONE resolver call, shared with the grid that launched us. Two
+                // shapes, never two derivations:
+                //
+                //  • The grid handed its list over (Search / People / Pets /
+                //    Memories / Trips, E3a) — page exactly that, secure-filtered
+                //    and nothing else. Their order comes from a server endpoint;
+                //    re-deriving it here is impossible, which is why they used
+                //    to page the gallery's order instead of their own.
+                //  • It did not (gallery, albums) — the resolver rebuilds the
+                //    identical list from the identical inputs, applying the
+                //    secure exclusion, the per-kind burst policy and the album's
+                //    persisted #52 sort (E3).
+                val resolved = handoffPhotoIds
+                    ?.let { resolver.resolveExplicit(it) }
+                    ?: resolver.resolve(albumId)
+                allPhotosRaw = resolved.members
+                allPhotos = resolved.photos
+                val page = resolved.pageIndexOf(initialPhotoId)
+                if (page < 0) {
+                    // Not on this surface — secured, or not in the local mirror
+                    // (the non-album grids resolve from server endpoints and
+                    // draw thumbnails straight from the server, so they can show
+                    // a tile for a photo this device has never mirrored and hand
+                    // over its raw server id). Render "Photo not found" rather
+                    // than opening page 0, which would silently show an
+                    // unrelated photo and, for a secured id, would be the exact
+                    // leak the secure exclusion above just closed.
+                    Log.w(TAG, "[list] photo $initialPhotoId is not in the resolved " +
+                        "list for album=$albumId handoff=${handoffPhotoIds?.size} " +
+                        "(${allPhotos.size} items)")
+                    allPhotos = emptyList()
+                    initialPage = 0
                 } else {
-                    // Gallery context: load all photos
-                    withContext(Dispatchers.IO) {
-                        photoRepository.getAllPhotos().first()
-                    }
-                }
-                setRawPhotos(photos)
-                // Locate the tapped photo in the COLLAPSED list. If the user
-                // somehow deep-linked to a non-cover burst frame, fall back to
-                // that frame's burst cover so the page still resolves.
-                initialPage = run {
-                    val direct = allPhotos.indexOfFirst { it.localId == initialPhotoId }
-                    if (direct >= 0) return@run direct
-                    val frame = photos.firstOrNull { it.localId == initialPhotoId }
-                    val bid = frame?.burstId
-                    if (!bid.isNullOrEmpty()) {
-                        allPhotos.indexOfFirst { it.burstId == bid }.coerceAtLeast(0)
-                    } else 0
+                    initialPage = page
                 }
             } catch (e: Exception) {
                 error = e.message
@@ -166,14 +208,28 @@ class PhotoViewerViewModel @Inject constructor(
     }
 
     /**
-     * Set the raw (un-collapsed) photo list and recompute the burst-collapsed
-     * [allPhotos] from it. Collapsing keeps only the FIRST frame of each
-     * burstId — identical to the gallery grid's collapse — so the pager swipes
-     * burst-by-burst, not frame-by-frame.
+     * Apply an in-place edit to the loaded lists.
+     *
+     * Edits BOTH lists rather than mutating one and re-deriving the other: the
+     * derivation is the resolver's, it needs inputs this ViewModel no longer
+     * holds (the secure set, the persisted sort), and re-running it here would
+     * reintroduce the second derivation E3 removed. A field edit changes no
+     * membership and no order, so touching both in step is also the cheaper and
+     * more obviously correct operation.
      */
-    private fun setRawPhotos(photos: List<PhotoEntity>) {
-        allPhotosRaw = photos
-        allPhotos = photos.collapseBursts()
+    private fun updateLoadedPhotos(
+        match: (PhotoEntity) -> Boolean,
+        transform: (PhotoEntity) -> PhotoEntity,
+    ) {
+        allPhotosRaw = allPhotosRaw.map { if (match(it)) transform(it) else it }
+        allPhotos = allPhotos.map { if (match(it)) transform(it) else it }
+    }
+
+    /** Drop a photo from the loaded lists after it leaves the album. Same
+     *  both-lists-in-step rule as [updateLoadedPhotos]. */
+    private fun removeLoadedPhoto(localId: String) {
+        allPhotosRaw = allPhotosRaw.filter { it.localId != localId }
+        allPhotos = allPhotos.filter { it.localId != localId }
     }
 
     /**
@@ -195,6 +251,14 @@ class PhotoViewerViewModel @Inject constructor(
     suspend fun downloadAndDecrypt(blobId: String): ByteArray = withContext(Dispatchers.IO) {
         photoRepository.downloadAndDecryptMediaBytes(blobId)
     }
+
+    /**
+     * The streaming source backing encrypted-video playback (issue #17). The
+     * repository implements it; the viewer builds a [MediaBlobDataSource.Factory]
+     * from it so ExoPlayer fetches + decrypts only the frames it reads.
+     */
+    val encryptedBlobStream: com.simplephotos.data.repository.EncryptedBlobStream
+        get() = photoRepository
 
     /**
      * Download, decrypt, and write media directly to a temp file.
@@ -240,8 +304,8 @@ class PhotoViewerViewModel @Inject constructor(
                         albumRepository.getAlbum(aid)?.let { albumRepository.syncAlbum(it) }
                     } catch (_: Exception) {}
                 }
-                // Remove from in-memory list and navigate
-                setRawPhotos(allPhotosRaw.filter { it.localId != photo.localId })
+                // Remove from in-memory lists and navigate
+                removeLoadedPhoto(photo.localId)
                 onRemoved()
             } catch (e: Exception) {
                 error = e.message
@@ -313,13 +377,10 @@ class PhotoViewerViewModel @Inject constructor(
             try {
                 val response = withContext(Dispatchers.IO) { photoRepository.toggleFavorite(photoId) }
                 isFavorite = response.isFavorite
-                // Update the local allPhotos list so loadFavoriteForPhoto()
-                // returns the correct value when the user swipes away and back.
-                val idx = allPhotosRaw.indexOfFirst { it.serverPhotoId == photoId }
-                if (idx >= 0) {
-                    setRawPhotos(allPhotosRaw.toMutableList().also {
-                        it[idx] = it[idx].copy(isFavorite = response.isFavorite)
-                    })
+                // Update the loaded lists so loadFavoriteForPhoto() returns the
+                // correct value when the user swipes away and back.
+                updateLoadedPhotos({ it.serverPhotoId == photoId }) {
+                    it.copy(isFavorite = response.isFavorite)
                 }
             } catch (_: Exception) {}
         }
@@ -345,6 +406,24 @@ class PhotoViewerViewModel @Inject constructor(
     fun clearFullMetadata() {
         fullMetadata = null
         metadataError = null
+    }
+
+    /** Load the faces detected in a photo for the Info-panel People section.
+     *  Best-effort: on failure (AI off / none) [photoFaces] is left empty. */
+    fun loadPhotoFaces(serverPhotoId: String) {
+        viewModelScope.launch {
+            try {
+                photoFaces = withContext(Dispatchers.IO) { aiRepository.listPhotoFaces(serverPhotoId) }
+            } catch (e: Exception) {
+                Log.w(TAG, "[faces] loadPhotoFaces failed for $serverPhotoId: ${e.message}")
+                photoFaces = emptyList()
+            }
+        }
+    }
+
+    /** Clear the Info-panel face list when switching photos / closing. */
+    fun clearPhotoFaces() {
+        photoFaces = emptyList()
     }
 
     /**
@@ -410,11 +489,8 @@ class PhotoViewerViewModel @Inject constructor(
         } catch (e: Exception) {
             Log.w(TAG, "[meta] local subtype update failed for $serverPhotoId: ${e.message}")
         }
-        val idx = allPhotosRaw.indexOfFirst { it.serverPhotoId == serverPhotoId }
-        if (idx >= 0) {
-            setRawPhotos(allPhotosRaw.toMutableList().also {
-                it[idx] = it[idx].copy(photoSubtype = subtype)
-            })
+        updateLoadedPhotos({ it.serverPhotoId == serverPhotoId }) {
+            it.copy(photoSubtype = subtype)
         }
     }
 
@@ -430,12 +506,9 @@ class PhotoViewerViewModel @Inject constructor(
                     photoRepository.updateCropMetadata(photo.localId, metadata)
                 }
                 Log.d(TAG, "[EDIT:saveEdit] Local DB updated for ${photo.localId}")
-                // Update in-memory list
-                val idx = allPhotosRaw.indexOfFirst { it.localId == photo.localId }
-                if (idx >= 0) {
-                    setRawPhotos(allPhotosRaw.toMutableList().also {
-                        it[idx] = it[idx].copy(cropMetadata = metadata)
-                    })
+                // Update in-memory lists
+                updateLoadedPhotos({ it.localId == photo.localId }) {
+                    it.copy(cropMetadata = metadata)
                 }
                 // Sync to server so web and other clients see the edit
                 photo.serverPhotoId?.let { serverId ->
@@ -630,6 +703,19 @@ class PhotoViewerViewModel @Inject constructor(
                     else -> false
                 }
             } catch (_: Exception) { false }
+        }
+
+    /**
+     * Download the original UNCONVERTED source file (the retained pre-conversion
+     * original) for a converted photo to [outputFile]. Returns true on success.
+     */
+    suspend fun downloadSourceToFile(serverPhotoId: String, outputFile: java.io.File): Boolean =
+        withContext(Dispatchers.IO) {
+            try {
+                photoRepository.downloadSourceFileToFile(serverPhotoId, outputFile)
+            } catch (_: Exception) {
+                false
+            }
         }
 
     /**

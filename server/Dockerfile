@@ -39,6 +39,8 @@ COPY --from=builder /usr/src/app/target/release/simple-photos-server ./
 COPY --from=builder /usr/src/app/migrations ./migrations
 RUN mkdir -p /data/storage /data/db && chown -R appuser:appuser /data /app
 ENV SIMPLE_PHOTOS_CONFIG=/app/config.toml
-EXPOSE 3000
+# 3000 = HTTP API/UI; 3301 = LAN auto-discovery beacon (must be published for
+# the mobile/desktop apps to find this server on the network).
+EXPOSE 3000 3301
 USER appuser
 ENTRYPOINT ["./simple-photos-server"]

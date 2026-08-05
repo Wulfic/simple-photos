@@ -20,12 +20,15 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::extract::State;
-use axum::routing::get;
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use axum::routing::{get, post};
 use axum::Json;
 use axum::Router;
 use sqlx::SqlitePool;
 use tower_http::cors::{Any, CorsLayer};
 
+use crate::backup::heartbeat::{self, HeartbeatEnvelope};
 use crate::config::AppConfig;
 
 /// Well-known discovery port. Matches the default in `ServerConfig`.
@@ -95,6 +98,8 @@ pub async fn run_discovery_listener(pool: SqlitePool, config: Arc<AppConfig>) {
 
     let app = Router::new()
         .route("/", get(discovery_handler))
+        // Authenticated, replay-protected peer heartbeat for self-healing (item #10).
+        .route("/heartbeat", post(heartbeat_handler))
         // Wide-open CORS — this is a read-only, unauthenticated discovery endpoint
         .layer(
             CorsLayer::new()
@@ -195,4 +200,47 @@ async fn discovery_handler(State(state): State<DiscoveryState>) -> Json<Discover
         api_key_required,
         tls: state.config.tls.enabled,
     })
+}
+
+/// `POST /heartbeat` — verify an HMAC-authenticated, replay-protected peer
+/// heartbeat and reply with a signed pong (mutual auth). See
+/// [`crate::backup::heartbeat`] for the security model (item #10).
+///
+/// Returns 503 when no shared key is configured (nothing to authenticate
+/// against), 401 on a bad signature / stale timestamp / replayed nonce.
+async fn heartbeat_handler(
+    State(state): State<DiscoveryState>,
+    Json(env): Json<HeartbeatEnvelope>,
+) -> axum::response::Response {
+    let keys = heartbeat::candidate_keys(&state.pool, &state.config).await;
+    if keys.is_empty() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "heartbeat not configured (no shared key)",
+        )
+            .into_response();
+    }
+
+    match heartbeat::verify_any(
+        &keys,
+        &env,
+        heartbeat::current_ms(),
+        heartbeat::global_nonce_cache(),
+    ) {
+        Ok(key) => {
+            // Reply with a heartbeat of our own, signed with the same shared key,
+            // so the sender can confirm it reached a genuine peer (mutual auth).
+            let name: String =
+                sqlx::query_scalar("SELECT value FROM server_settings WHERE key = 'server_name'")
+                    .fetch_optional(&state.pool)
+                    .await
+                    .ok()
+                    .flatten()
+                    .filter(|s: &String| !s.is_empty())
+                    .unwrap_or_else(|| state.config.server.host.clone());
+            let pong = heartbeat::make_envelope(key, &name);
+            (StatusCode::OK, Json(pong)).into_response()
+        }
+        Err(_) => (StatusCode::UNAUTHORIZED, "invalid heartbeat").into_response(),
+    }
 }

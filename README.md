@@ -22,6 +22,7 @@ Simple Photos was born out of a desire for a secure, private, and user-friendly 
 - **Geolocation Stripping** — option to remove geolocation metadata during import for privacy
 - **GPU acceleration** — optional NVIDIA GPU-accelerated media processing and AI inference for faster performance on supported hardware
 - **PWA** -  Progessive Web App to install on devices for easier access. 
+- **Split-Screen** - Capable of running dual apps
 
 ### Media
 - **Supported Photo, video, and audio formats** — JPEG, PNG, GIF, WebP, AVIF, BMP, MP4, WebM, MP3, FLAC, OGG, WAV

@@ -39,6 +39,25 @@ export function formatEta(seconds: number): string {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
 }
 
+/**
+ * Format seconds as a media-player timecode: `M:SS`, or `H:MM:SS` once the
+ * duration reaches an hour. Guards non-finite/negative input (e.g. a live
+ * stream's `NaN` duration) → `"0:00"`.
+ *
+ * Use this for playback/trim time displays. For compact grid-tile duration
+ * badges use `formatDuration` in `utils/gallery` (always `M:SS`).
+ */
+export function formatTimecode(seconds: number): string {
+  if (!isFinite(seconds) || seconds < 0) return "0:00";
+  const s = Math.floor(seconds);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0)
+    return `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+  return `${m}:${String(sec).padStart(2, "0")}`;
+}
+
 /** Format an ISO date string to a user-friendly locale string */
 export function formatDate(iso: string): string {
   try {

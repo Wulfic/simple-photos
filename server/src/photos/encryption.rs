@@ -4,11 +4,12 @@
 //! This module handles persisting the client-derived encryption key so
 //! server-side operations (autoscan) can process photos.
 //!
-//! - `POST /api/admin/encryption/store-key`   — persist the encryption key
+//! - `POST /api/admin/encryption/store-key`    — persist the encryption key
+//! - `POST /api/admin/encryption/retry-parked` — un-park abandoned photos
 
 use axum::extract::State;
 use axum::Json;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
@@ -96,4 +97,76 @@ pub async fn store_encryption_key(
     }
 
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+// ── Retry parked photos ─────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct RetryParkedResponse {
+    /// How many parked photos were re-admitted to the encryption queue.
+    pub cleared: u64,
+}
+
+/// POST /api/admin/encryption/retry-parked
+///
+/// Clears the parked marker on every photo the encryption migration gave up on,
+/// so the next pass retries them with a full attempt budget.
+///
+/// This is the missing half of the three-strike cap. The conversion cap (#40)
+/// has two escape hatches — the file changing on disk, and
+/// `/admin/conversion/retry-failed` — because a file can be retired by a
+/// *server-side* defect that a later server fixes. The encryption cap had
+/// neither, and its failure mode is strictly worse: a parked photo keeps its
+/// **plaintext original at rest**. The pre-`SPCHNKB2` whole-file encrypt needed
+/// ~5x RAM and OOM-aborted on large videos; every file it killed was parked
+/// permanently, and stayed unencrypted long after the chunked path landed.
+///
+/// Kicks the migration on success rather than waiting for the next autoscan, so
+/// the operator sees the count move instead of wondering whether the button did
+/// anything. Idempotent: with nothing parked it reports `cleared: 0` and starts
+/// no work.
+pub async fn retry_parked_encryption(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<RetryParkedResponse>, AppError> {
+    require_admin(&state, &auth).await?;
+
+    let cleared = crate::photos::server_migrate::retry_parked(&state.pool, &auth.user_id)
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                user_id = %auth.user_id,
+                error = %e,
+                "[SERVER_MIG] failed to un-park photos for retry"
+            );
+            AppError::Internal("failed to un-park photos".to_string())
+        })?;
+
+    tracing::info!(
+        user_id = %auth.user_id,
+        cleared,
+        "[SERVER_MIG] Admin re-admitted parked photos to the encryption queue"
+    );
+
+    crate::audit::log_background(
+        &state.pool,
+        crate::audit::AuditEvent::AdminAction,
+        Some(serde_json::json!({
+            "action": "encryption_retry_parked",
+            "cleared": cleared,
+        })),
+    );
+
+    // Nothing was parked — starting a migration would only log a no-op pass.
+    if cleared > 0 {
+        let pool = state.pool.clone();
+        let storage_root = (**state.storage_root.load()).clone();
+        let jwt_secret = state.config.auth.jwt_secret.clone();
+        tokio::spawn(async move {
+            crate::photos::server_migrate::auto_migrate_after_scan(pool, storage_root, jwt_secret)
+                .await;
+        });
+    }
+
+    Ok(Json(RetryParkedResponse { cleared }))
 }

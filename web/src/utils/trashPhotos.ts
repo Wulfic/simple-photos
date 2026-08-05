@@ -7,6 +7,7 @@
  * items identically.
  */
 import { db } from "../db";
+import { deleteThumbs, resolveThumb } from "../db/thumbs";
 import { api } from "../api/client";
 
 /** Soft-delete a single photo by its IndexedDB blobId. */
@@ -49,13 +50,19 @@ export async function trashPhoto(blobId: string): Promise<void> {
       takenAt: cached.takenAt,
       deletedAt: Date.now(),
       expiresAt: result.expires_at,
-      thumbnailData: cached.thumbnailData,
+      // Trash rows carry their own copy of the bytes: the photo row (and its
+      // `thumbs` entry) are about to be deleted, so this is the only surviving
+      // thumbnail the trash grid can render.
+      thumbnailData: (await resolveThumb(cached))?.data,
       duration: cached.duration,
       albumIds: cached.albumIds ?? [],
     });
   }
 
   await db.photos.delete(blobId);
+  // The photo row is gone; its thumbnail would otherwise sit in the cache
+  // forever with nothing referencing it.
+  await deleteThumbs([blobId]);
 }
 
 /** Soft-delete many photos sequentially. Rejects on the first hard failure. */

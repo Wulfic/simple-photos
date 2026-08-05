@@ -92,6 +92,7 @@ pub async fn import_metadata(
         Some(serde_json::json!({
             "action": "import_metadata",
             "metadata_id": meta_id,
+            "filename": record.title,
             "source": "google_photos",
         })),
     )
