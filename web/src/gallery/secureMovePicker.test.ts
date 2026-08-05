@@ -3,7 +3,6 @@ import {
   otherSecureAlbumItems,
   resolveSecureMoves,
   expandSecureSelection,
-  planSecureMovesToTarget,
   secureMoveTargets,
   type MovableSecureItem,
   type BurstMovableItem,
@@ -88,26 +87,10 @@ describe("expandSecureSelection", () => {
   });
 });
 
-describe("planSecureMovesToTarget", () => {
-  it("routes each item from its own source gallery into the target", () => {
-    // Smart-view selection spanning two source albums, target g3.
-    const moves = planSecureMovesToTarget(burstItems, ["b1", "c"], "g3");
-    expect(moves).toEqual([
-      { sourceGalleryId: "g1", itemId: "b1" },
-      { sourceGalleryId: "g2", itemId: "c" },
-    ]);
-  });
-
-  it("drops items already in the target album (no-op move)", () => {
-    // c is already in g2; moving the selection into g2 must skip it.
-    const moves = planSecureMovesToTarget(burstItems, ["b1", "c"], "g2");
-    expect(moves).toEqual([{ sourceGalleryId: "g1", itemId: "b1" }]);
-  });
-
-  it("returns nothing when every selection is already in the target", () => {
-    expect(planSecureMovesToTarget(burstItems, ["a", "b1"], "g1")).toEqual([]);
-  });
-});
+// `planSecureMovesToTarget`'s three tests were deleted with it (Z1f). They
+// tested a MOVE plan the push stopped using when Z1 switched to adds — green,
+// and proving only that dead code still worked. `planSecureAddsToTarget` below
+// is the live path and carries the equivalent coverage.
 
 describe("secureMoveTargets", () => {
   const albums = [

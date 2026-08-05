@@ -26,10 +26,19 @@ The three arms, and what breaks if each is wrong:
   loss, and it reads as corruption rather than as a deletion the user asked for.
 """
 
+import os
+import time
+
 import pytest
 
-from helpers import APIClient, generate_random_bytes
-from conftest import USER_PASSWORD
+from helpers import (
+    APIClient,
+    generate_random_bytes,
+    generate_test_jpeg,
+    unique_filename,
+    wait_for_encryption,
+)
+from conftest import ADMIN_PASSWORD, USER_PASSWORD
 
 
 def _unlock(client) -> str:
@@ -291,3 +300,183 @@ class TestAggregateFeedCollapsesMemberships:
         assert [g["id"] for g in mine[0].get("galleries", [])] == [f["album_a"]]
         assert mine[0]["gallery_id"] == f["album_a"]
         assert mine[0]["gallery_name"] == "Z1 Album A"
+
+
+# ── Z1f: the id the feed publishes must be addable ───────────────────────────
+
+
+@pytest.fixture(scope="module")
+def secured_autoscanned_photo(primary_admin: APIClient, primary_server) -> dict:
+    """A **server-side (autoscanned)** photo secured into an album, whose clone
+    has since been encrypted.
+
+    This is the shape the rest of the file never reaches.  Every test above adds
+    with the id returned by ``upload_blob`` — a *client-encrypted* blob, where
+    ``add_gallery_item`` sets ``gi.encrypted_blob_id = gi.blob_id``.  The feed's
+    ``COALESCE(gi.encrypted_blob_id, p.encrypted_blob_id, gi.blob_id)`` therefore
+    collapses to the clone id, so the published id *is* the clone id and the
+    correlation works trivially.  An autoscanned photo takes the other branch:
+    ``gi.encrypted_blob_id`` stays NULL and the clone gets its own ``photos``
+    row, so the published id comes from ``p.encrypted_blob_id`` instead.
+
+    CT132 is ~13k autoscanned photos, i.e. entirely this shape and none of the
+    tested one.
+    """
+    token = primary_admin.unlock_secure_gallery(ADMIN_PASSWORD)["gallery_token"]
+    album_a = primary_admin.create_secure_gallery("Z1f Album A")["gallery_id"]
+    album_b = primary_admin.create_secure_gallery("Z1f Album B")["gallery_id"]
+
+    # Plant a real JPEG so it registers cleanly rather than failing conversion.
+    name = unique_filename("jpg")
+    with open(os.path.join(primary_server.storage_root, name), "wb") as fh:
+        fh.write(generate_test_jpeg(64, 64))
+    primary_admin.admin_trigger_autoscan()
+    primary_admin.wait_for_conversion(timeout=90)
+
+    rows = [
+        p
+        for p in primary_admin.get("/api/photos", params={"limit": 500}).json()["photos"]
+        if p.get("filename") == name
+    ]
+    assert len(rows) == 1, (
+        f"precondition: autoscan must register {name} exactly once, got {len(rows)}"
+    )
+    photo_id = rows[0]["id"]
+
+    # The ORIGINAL's encrypted blob, captured BEFORE securing — securing hides
+    # the row from encrypted-sync, so this is the only moment it is readable.
+    # It is what the dedup assertion below compares against.
+    original_encrypted_blob_id = wait_for_encryption(primary_admin, photo_id, max_wait=60)
+
+    # Secure it BY PHOTO ID — the server-side branch.
+    r = _add(primary_admin, album_a, photo_id, token)
+    assert r.status_code == 201, (
+        f"precondition: securing must succeed, got {r.status_code} {r.text!r}"
+    )
+    first = r.json()
+    assert not first.get("adopted"), "the FIRST add clones; it cannot be an adoption"
+    clone_blob_id = first["new_blob_id"]
+
+    # Wait for the clone's encryption, which is what changes the published id.
+    # Polling the feed rather than the DB keeps this keyed on what a client can
+    # actually observe.
+    published = None
+    for _ in range(60):
+        items = _items(primary_admin, album_a, token)
+        if items:
+            published = items[0]["blob_id"]
+            if published != clone_blob_id:
+                break
+        time.sleep(1)
+
+    return {
+        "token": token,
+        "album_a": album_a,
+        "album_b": album_b,
+        "photo_id": photo_id,
+        "clone_blob_id": clone_blob_id,
+        "original_encrypted_blob_id": original_encrypted_blob_id,
+        "published_blob_id": published,
+        "item_a": first["item_id"],
+    }
+
+
+class TestThePublishedIdRoundTrips:
+    """Z1f: the id the feed publishes must be addable — a **round-trip guard**.
+
+    **These three tests pass on the pre-fix tree, and that is the finding, not a
+    weakness.**  Measured 2026-08-05 by reverting ``SECURE_MEMBERSHIP_MATCH`` to
+    ``(gi.original_blob_id = ?1 OR gi.blob_id = ?2)`` and rebuilding: all three
+    still passed.  Z1f predicted a live double-clone here; there is not one, and
+    the reason is the first test below.
+
+    What actually happens: encryption dedups on plaintext content hash, and a
+    secure clone is a byte-for-byte copy, so the clone is handed the
+    **original's** encrypted blob rather than getting one of its own
+    (``server_migrate_encrypt`` names this case in a comment).  The published id
+    is therefore the *original's* encrypted blob, which
+    ``resolve_canonical_original_id`` maps back to the *original's* photo id —
+    the one value ``gi.original_blob_id = ?1`` already matched.
+
+    The real defect is one level down and cannot be reached from here: because
+    the original and the clone now **share** an ``encrypted_blob_id``, that
+    resolver's ``SELECT id FROM photos WHERE encrypted_blob_id = ?`` matches two
+    rows with no ``ORDER BY``.  It returns the original by insertion order, not
+    by contract.  The clone-id answer is equally admissible and finds nothing on
+    the old correlation.  That arm is pinned where it is reachable — the unit
+    test ``the_published_id_correlates_whichever_row_resolution_returns`` in
+    ``gallery/secure.rs``, which drives both answers and goes RED on exactly the
+    clone one.
+
+    So this class is kept as the guard the file did not have: it pins the id
+    space end to end, and it will fail the day the dedup, the COALESCE or the
+    resolver changes which row wins.  **Do not re-label it as the Z1f
+    reproduction** — it is not one, and a previous version of this docstring
+    claimed it was.
+    """
+
+    def test_the_published_id_is_the_originals_encrypted_blob(
+        self, secured_autoscanned_photo
+    ):
+        """The measurement that disproved Z1f's stated mechanism.
+
+        If this ever fails, the clone stopped sharing the original's blob — and
+        at that moment the resolver's answer becomes the clone id and the two
+        tests below start genuinely exercising the widened correlation.
+        """
+        f = secured_autoscanned_photo
+
+        assert f["published_blob_id"], "the album feed published no item at all"
+        assert f["published_blob_id"] != f["clone_blob_id"], (
+            "the feed must publish the ENCRYPTED blob, not the raw clone id — "
+            "otherwise the clone's encryption pass has not run and this class "
+            "is asserting nothing"
+        )
+        assert f["original_encrypted_blob_id"], (
+            "precondition: the original must be encrypted before securing, or "
+            "there is no shared blob to compare against"
+        )
+        assert f["published_blob_id"] == f["original_encrypted_blob_id"], (
+            "the clone must SHARE the original's encrypted blob (content-hash "
+            "dedup). This equality is why the pre-fix correlation still worked: "
+            "the published id resolves to the ORIGINAL's photo id, which "
+            "`gi.original_blob_id = ?1` already matched."
+        )
+
+    def test_pushing_the_published_id_into_a_second_album_adopts_the_clone(
+        self, primary_admin: APIClient, secured_autoscanned_photo
+    ):
+        """Driven exactly as the UI does — with the id the feed handed out."""
+        f = secured_autoscanned_photo
+
+        r = _add(primary_admin, f["album_b"], f["published_blob_id"], f["token"])
+        assert r.status_code == 201, (
+            f"pushing the published id must succeed — got {r.status_code} {r.text!r}"
+        )
+        second = r.json()
+
+        assert second.get("adopted") is True, (
+            "the add MUST adopt the existing clone. A non-adoption here means "
+            "the correlation missed and a SECOND full clone was just minted — "
+            "double storage, and an edit in one album can never reach the other."
+        )
+        assert second["new_blob_id"] == f["clone_blob_id"], (
+            "and it must adopt THAT clone, not mint a fresh one"
+        )
+
+    def test_re_adding_the_published_id_to_the_same_album_is_still_refused(
+        self, primary_admin: APIClient, secured_autoscanned_photo
+    ):
+        """The half of the old invariant Z1 kept, driven through the UI's id.
+
+        A correlation that finds no membership cannot find a *duplicate* one, so
+        the 409 would silently become a 201 and the user would get two tiles of
+        one photo.
+        """
+        f = secured_autoscanned_photo
+
+        r = _add(primary_admin, f["album_a"], f["published_blob_id"], f["token"])
+        assert r.status_code == 409, (
+            f"re-adding to the SAME album must still 409 — got {r.status_code} "
+            f"{r.text!r}. A 201 here is the same-album duplicate Z1 kept banned."
+        )

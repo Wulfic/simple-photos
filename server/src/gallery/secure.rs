@@ -33,7 +33,79 @@ use crate::photos::models::*;
 /// re-typed at each site. This repo has now recorded nine separate instances of
 /// one list derived twice and drifting; the membership correlation is a tenth
 /// candidate and is deliberately not written out by hand anywhere.
-pub const SECURE_MEMBERSHIP_MATCH: &str = "(gi.original_blob_id = ?1 OR gi.blob_id = ?2)";
+/// `gi.blob_id = ?1` is the **Z1f** arm and is not redundant with `= ?2`. It
+/// exists because [`resolve_canonical_original_id`] has **two admissible
+/// answers** for one input, and only one of them was previously correlated.
+///
+/// After a secured server-side photo's clone is encrypted, the encryption pass
+/// dedups on plaintext content hash and hands the clone the *original's* blob
+/// (`server_migrate_encrypt` names this case by name). So **two `photos` rows —
+/// the original and the clone — carry the same `encrypted_blob_id`**, and the
+/// resolver's `SELECT id FROM photos WHERE encrypted_blob_id = ?` has no
+/// `ORDER BY` and no tie-break. It returns the original today, purely by
+/// insertion order; a clone-id answer is equally admissible and is what an
+/// index change, a re-created original or a trashed original would produce.
+/// With only `gi.original_blob_id = ?1` the clone-id answer finds nothing —
+/// minting a second full clone and skipping the same-album 409. Matching both
+/// makes the outcome identical whichever row the planner picks, which is the
+/// property worth having: correctness that does not depend on row order.
+///
+/// Safe because a clone id is a fresh v4 UUID: it cannot collide with an
+/// unrelated photo id, and the lookup is owner-scoped on top.
+pub const SECURE_MEMBERSHIP_MATCH: &str =
+    "(gi.original_blob_id = ?1 OR gi.blob_id = ?1 OR gi.blob_id = ?2)";
+
+/// The `blob_id` both secure feeds publish for an item — the id every client
+/// hands back to [`add_gallery_item`] when pushing a photo into a second album.
+///
+/// Shared verbatim by [`list_gallery_items`] and [`list_all_gallery_items`]
+/// (which must agree — the smart albums are derived from the aggregate feed) and
+/// by the Z1f test, which resolves an id through *this* expression rather than
+/// re-typing it. That distinction is the whole lesson of Z1f: `test_94` added
+/// with the client-uploaded blob id, where this COALESCE collapses to
+/// `gi.blob_id`, so the tested path and the UI path were different id spaces and
+/// the correlation miss below was invisible for both.
+pub const SECURE_ITEM_PUBLISHED_BLOB_ID: &str =
+    "COALESCE(gi.encrypted_blob_id, p.encrypted_blob_id, gi.blob_id)";
+
+/// The join that makes `p` — the **clone's own** `photos` row — available to
+/// [`SECURE_ITEM_PUBLISHED_BLOB_ID`]. Shared for the same reason the expression
+/// is: without it the COALESCE silently falls through to `gi.blob_id`, which is
+/// precisely the vacuous shape that hid Z1f.
+pub const SECURE_ITEM_CLONE_JOIN: &str =
+    "LEFT JOIN photos p ON p.id = gi.blob_id AND p.encrypted_blob_id IS NOT NULL";
+
+/// Resolve the id a client sent to the canonical **photo id** the membership
+/// rows are keyed on, matching `?1` of [`SECURE_MEMBERSHIP_MATCH`].
+///
+/// For a server-side photo id this is the id itself; for an *encrypted* blob id
+/// it is the owning photo's id.
+///
+/// **This lookup is ambiguous by construction and the caller must not rely on
+/// which row it returns.** Encryption dedups on plaintext content hash, so a
+/// secure clone ends up sharing the original's `encrypted_blob_id`; both rows
+/// then satisfy the `WHERE`, and there is no `ORDER BY` to choose between them.
+/// Adding one here would be a false fix — it would pin an arbitrary winner
+/// rather than remove the dependence on one. [`SECURE_MEMBERSHIP_MATCH`]
+/// correlates **both** admissible answers instead, so the add behaves the same
+/// either way. See its docs for what the un-correlated answer used to cost.
+///
+/// Extracted from [`add_gallery_item`] so the test can drive the real resolution
+/// instead of asserting against a hand-computed id.
+pub async fn resolve_canonical_original_id(
+    pool: &sqlx::SqlitePool,
+    user_id: &str,
+    requested_blob_id: &str,
+) -> Result<String, AppError> {
+    Ok(sqlx::query_scalar::<_, String>(
+        "SELECT id FROM photos WHERE encrypted_blob_id = ? AND user_id = ?",
+    )
+    .bind(requested_blob_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?
+    .unwrap_or_else(|| requested_blob_id.to_string()))
+}
 
 /// One existing secure-album membership for a photo, in any of the user's
 /// galleries. Carries everything an *adoption* needs to reuse the clone rather
@@ -578,14 +650,8 @@ pub async fn add_gallery_item(
     // Determine the canonical "original" identity for this add: for a
     // server-side photo id it's the id itself; for a client-encrypted blob id
     // it's the owning photo's id (photos.encrypted_blob_id = req.blob_id).
-    let candidate_original_id: String = sqlx::query_scalar::<_, String>(
-        "SELECT id FROM photos WHERE encrypted_blob_id = ? AND user_id = ?",
-    )
-    .bind(&req.blob_id)
-    .bind(&auth.user_id)
-    .fetch_optional(&state.pool)
-    .await?
-    .unwrap_or_else(|| req.blob_id.clone());
+    let candidate_original_id =
+        resolve_canonical_original_id(&state.pool, &auth.user_id, &req.blob_id).await?;
 
     // A photo may now live in SEVERAL secure albums (Z1).  What survives from
     // the old one-secure-album invariant is only its useful half: a photo may
@@ -1172,9 +1238,9 @@ pub async fn list_gallery_items(
         crop_metadata: Option<String>,
     }
 
-    let items = sqlx::query_as::<_, GalleryItemRow>(
+    let items = sqlx::query_as::<_, GalleryItemRow>(&format!(
         "SELECT gi.id, \
-                COALESCE(gi.encrypted_blob_id, p.encrypted_blob_id, gi.blob_id) as blob_id, \
+                {SECURE_ITEM_PUBLISHED_BLOB_ID} as blob_id, \
                 gi.blob_id as clone_blob_id, \
                 gi.added_at, \
                 COALESCE(gi.encrypted_thumb_blob_id, p.encrypted_thumb_blob_id, op.encrypted_thumb_blob_id) as encrypted_thumb_blob_id, \
@@ -1187,11 +1253,11 @@ pub async fn list_gallery_items(
                 COALESCE(p.motion_video_blob_id, op.motion_video_blob_id) as motion_video_blob_id, \
                 gi.crop_metadata as crop_metadata \
          FROM encrypted_gallery_items gi \
-         LEFT JOIN photos p ON p.id = gi.blob_id AND p.encrypted_blob_id IS NOT NULL \
+         {SECURE_ITEM_CLONE_JOIN} \
          LEFT JOIN photos op ON op.id = gi.original_blob_id \
          WHERE gi.gallery_id = ? \
-         ORDER BY gi.added_at DESC",
-    )
+         ORDER BY gi.added_at DESC"
+    ))
     .bind(&gallery_id)
     .fetch_all(&state.pool)
     .await?;
@@ -1282,9 +1348,9 @@ pub async fn list_all_gallery_items(
         ));
     }
 
-    let items = sqlx::query_as::<_, AllGalleryItemRow>(
+    let items = sqlx::query_as::<_, AllGalleryItemRow>(&format!(
         "SELECT gi.id, \
-                COALESCE(gi.encrypted_blob_id, p.encrypted_blob_id, gi.blob_id) as blob_id, \
+                {SECURE_ITEM_PUBLISHED_BLOB_ID} as blob_id, \
                 gi.blob_id as clone_blob_id, \
                 gi.added_at, \
                 gi.gallery_id, \
@@ -1300,11 +1366,11 @@ pub async fn list_all_gallery_items(
                 gi.crop_metadata as crop_metadata \
          FROM encrypted_gallery_items gi \
          JOIN encrypted_galleries g ON g.id = gi.gallery_id \
-         LEFT JOIN photos p ON p.id = gi.blob_id AND p.encrypted_blob_id IS NOT NULL \
+         {SECURE_ITEM_CLONE_JOIN} \
          LEFT JOIN photos op ON op.id = gi.original_blob_id \
          WHERE g.user_id = ? \
-         ORDER BY gi.added_at DESC",
-    )
+         ORDER BY gi.added_at DESC"
+    ))
     .bind(&auth.user_id)
     .fetch_all(&state.pool)
     .await?;
@@ -1610,6 +1676,42 @@ mod tests {
         .unwrap();
     }
 
+    /// Insert a `photos` row, optionally already encrypted.
+    async fn insert_photo(
+        pool: &SqlitePool,
+        id: &str,
+        user_id: &str,
+        encrypted_blob_id: Option<&str>,
+    ) {
+        sqlx::query(
+            "INSERT INTO photos (id, user_id, filename, mime_type, created_at, encrypted_blob_id) \
+             VALUES (?, ?, ?, 'image/jpeg', '2026-08-01T00:00:00Z', ?)",
+        )
+        .bind(id)
+        .bind(user_id)
+        .bind(format!("{id}.jpg"))
+        .bind(encrypted_blob_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    /// The `blob_id` the secure feeds actually publish for `item_id`, evaluated
+    /// through the REAL shared expression and join rather than a copy of them.
+    /// Re-typing this is how Z1f stayed invisible: the id a test computes by
+    /// hand and the id a client is handed were different values.
+    async fn published_blob_id(pool: &SqlitePool, item_id: &str) -> String {
+        sqlx::query_scalar::<_, String>(&format!(
+            "SELECT {SECURE_ITEM_PUBLISHED_BLOB_ID} \
+             FROM encrypted_gallery_items gi {SECURE_ITEM_CLONE_JOIN} \
+             WHERE gi.id = ?"
+        ))
+        .bind(item_id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
     /// Build an aggregate-feed row with only the fields the collapse reads.
     fn feed_row(
         id: &str,
@@ -1673,6 +1775,156 @@ mod tests {
             neither.is_empty(),
             "an unsecured photo must match nothing — otherwise the two \
              assertions above pass for any input"
+        );
+    }
+
+    // ── Z1f: the id the feed publishes must correlate back to the membership ──
+
+    /// The live shape: a **server-side (autoscanned)** photo secured into an
+    /// album, whose clone has since been encrypted.
+    ///
+    /// The clone and the original share **one** `encrypted_blob_id`, which is
+    /// not a simplification — it is what the server actually produces.
+    /// `encrypt_one_photo` dedups on plaintext content hash and a clone is a
+    /// byte-for-byte copy, so the clone is handed the original's existing blob
+    /// (`server_migrate_encrypt` names this case in a comment of its own).
+    /// Verified end to end by `test_94`, which asserts the published id equals
+    /// the original's encrypted blob id.
+    ///
+    /// That sharing IS the defect: `resolve_canonical_original_id` then has two
+    /// rows satisfying its `WHERE` and no `ORDER BY` to choose between them.
+    ///
+    /// Returns `(item_id, clone_id, published_blob_id)`.
+    async fn secured_server_side_photo(pool: &SqlitePool) -> (String, String, String) {
+        insert_gallery(pool, "g1", "u1").await;
+        insert_photo(pool, "photo-1", "u1", Some("enc-shared-1")).await;
+        insert_photo(pool, "clone-1", "u1", Some("enc-shared-1")).await;
+        // Server-side adds leave `gi.encrypted_blob_id` NULL — it is only set
+        // for client-encrypted uploads, and there it equals `gi.blob_id`.
+        insert_shared_item(
+            pool,
+            "i1",
+            "g1",
+            "clone-1",
+            "photo-1",
+            "2026-08-01T00:00:00Z",
+        )
+        .await;
+
+        let published = published_blob_id(pool, "i1").await;
+        (String::from("i1"), String::from("clone-1"), published)
+    }
+
+    #[tokio::test]
+    async fn the_published_id_correlates_whichever_row_resolution_returns() {
+        // Z1f, stated as what it actually is: the add must not depend on which
+        // of two equally-valid rows SQLite happens to hand back.
+        //
+        // A client can only push back the id it was given, and for a secured
+        // server-side photo that is the SHARED encrypted blob. Resolving it can
+        // legitimately yield either the original's photo id or the clone's.
+        // Both are asserted, because the handler cannot tell which it got — and
+        // the clone arm is the one that used to find nothing, mint a second
+        // full clone (double storage, a second decrypt+encrypt of a possibly
+        // multi-GB video) and skip the same-album 409.
+        let pool = mem_pool().await;
+        let (_item, clone_id, published) = secured_server_side_photo(&pool).await;
+
+        // Preconditions. Without these the arms below could pass trivially —
+        // and `test_94` missing this bug is precisely what an unasserted
+        // precondition looks like.
+        assert_ne!(
+            published, clone_id,
+            "the feed must publish the ENCRYPTED blob, not the clone id — \
+             otherwise this re-tests the already-working id space"
+        );
+        let sharers: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM photos WHERE encrypted_blob_id = ?")
+                .bind(&published)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            sharers, 2,
+            "the original and the clone must SHARE one encrypted blob — that is \
+             what makes resolution ambiguous, and without it there is nothing \
+             here to be robust against"
+        );
+
+        // Whatever the real resolver returns must work...
+        let canonical = resolve_canonical_original_id(&pool, "u1", &published)
+            .await
+            .unwrap();
+        assert_eq!(
+            existing_memberships(&pool, "u1", &canonical, &published)
+                .await
+                .unwrap()
+                .len(),
+            1,
+            "the resolver's actual answer ({canonical}) must correlate"
+        );
+
+        // ...and so must the OTHER admissible answer — the arm the old
+        // correlation dropped. Both are pinned because row order is not a
+        // contract and today's winner is an accident of insertion order.
+        for canonical in ["photo-1", "clone-1"] {
+            let found = existing_memberships(&pool, "u1", canonical, &published)
+                .await
+                .unwrap();
+            assert_eq!(
+                found.len(),
+                1,
+                "resolving to `{canonical}` must find the membership; finding \
+                 none mints a second clone and drops the same-album 409"
+            );
+            assert_eq!(found[0].blob_id, clone_id, "and must adopt THAT clone");
+        }
+    }
+
+    #[tokio::test]
+    async fn re_adding_a_secured_photo_to_its_own_album_is_still_a_duplicate() {
+        // The half of the old one-album invariant Z1 deliberately kept. It is
+        // enforced by `add_gallery_item` finding a membership whose gallery_id
+        // matches — so a correlation miss silently disables it and the user gets
+        // a duplicate tile instead of a 409. Checked for BOTH resolutions.
+        let pool = mem_pool().await;
+        let (_item, _clone, published) = secured_server_side_photo(&pool).await;
+
+        for canonical in ["photo-1", "clone-1"] {
+            let found = existing_memberships(&pool, "u1", canonical, &published)
+                .await
+                .unwrap();
+            assert!(
+                found.iter().any(|m| m.gallery_id == "g1"),
+                "resolving to `{canonical}`, re-adding to the SAME album must \
+                 still be detectable as a duplicate"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn the_widened_correlation_is_not_a_catch_all() {
+        // `gi.blob_id = ?1` widens the match, so guard that it stays keyed on
+        // identity: another user's clone and an unrelated photo must still miss.
+        // Without this, deleting the WHERE clause outright would satisfy every
+        // assertion above.
+        let pool = mem_pool().await;
+        let (_item, _clone, published) = secured_server_side_photo(&pool).await;
+
+        let other_user = existing_memberships(&pool, "u2", "clone-1", &published)
+            .await
+            .unwrap();
+        assert!(
+            other_user.is_empty(),
+            "the widened match must stay scoped to the owner"
+        );
+
+        let unrelated = existing_memberships(&pool, "u1", "photo-999", "photo-999")
+            .await
+            .unwrap();
+        assert!(
+            unrelated.is_empty(),
+            "an unsecured photo must still match nothing"
         );
     }
 

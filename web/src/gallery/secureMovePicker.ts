@@ -113,27 +113,17 @@ export function expandSecureSelection<T extends BurstMovableItem>(
 }
 
 /**
- * Resolve a selection to concrete moves INTO `targetGalleryId`, dropping any
- * item already in the target (a no-op move) so the batch never issues a
- * pointless request or double-counts a success. Source gallery comes from each
- * item's own `gallery_id`, which is correct both for a real album (every item
- * shares it) and a synthetic smart view (items span several source albums).
- */
-export function planSecureMovesToTarget(
-  pool: MovableSecureItem[],
-  selectedItemIds: Iterable<string>,
-  targetGalleryId: string,
-): SecureMove[] {
-  return resolveSecureMoves(pool, selectedItemIds).filter(
-    (mv) => mv.sourceGalleryId !== targetGalleryId,
-  );
-}
-
-/**
  * Real secure albums a selection can be pushed INTO, excluding the album
  * currently open. For a synthetic smart view the open id matches nothing, so
  * every real album is offered — each selected item still routes from its own
- * source gallery, and same-source items are dropped by `planSecureMovesToTarget`.
+ * source gallery.
+ *
+ * (`planSecureMovesToTarget` used to live here and filtered the same-source
+ * items out of a *move* batch. Z1 replaced the push with adds, leaving it
+ * exported, tested and called by nothing — the same half-wiring shape `56f995c`
+ * shipped one level up. Deleted rather than kept beside its replacement, as
+ * Android's twin `planMovesToTarget` was in Z1e; `planSecureAddsToTarget` is
+ * the live path.)
  */
 export function secureMoveTargets<T extends SecureAlbumOption>(
   albums: T[],

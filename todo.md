@@ -997,40 +997,74 @@ done. **Check the call site, not the export.**
       differ, that the push genuinely leaves the photo in *both* albums, and that
       the regular album's trash icon asks before un-filing.
 
-#### Z1f — the secure feed publishes an id the add path may not correlate — OPEN, UNVERIFIED
+#### Z1f — the add's id correlation depended on SQLite row order — DONE 2026-08-05
 
-Found while wiring Z1e, in the server, and **stated as a suspicion because it has
-not been proven yet** — the next session's first job is a unit test against
-`existing_memberships`, not a fix.
+**The suspicion as filed was wrong, and the measurement is what corrected it.**
+Z1f predicted a live double-clone: the feed publishes the clone's *encrypted*
+blob, `candidate_original_id` resolves that to the clone's own `photos` row, and
+`SECURE_MEMBERSHIP_MATCH` never matched canonical against `gi.blob_id` — so the
+add would find nothing, mint a second clone and skip the same-album 409.
 
-`list_gallery_items` publishes `blob_id` as
-`COALESCE(gi.encrypted_blob_id, p.encrypted_blob_id, gi.blob_id)` — the *clone's
-encrypted* blob for a server-side photo whose clone has since been encrypted, not
-the raw `gi.blob_id`. Both clients' push-add sends that value back to
-`add_gallery_item`. There, `candidate_original_id` resolves it to the clone's own
-`photos` row (`= gi.blob_id`), and `SECURE_MEMBERSHIP_MATCH` is
-`(gi.original_blob_id = ?1 OR gi.blob_id = ?2)` — canonical is never matched
-against `gi.blob_id`. If that reading is right, the add finds **no** membership
-and therefore neither adopts the clone (a second full clone: double storage, a
-second decrypt+encrypt of a possibly multi-gigabyte video, and two physically
-different files so an edit in one album cannot reach the other) **nor 409s on a
-same-album duplicate**, which would break the one half of the invariant Z1 kept.
+**There is no live double-clone.** Driven end to end on the *autoscanned* shape
+(`test_94::TestThePublishedIdRoundTrips`, the id space the file had never
+exercised) against a tree with the old correlation restored: **all three tests
+passed.** The prediction's missing step is one file over —
+`server_migrate_encrypt::encrypt_one_photo` **dedups on plaintext content hash**,
+and a secure clone is a byte-for-byte copy, so the clone is handed the
+*original's* encrypted blob rather than getting one of its own. That file's own
+comment names the case ("when a secure-gallery clone shares the same
+`content_hash` as the original"). The published id is therefore the **original's**
+encrypted blob, which resolves to the **original's** photo id — the one value
+`gi.original_blob_id = ?1` already matched.
 
-Why it is plausible that this is live and unnoticed:
-- `test_94` adds with the **original** client-uploaded blob id, where
-  `gi.encrypted_blob_id == gi.blob_id`, so the published id *is* the clone id and
-  adoption works. The tested path and the UI path are different id spaces —
-  todo.md's own "verify the *id space*, not just the call shape" risk, again.
-- CT132 is ~13k **autoscanned** photos, i.e. entirely the untested shape.
+**But the dedup is what creates the real defect, one level down.** Because the
+original and the clone now **share** an `encrypted_blob_id`, the resolver's
+`SELECT id FROM photos WHERE encrypted_blob_id = ?` matches **two rows with no
+`ORDER BY`**. It returns the original today by insertion order, *not by
+contract*. The clone-id answer is equally admissible — a re-created or trashed
+original, or an index that changes the scan order, produces it — and on the old
+correlation that answer found nothing. So the behaviour was correct by accident,
+and the accident was row order.
 
-The suspected fix is one clause (`gi.blob_id = ?1` as well), since a clone id is a
-fresh UUID and cannot collide with an unrelated photo id — but **do not apply it
-before a RED test reproduces the miss.**
+- [x] Widened `SECURE_MEMBERSHIP_MATCH` to
+      `(gi.original_blob_id = ?1 OR gi.blob_id = ?1 OR gi.blob_id = ?2)`, so the
+      add behaves identically whichever row the planner returns. Safe because a
+      clone id is a fresh v4 UUID and the lookup is owner-scoped.
+- [x] **Rejected adding an `ORDER BY` to the resolver.** It would pin an
+      arbitrary winner rather than remove the dependence on one — a false fix
+      that reads like a real one. Stated in the resolver's own doc, because
+      "this query should be deterministic" is exactly the tidy-up that would
+      replace the real fix with the fake one.
+- [x] Extracted `resolve_canonical_original_id` and shared
+      `SECURE_ITEM_PUBLISHED_BLOB_ID` + `SECURE_ITEM_CLONE_JOIN` (the COALESCE
+      and its join were typed **twice**, once per feed — a twelfth instance of
+      the two-derivations risk, and the one that mattered here: the test can now
+      resolve an id through the *real* expression instead of a hand-typed copy,
+      which is the only reason this was reachable by a test at all).
+- [x] Tests: 3 server unit + 3 E2E (555 green, was 552). Verified RED on the
+      unit half: with the old correlation, `the_published_id_correlates_whichever_
+      row_resolution_returns` and `re_adding_..._is_still_a_duplicate` fail on
+      **exactly the `clone-1` arm** (`left: 0, right: 1`) while the `photo-1`
+      arm — the answer the resolver really returns — stays green. That split is
+      the finding, stated as a test.
+- [x] **The E2E is a round-trip guard, not the RED proof, and says so in its own
+      docstring.** It passes on both trees. Kept because the file had *no*
+      coverage of the autoscanned id space at all, and because it fails the day
+      the dedup, the COALESCE or the resolver changes which row wins —
+      `test_the_published_id_is_the_originals_encrypted_blob` asserts the shared
+      blob directly, so the disproof is pinned rather than remembered.
+- [x] **Web's dead `planSecureMovesToTarget` deleted**, with its three tests —
+      exported and tested, called by nothing since `56f995c` switched the push to
+      adds. Android's twin went in Z1e. `resolveSecureMoves` is **kept**: it is
+      still live in `SecureGallery.tsx`. 319 web tests green (was 322).
 
-Also found, and smaller: **web's `planSecureMovesToTarget` is dead** — exported
-and tested, called by nothing since `56f995c` switched the push to adds. Same
-shape as Z1's half-wiring one level down. Android's twin was deleted in Z1e; web's
-was left alone to keep that commit Android-only.
+> **The lesson is not the one Z1f expected.** "Verify the *id space*, not just
+> the call shape" found a real untested id space — but the reading of that space
+> was itself unverified, and it was wrong in the *alarming* direction. A
+> suspicion written up with a mechanism reads as a finding; this one survived
+> into a todo file as a probable data-loss bug for a day. **The RED run is what
+> distinguishes a mechanism from a story**, and here the honest RED was on the
+> unit test, not the E2E that looked more authoritative.
 
 ---
 
@@ -1215,6 +1249,26 @@ list exists.
   confidentiality bug; both would have drifted. The cheap time to share is the
   commit that needs the second copy — every entry above is what happens when it
   is not.
+  **Twelfth instance: Z1f's published-id expression.** The
+  `COALESCE(gi.encrypted_blob_id, p.encrypted_blob_id, gi.blob_id)` deciding what
+  id a client is handed, plus the `LEFT JOIN photos p` that makes it meaningful,
+  were typed **twice** — once per secure feed. Shared as
+  `SECURE_ITEM_PUBLISHED_BLOB_ID` / `SECURE_ITEM_CLONE_JOIN`. The payoff was not
+  drift-prevention but **testability**: a test that re-types the expression
+  asserts against its own copy of the derivation, which is how this id space
+  stayed untested through Z1, Z1d and Z1e. **When a test must compute the value
+  under test, it has to get it from the code, not from your reading of it.**
+- **A suspicion with a mechanism reads as a finding — RED is what separates
+  them.** Z1f sat in this file for a day as a probable data-loss bug, written
+  with a plausible step-by-step mechanism and a named fix. The mechanism was
+  wrong at step two (content-hash dedup hands the clone the *original's*
+  encrypted blob, so the published id resolves to the original after all), and
+  the E2E built to reproduce it **passed on the unfixed tree**. There was still a
+  real defect underneath — the resolver matches two rows with no `ORDER BY`, so
+  the correct behaviour was an accident of insertion order — but it is a
+  robustness bug, not the data-loss one advertised. **Write suspicions as
+  questions, and do not let a mechanism into this file without the run that
+  produced it.**
 - **A tested helper with no call site is worse than no helper.** Z1 shipped
   `secureRemovalPrompt` fully unit-tested and wired into nothing, while the
   component kept the sentence the helper existed to kill; the green suite is what
