@@ -180,15 +180,29 @@ Membership and photos are untouched.
 | `DELETE` | `/api/galleries/secure/{id}` | Bearer | — | **204** |
 | `GET` | `/api/galleries/secure/{id}/items` | Bearer | Header: `x-gallery-token` | `{ items: [SecureItem] }` |
 | `GET` | `/api/galleries/secure/items` | Bearer | Header: `x-gallery-token` | `{ items: [SecureItem] }` (every album; adds `gallery_name`) |
-| `POST` | `/api/galleries/secure/{id}/items` | Bearer | `{ blob_id }` | **201** `{ item_id }` |
-| `DELETE` | `/api/galleries/secure/{id}/items/{item_id}` | Bearer | — | **204** (cloned blob deleted; original photo returns to the gallery) |
+| `POST` | `/api/galleries/secure/{id}/items` | Bearer | `{ blob_id }` | **201** `{ item_id, new_blob_id, adopted? }` — **409** if already in *this* album |
+| `DELETE` | `/api/galleries/secure/{id}/items/{item_id}` | Bearer | — | **204** (drops the membership; bytes and hiding survive while another album holds it) |
 
 **SecureItem fields:** `id, blob_id, added_at, gallery_id, gallery_name?,
-encrypted_thumb_blob_id, width, height, media_type, photo_subtype, burst_id,
-duration_secs, motion_video_blob_id, crop_metadata, renditions`
+galleries, encrypted_thumb_blob_id, width, height, media_type, photo_subtype,
+burst_id, duration_secs, motion_video_blob_id, crop_metadata, renditions`
 
-> `gallery_name` is set only by the aggregate `/items` feed (the smart-album
-> header). The subtype/burst/duration/motion fields are read from the **hidden
+> **A photo may be in several secure albums (Z1).** `gallery_id` names the album
+> this row is filed in — on the aggregate feed that is the *oldest* membership,
+> because the feed collapses the others into one tile. `galleries` is the full
+> set, `[{ id, name }]`, **oldest membership first**, and both feeds publish it
+> with the same meaning; `gallery_name` is the singular legacy field and is set
+> only by the aggregate `/items` feed.
+>
+> Read `galleries` before confirming a removal. `DELETE …/items/{item_id}` drops
+> **one membership**: with siblings remaining, the clone's bytes are kept and the
+> original stays hidden from the main gallery; only the last removal un-secures
+> the photo. A client that tells the user "this returns to your regular gallery"
+> without checking is stating something false about hidden media. An empty or
+> absent array means *unknown* (a pre-Z1 server) — it does not mean "no other
+> album", and must not be read as licence to make that promise.
+>
+> The subtype/burst/duration/motion fields are read from the **hidden**
 > original**, not the clone — see `list_gallery_items` — which is what lets the
 > secure viewer play videos, pan panoramas and collapse bursts like the main
 > gallery does. `crop_metadata` is the opposite: it lives on the item itself

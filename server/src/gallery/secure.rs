@@ -116,6 +116,67 @@ pub async fn clone_is_shared(
     Ok(shared)
 }
 
+/// One `(clone, gallery)` pair — a membership, named by the album that holds it.
+#[derive(Debug, Clone, FromRow)]
+struct CloneMembershipRow {
+    clone_blob_id: String,
+    gallery_id: String,
+    gallery_name: String,
+}
+
+/// Every secure album each clone in `gallery_id` is filed in, keyed by the clone
+/// blob id, **oldest membership first** — the same order and the same meaning as
+/// [`CollapsedItem::galleries`], so one field name means one thing on both feeds.
+///
+/// This exists because the per-album feed could not answer a question Z1 made
+/// unavoidable: **removing a photo from one secure album now does two entirely
+/// different things** depending on whether another album still holds it (leaves
+/// the secure domain vs. stays secured and hidden), and a confirmation that
+/// picks the wrong one tells the user they exposed something they did not, or
+/// hid something they did not.
+///
+/// The alternative was to let each client join the per-album listing against the
+/// aggregate feed it already holds. That works only by an accident of the schema
+/// — an adoption copies `encrypted_blob_id` and `original_blob_id` verbatim, so
+/// the two feeds' `COALESCE`d `blob_id`s happen to agree — and it is a second
+/// derivation of membership in every client, which is the drift this file has
+/// already refused once (`planSecureAddsToTarget` declines to guess the same
+/// fact). Ten instances of that shape are recorded in `todo.md`. One query here
+/// is cheaper than two clients agreeing forever.
+async fn memberships_by_clone(
+    pool: &sqlx::SqlitePool,
+    user_id: &str,
+    gallery_id: &str,
+) -> Result<std::collections::HashMap<String, Vec<(String, String)>>, AppError> {
+    // Scoped to this user's galleries on the OUTER query, which is what makes
+    // the answer safe to publish: the inner set is only "which clones does the
+    // (already ownership-checked) open album contain", and every album named in
+    // the result had to clear `g.user_id`.
+    let rows = sqlx::query_as::<_, CloneMembershipRow>(
+        "SELECT gi.blob_id as clone_blob_id, gi.gallery_id, g.name as gallery_name \
+         FROM encrypted_gallery_items gi \
+         JOIN encrypted_galleries g ON g.id = gi.gallery_id \
+         WHERE g.user_id = ?1 \
+           AND gi.blob_id IN (\
+             SELECT blob_id FROM encrypted_gallery_items WHERE gallery_id = ?2\
+           ) \
+         ORDER BY gi.added_at ASC",
+    )
+    .bind(user_id)
+    .bind(gallery_id)
+    .fetch_all(pool)
+    .await?;
+
+    let mut out: std::collections::HashMap<String, Vec<(String, String)>> =
+        std::collections::HashMap::new();
+    for r in rows {
+        out.entry(r.clone_blob_id)
+            .or_default()
+            .push((r.gallery_id, r.gallery_name));
+    }
+    Ok(out)
+}
+
 /// One row of the aggregate secure feed: an item plus the gallery it is filed
 /// in. A photo in N secure albums produces N of these.
 #[derive(Debug, Clone, FromRow)]
@@ -1091,6 +1152,11 @@ pub async fn list_gallery_items(
     struct GalleryItemRow {
         id: String,
         blob_id: String,
+        /// Identity key for the membership lookup — the clone blob every
+        /// membership of one photo shares. Selected raw rather than `COALESCE`d
+        /// like `blob_id`, for the same reason the aggregate feed does it: it is
+        /// precisely the column an adoption reuses.
+        clone_blob_id: String,
         added_at: String,
         encrypted_thumb_blob_id: Option<String>,
         width: Option<i64>,
@@ -1109,6 +1175,7 @@ pub async fn list_gallery_items(
     let items = sqlx::query_as::<_, GalleryItemRow>(
         "SELECT gi.id, \
                 COALESCE(gi.encrypted_blob_id, p.encrypted_blob_id, gi.blob_id) as blob_id, \
+                gi.blob_id as clone_blob_id, \
                 gi.added_at, \
                 COALESCE(gi.encrypted_thumb_blob_id, p.encrypted_thumb_blob_id, op.encrypted_thumb_blob_id) as encrypted_thumb_blob_id, \
                 COALESCE(p.width, op.width) as width, \
@@ -1139,14 +1206,35 @@ pub async fn list_gallery_items(
     )
     .await?;
 
+    // Every album each of these photos is in (Z1) — one query, not one per row.
+    let memberships = memberships_by_clone(&state.pool, &auth.user_id, &gallery_id).await?;
+
     let items_json: Vec<serde_json::Value> = items
         .iter()
         .map(|r| {
+            // A miss is unreachable — this row is itself one of the memberships
+            // the map was built from — so the empty fallback exists only so a
+            // future refactor of the query cannot silently publish a *wrong*
+            // count. Empty means "unknown", and a client must treat it as such:
+            // the one thing it may not do is read 0 as "no other album" and
+            // promise the photo leaves the secure domain.
+            let galleries_json: Vec<serde_json::Value> = memberships
+                .get(&r.clone_blob_id)
+                .map(|gs| {
+                    gs.iter()
+                        .map(|(id, name)| serde_json::json!({ "id": id, "name": name }))
+                        .collect()
+                })
+                .unwrap_or_default();
             serde_json::json!({
                 "id": r.id,
                 "blob_id": r.blob_id,
                 "added_at": r.added_at,
                 "gallery_id": gallery_id,
+                // Same field, same meaning and same order as the aggregate feed
+                // publishes. A client must not have to know which endpoint it
+                // came from to interpret it.
+                "galleries": galleries_json,
                 "renditions": ladders.remove(&r.id).unwrap_or_default(),
                 "encrypted_thumb_blob_id": r.encrypted_thumb_blob_id,
                 "width": r.width,
@@ -1744,6 +1832,128 @@ mod tests {
             !clone_is_shared(&pool, "u1", "clone-1", "i1").await.unwrap(),
             "another user's row must not pin this user's clone — clones are \
              never shared across users, so that can only be a bug"
+        );
+    }
+
+    // ── Z1: the per-album feed answers "which albums is this in" ────────────
+    //
+    // These drive `memberships_by_clone` itself rather than a copy of its SQL.
+    // What hangs off the answer is not a listing detail: it decides whether a
+    // removal confirmation may promise the photo becomes visible in the regular
+    // gallery, and that promise is false the moment a second album holds it.
+
+    #[tokio::test]
+    async fn a_multi_album_photo_names_every_album_it_is_in() {
+        let pool = mem_pool().await;
+        insert_gallery(&pool, "g1", "u1").await;
+        insert_gallery(&pool, "g2", "u1").await;
+        // One clone, two memberships — what an adoption produces.
+        insert_shared_item(
+            &pool,
+            "i1",
+            "g1",
+            "clone-1",
+            "photo-1",
+            "2026-08-01T00:00:00Z",
+        )
+        .await;
+        insert_shared_item(
+            &pool,
+            "i2",
+            "g2",
+            "clone-1",
+            "photo-1",
+            "2026-08-02T00:00:00Z",
+        )
+        .await;
+
+        let map = memberships_by_clone(&pool, "u1", "g1").await.unwrap();
+        let got = map.get("clone-1").expect("the open album's own clone");
+
+        assert_eq!(
+            got,
+            &vec![
+                ("g1".to_string(), "gallery-g1".to_string()),
+                ("g2".to_string(), "gallery-g2".to_string()),
+            ],
+            "both albums, oldest membership first — the same order and meaning \
+             `CollapsedItem::galleries` publishes on the aggregate feed"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_single_album_photo_names_only_itself() {
+        // The vacuity guard for the test above, and the arm that carries the
+        // user-visible consequence: exactly one membership is what licenses a
+        // client to say "this returns to your regular gallery". A query that
+        // over-matched would pass the multi-album assertion while making every
+        // ordinary removal claim the photo stays secured.
+        let pool = mem_pool().await;
+        insert_gallery(&pool, "g1", "u1").await;
+        insert_gallery(&pool, "g2", "u1").await;
+        insert_shared_item(
+            &pool,
+            "i1",
+            "g1",
+            "clone-1",
+            "photo-1",
+            "2026-08-01T00:00:00Z",
+        )
+        .await;
+        // A different photo, filed elsewhere. Must not bleed in.
+        insert_shared_item(
+            &pool,
+            "i2",
+            "g2",
+            "clone-2",
+            "photo-2",
+            "2026-08-02T00:00:00Z",
+        )
+        .await;
+
+        let map = memberships_by_clone(&pool, "u1", "g1").await.unwrap();
+
+        assert_eq!(map.get("clone-1").map(Vec::len), Some(1));
+        assert!(
+            !map.contains_key("clone-2"),
+            "a clone the open album does not hold is not this listing's business"
+        );
+    }
+
+    #[tokio::test]
+    async fn membership_naming_is_scoped_to_the_owner() {
+        // Clones are never shared across users, so a foreign row on the same
+        // blob id can only be a bug — and here it would be a *disclosing* one:
+        // the album names in this map are rendered verbatim in a confirmation
+        // dialog, so an unscoped query would print a stranger's album name.
+        let pool = mem_pool().await;
+        insert_gallery(&pool, "mine", "u1").await;
+        insert_gallery(&pool, "theirs", "u2").await;
+        insert_shared_item(
+            &pool,
+            "i1",
+            "mine",
+            "clone-1",
+            "photo-1",
+            "2026-08-01T00:00:00Z",
+        )
+        .await;
+        insert_shared_item(
+            &pool,
+            "i2",
+            "theirs",
+            "clone-1",
+            "photo-1",
+            "2026-08-02T00:00:00Z",
+        )
+        .await;
+
+        let map = memberships_by_clone(&pool, "u1", "mine").await.unwrap();
+
+        assert_eq!(
+            map.get("clone-1"),
+            Some(&vec![("mine".to_string(), "gallery-mine".to_string())]),
+            "only the owner's albums may be named"
         );
     }
 
