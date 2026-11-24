@@ -52,6 +52,8 @@ class SecureRemovalWiringTest {
         source("com/simplephotos/ui/screens/securegallery/SecurePhotoViewer.kt")
     private val albumDetailScreen =
         source("com/simplephotos/ui/screens/album/AlbumDetailScreen.kt")
+    private val galleryListView =
+        source("com/simplephotos/ui/screens/securegallery/GalleryListView.kt")
 
     @Test
     fun `the secure removal prompt has a call site`() {
@@ -156,6 +158,21 @@ class SecureRemovalWiringTest {
         assertTrue(
             "and the header must offer the add the report asked for",
             albumDetailScreen.contains("AlbumPickerDialog("),
+        )
+    }
+
+    @Test
+    fun `deleting a secure album asks first, in web's words (S4)`() {
+        // It used to arm a destructive delete on the first tap and fire on the
+        // second, with no dialog and no statement of what happens to the photos.
+        assertTrue(
+            "the album list must ask AlbumRemoval what to say before deleting",
+            galleryListView.contains("AlbumRemoval.secureAlbumDeletePrompt(") &&
+                galleryListView.contains("AlertDialog("),
+        )
+        assertFalse(
+            "the two-tap delete must be gone",
+            galleryListView.contains("Tap again to confirm delete"),
         )
     }
 }

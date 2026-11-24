@@ -29,6 +29,7 @@ import com.simplephotos.R
 import com.simplephotos.data.SecureSmartAlbum
 import com.simplephotos.data.remote.dto.SecureGallery
 import com.simplephotos.data.remote.dto.SecureGalleryItem
+import com.simplephotos.ui.screens.album.AlbumRemoval
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Gallery List View
@@ -52,7 +53,27 @@ internal fun GalleryListView(
     val smartAlbums = viewModel.smartAlbums
     var showCreate by remember { mutableStateOf(false) }
     var newName by remember { mutableStateOf("") }
-    var confirmDeleteId by remember { mutableStateOf<String?>(null) }
+    // The album awaiting a yes/no (S4). This used to be a "tap the icon again"
+    // id that silently armed a destructive delete and never said what it does.
+    var pendingDelete by remember { mutableStateOf<SecureGallery?>(null) }
+
+    pendingDelete?.let { gallery ->
+        val prompt = AlbumRemoval.secureAlbumDeletePrompt(gallery.name)
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text(prompt.title) },
+            text = { Text(prompt.body) },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingDelete = null
+                    onDeleteGallery(gallery)
+                }) { Text("Delete album", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = null }) { Text("Cancel") }
+            }
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -225,14 +246,7 @@ internal fun GalleryListView(
                                     )
                                 }
                                 Surface(
-                                    onClick = {
-                                        if (confirmDeleteId == gallery.id) {
-                                            onDeleteGallery(gallery)
-                                            confirmDeleteId = null
-                                        } else {
-                                            confirmDeleteId = gallery.id
-                                        }
-                                    },
+                                    onClick = { pendingDelete = gallery },
                                     modifier = Modifier
                                         .align(Alignment.TopEnd)
                                         .padding(8.dp)
@@ -243,12 +257,8 @@ internal fun GalleryListView(
                                     Box(contentAlignment = Alignment.Center) {
                                         Icon(
                                             Icons.Default.Delete,
-                                            contentDescription = if (confirmDeleteId == gallery.id)
-                                                "Tap again to confirm delete" else "Delete",
-                                            tint = if (confirmDeleteId == gallery.id)
-                                                MaterialTheme.colorScheme.error
-                                            else
-                                                Color.White,
+                                            contentDescription = "Delete secure album",
+                                            tint = Color.White,
                                             modifier = Modifier.size(18.dp)
                                         )
                                     }

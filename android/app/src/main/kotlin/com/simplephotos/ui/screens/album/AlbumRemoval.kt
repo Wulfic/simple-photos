@@ -193,6 +193,23 @@ object AlbumRemoval {
         )
     }
 
+    /**
+     * Deleting a whole SECURE album (TODO.md S4).
+     *
+     * Genuinely destructive, unlike removing one item: dropping the last
+     * membership of a clone takes its bytes with it. This screen used to delete
+     * on a second tap of the trash icon — no dialog, no statement of outcome —
+     * while web asked with exactly these words. Mirrors web's
+     * `secureAlbumDeletePrompt`; both test files assert the strings verbatim, so
+     * the two cannot drift without a red test on one side.
+     */
+    fun secureAlbumDeletePrompt(albumName: String): RemovalPrompt = RemovalPrompt(
+        title = "Delete secure album “$albumName”?",
+        body = "Every photo in this album will be removed from it. Photos that are also in " +
+            "another secure album stay secured there; the rest return to your regular " +
+            "gallery. The album itself is deleted.",
+    )
+
     private fun photoCount(n: Int): String = "$n photo${if (n == 1) "" else "s"}"
 
     private fun where(albumName: String?, fallback: String): String =

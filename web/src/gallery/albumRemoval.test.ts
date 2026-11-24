@@ -6,6 +6,7 @@ import {
   albumRemovalPrompt,
   secureRemovalPrompt,
   secureRemovalToast,
+  secureAlbumDeletePrompt,
   otherSecureAlbumCount,
 } from "./albumRemoval";
 
@@ -136,6 +137,18 @@ describe("secureRemovalPrompt", () => {
 
   it("names the generic album when the batch spans albums", () => {
     expect(secureRemovalPrompt([0, 0], undefined).title).toContain("this secure album");
+  });
+});
+
+describe("secureAlbumDeletePrompt (S4)", () => {
+  it("says exactly what Android says — the two strings are asserted verbatim on both sides", () => {
+    const p = secureAlbumDeletePrompt("Private");
+    expect(p.title).toBe("Delete secure album “Private”?");
+    expect(p.body).toBe(
+      "Every photo in this album will be removed from it. Photos that are also in " +
+        "another secure album stay secured there; the rest return to your regular " +
+        "gallery. The album itself is deleted.",
+    );
   });
 });
 

@@ -158,4 +158,18 @@ class AlbumRemovalTest {
         val v = AlbumRemoval.secureRemovalPrompt(listOf(0), null)
         assertEquals("Remove 1 photo from this secure album?", v.prompt.title)
     }
+
+    @Test
+    fun `deleting a secure album says exactly what web says (S4)`() {
+        // Verbatim on purpose: web's albumRemoval.test.ts asserts the same two
+        // strings, so the clients cannot drift without a red test on one side.
+        val p = AlbumRemoval.secureAlbumDeletePrompt("Private")
+        assertEquals("Delete secure album “Private”?", p.title)
+        assertEquals(
+            "Every photo in this album will be removed from it. Photos that are also in " +
+                "another secure album stay secured there; the rest return to your regular " +
+                "gallery. The album itself is deleted.",
+            p.body,
+        )
+    }
 }

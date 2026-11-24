@@ -169,6 +169,25 @@ export function secureRemovalPrompt(
 }
 
 /**
+ * Deleting a whole SECURE album.
+ *
+ * Genuinely destructive, unlike removing one item: dropping the last membership
+ * of a clone takes its bytes with it. Shared with Android
+ * (`AlbumRemoval.secureAlbumDeletePrompt`), which used to delete on a second tap
+ * of the trash icon with no dialog and no statement of outcome (TODO.md S4) —
+ * both clients must say the same thing, word for word.
+ */
+export function secureAlbumDeletePrompt(albumName: string): RemovalPrompt {
+  return {
+    title: `Delete secure album “${albumName}”?`,
+    body:
+      `Every photo in this album will be removed from it. Photos that are also in ` +
+      `another secure album stay secured there; the rest return to your regular ` +
+      `gallery. The album itself is deleted.`,
+  };
+}
+
+/**
  * The success message after a secure removal, from the SAME per-item counts the
  * prompt was built from — a toast derived separately is how "Photo returned to
  * your gallery" came to be shown for photos that stayed secured (Z1d). Only call

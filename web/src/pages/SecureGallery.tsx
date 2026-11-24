@@ -54,6 +54,7 @@ import {
   otherSecureAlbumCount,
   secureRemovalPrompt,
   secureRemovalToast,
+  secureAlbumDeletePrompt,
   type SecureRemovalVerdict,
 } from "../gallery/albumRemoval";
 
@@ -1223,12 +1224,8 @@ export default function SecureGallery() {
           because this one really can destroy bytes — see `handleDelete`. */}
       {pendingDelete && (
         <ConfirmDialog
-          title={`Delete secure album “${pendingDelete.name}”?`}
-          body={
-            `Every photo in this album will be removed from it. Photos that are ` +
-            `also in another secure album stay secured there; the rest return to ` +
-            `your regular gallery. The album itself is deleted.`
-          }
+          title={secureAlbumDeletePrompt(pendingDelete.name).title}
+          body={secureAlbumDeletePrompt(pendingDelete.name).body}
           confirmLabel="Delete album"
           cancelLabel="Cancel"
           tone="danger"
