@@ -398,12 +398,15 @@ class BackupWorker @AssistedInject constructor(
                                 ))
                                 uploaded++
                             } catch (e: Exception) {
-                                diag.warn(TAG, "Failed to register hash-dedup copy: ${e.message}", mapOf(
+                                // FAILED, not SYNCED: a row marked synced with no
+                                // server identity is never retried and never
+                                // matches its twin, so it stays a separate tile.
+                                diag.warn(TAG, "Failed to register hash-dedup copy — will retry: ${e.message}", mapOf(
                                     "localId" to photo.localId,
                                     "contentHash" to contentHash
                                 ))
-                                db.photoDao().updateSyncStatus(photo.localId, SyncStatus.SYNCED)
-                                skipped++
+                                db.photoDao().updateSyncStatus(photo.localId, SyncStatus.FAILED)
+                                failed++
                             }
                         } else {
                             diag.debug(TAG, "Skipping ${photo.filename} — duplicate content hash", mapOf(
@@ -413,16 +416,15 @@ class BackupWorker @AssistedInject constructor(
                             db.photoDao().updateSyncStatus(photo.localId, SyncStatus.SYNCED)
                             skipped++
                         }
-                        if (photo.photoHash == null) {
-                            db.photoDao().update(photo.copy(photoHash = contentHash))
-                        }
+                        // Column write, never a whole-row `update(photo.copy(…))`:
+                        // `photo` predates the markSynced above, and writing it
+                        // back reverted the row to PENDING (TODO.md D4).
+                        db.photoDao().setPhotoHashIfMissing(photo.localId, contentHash)
                         continue
                     }
 
                     // Store hash in entity for future dedup
-                    if (photo.photoHash == null) {
-                        db.photoDao().update(photo.copy(photoHash = contentHash))
-                    }
+                    db.photoDao().setPhotoHashIfMissing(photo.localId, contentHash)
 
                     diag.debug(TAG, "Prepared ${photo.filename} for upload", mapOf(
                         "localId" to photo.localId,
@@ -485,8 +487,10 @@ class BackupWorker @AssistedInject constructor(
                                     || orient == androidx.exifinterface.media.ExifInterface.ORIENTATION_TRANSPOSE
                                     || orient == androidx.exifinterface.media.ExifInterface.ORIENTATION_TRANSVERSE
                             if (needsSwap && photo.width > 0 && photo.height > 0 && photo.width > photo.height) {
+                                // Column write: a whole-row update here wiped the
+                                // thumbnailPath saved just above (and the hash).
                                 photo.copy(width = photo.height, height = photo.width).also {
-                                    db.photoDao().update(it)
+                                    db.photoDao().updateDimensions(it.localId, it.width, it.height)
                                 }
                             } else photo
                         } catch (_: Exception) { photo }

@@ -53,6 +53,22 @@ interface PhotoDao {
     suspend fun updateSyncStatus(id: String, status: SyncStatus)
 
     /**
+     * Record a row's content hash WITHOUT touching any other column.
+     *
+     * The backup pass used to write `photo.copy(photoHash = …)` through [update]
+     * — a whole-row replace from the snapshot it took at pass start. Right after
+     * a hash-dedup registration that snapshot still said PENDING with no server
+     * ids, so the write reverted the row it had just synced, and the next pass
+     * registered or fully re-uploaded it again (3,837 rows on 2026-11-17).
+     */
+    @Query("UPDATE photos SET photoHash = :hash WHERE localId = :localId AND photoHash IS NULL")
+    suspend fun setPhotoHashIfMissing(localId: String, hash: String)
+
+    /** Correct a row's display dimensions WITHOUT touching any other column (see [setPhotoHashIfMissing]). */
+    @Query("UPDATE photos SET width = :width, height = :height WHERE localId = :localId")
+    suspend fun updateDimensions(localId: String, width: Int, height: Int)
+
+    /**
      * Reset photos stuck at UPLOADING (from a crash) back to PENDING so they get retried.
      * Only resets photos that haven't already been successfully uploaded
      * (no serverBlobId and no serverPhotoId) — prevents re-uploading duplicates.

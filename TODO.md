@@ -34,6 +34,13 @@ simple-photos-server`, `npx vitest run` + `npx tsc -b` in `web/`,
   **no** `serverPhotoId`, so the twins are never collapsed.
 - **D3 Re-upload of what the server already has.** 4,565 of 5,078 uploaded filenames
   already existed server-side before 11-17. Bytes travel, then the server discards them.
+- **D4 Stale whole-row writes revert synced rows** (found while implementing P3). The
+  hash-dedup branch ran `update(photo.copy(photoHash = …))` from the pass-start
+  snapshot right after `markSynced`, so the row went back to PENDING with no server
+  ids. Logs: row `6bd7bd62` uploaded 10:50, re-registered 11:19, picked up *again* by a
+  new pass at 14:38; 3,837 rows went register → full re-upload. The EXIF dimension fix
+  did the same and wiped the just-saved thumbnail path; a failed copy registration was
+  marked SYNCED with no server id (a permanent separate tile).
 - **S1 Secure leak on Android main grid.** 158 of those registrations landed on photos
   hidden by secure albums. `excludeSecure` matches only `serverBlobId`; the server hides
   by `photos.id NOT IN (original_blob_id)` and `/galleries/secure/blob-ids` already
@@ -50,10 +57,15 @@ simple-photos-server`, `npx vitest run` + `npx tsc -b` in `web/`,
 - **S6 Web secure viewer has no "Remove from secure album"** (Android's does).
 
 ### Plan — one commit each, in this order
-- [ ] **P1 server** `register-encrypted` duplicate responses also return the existing
-      photo's `encrypted_blob_id` / `encrypted_thumb_blob_id`. Additive; old clients ignore.
-- [ ] **P2 android (D1)** single-flight `BackupWorker`: process-wide gate, a skipped run
-      still re-arms the reactive trigger. Pure gate + wiring guard test.
+- [x] **P1 server** `register-encrypted` duplicate responses also return the existing
+      photo's `encrypted_blob_id` / `encrypted_thumb_blob_id`. Additive; old clients
+      ignore. `9c3a7a0` — test_95 RED on both duplicate arms, GREEN 3/3.
+- [x] **P2 android (D1)** single-flight `BackupWorker`: process-wide gate, a skipped run
+      still re-arms the reactive trigger; each row re-read before upload. `88fa1f1` —
+      6 tests, RED = exactly the wiring guard.
+- [x] **P2b android (D4)** column writes (`setPhotoHashIfMissing`, `updateDimensions`)
+      instead of whole stale rows; a failed copy registration is FAILED (retried), not
+      SYNCED. Source guard: RED 3/3 on the old worker.
 - [ ] **P3 android (D2)** one Room row per `serverPhotoId`: pure `resolveTwins` planner
       (keep the device row, adopt the server row's canonical blob ids/state, delete the
       rest + their thumb files); run targeted after every register, plus one sweep per
