@@ -27,6 +27,7 @@ import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
 import com.simplephotos.crypto.ChunkedBlob
 import com.simplephotos.data.local.AppDatabase
+import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.local.entities.SyncStatus
 import com.simplephotos.data.remote.ApiService
 import com.simplephotos.data.repository.PhotoRepository
@@ -74,6 +75,9 @@ class BackupWorker @AssistedInject constructor(
         // upload alive past Doze/background limits.
         private const val NOTIF_CHANNEL_ID = "photo_backup_progress"
         private const val NOTIF_ID = 4711
+
+        /** Process-wide: every BackupWorker instance in this process shares it. */
+        private val backupGate = SingleFlight()
     }
 
     /**
@@ -136,7 +140,25 @@ class BackupWorker @AssistedInject constructor(
         }
     }
 
-    override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+    /**
+     * Single-flight entry point (TODO.md D1): periodic, reactive and "back up
+     * now" are separately-named unique works and WorkManager runs them side by
+     * side, so the gate is what keeps two passes off the same pending rows.
+     */
+    override suspend fun doWork(): Result {
+        val result = backupGate.runExclusive { runBackupPass() }
+        if (result != null) return result
+        Log.i(TAG, "Another backup pass is already running in this process — skipping this trigger")
+        // A skipped run must still re-arm the reactive content-URI trigger: it is
+        // a one-shot that only a finishing pass re-registers, and if THIS run was
+        // the reactive one, nothing else would — new photos would then wait for
+        // the 15-minute periodic instead of backing up within seconds.
+        val wifiOnly = dataStore.data.first()[KEY_WIFI_ONLY_BACKUP] ?: true
+        SyncScheduler.rescheduleReactive(applicationContext, wifiOnly)
+        return Result.success()
+    }
+
+    private suspend fun runBackupPass(): Result = withContext(Dispatchers.IO) {
         val prefs = dataStore.data.first()
         // The server is the authority for client diagnostics (admins toggle it
         // centrally and SettingsViewModel mirrors it locally). Query it at backup
@@ -227,7 +249,20 @@ class BackupWorker @AssistedInject constructor(
             var failed = 0
             var purged = 0
 
-            for (photo in genuinelyPending) {
+            for (snapshot in genuinelyPending) {
+                // Re-read: this list was taken at pass start, and a long batch
+                // outlives it (manual import uploads its own rows; an earlier
+                // hash-dedup or twin collapse may already have settled this one).
+                val current = db.photoDao().getById(snapshot.localId)
+                if (current == null || !stillNeedsUpload(current)) {
+                    diag.debug(TAG, "Skipping ${snapshot.filename} — settled since this pass began", mapOf(
+                        "localId" to snapshot.localId,
+                        "status" to (current?.syncStatus?.name ?: "gone")
+                    ))
+                    skipped++
+                    continue
+                }
+                val photo: PhotoEntity = current
                 val localPath = photo.localPath
                 if (localPath == null) {
                     diag.warn(TAG, "Photo has no localPath, skipping", mapOf(
