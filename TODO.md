@@ -1,0 +1,102 @@
+# TODO — Open work
+
+> The previous `todo.md` / `todo-completed.md` were deleted in `f6c9ded` ("stuff",
+> 2026-11-23). They are the record of *why* most of the current code looks the way it
+> does (fourteen plans that were wrong before they were right). Recover with
+> `git show f6c9ded^:todo.md` / `git show f6c9ded^:todo-completed.md` before
+> re-planning anything in an area they cover.
+
+**Ground rules (unchanged):** one conventional commit per issue on `dev`; every fix
+ships with a test that fails without it; never commit red — `cargo test --bin
+simple-photos-server`, `npx vitest run` + `npx tsc -b` in `web/`,
+`.\gradlew.bat :app:testDebugUnitTest`, and the touched `tests/` E2E files.
+
+---
+
+## 1. Session 2026-11-23 — Android duplicates + secure alignment (Tier 2)
+
+### Baseline (measured at start, `f6c9ded`)
+- All suites green: server 555, web 319 + clean `tsc`, Android unit tests pass.
+  IDE Problems panel: 0 errors / 0 warnings. "Lots of errors" = behaviour, not build.
+- CT132 runs `228b98b` (v1.7.0, image 2026-08-05). Only dep/version/gradle/agent-config
+  commits since, so the box is effectively current.
+
+### Findings — measured against the live server + the phone's own client logs
+- **D1 Concurrent backup workers.** Periodic, reactive and "immediate" are three
+  *differently named* unique works, so they overlap. 2026-11-17: workers found 9,470 /
+  4,787 / 4,303 pending in overlapping windows; 5,327 registrations were a stale
+  snapshot re-registering a row another worker had just synced (`donorId == localId`).
+- **D2 Twin Room rows.** 7,540 local rows were registered as "copies" onto **4,283**
+  server photos that another Room row already represented. Room holds 18,826 rows vs
+  ~14.5k eligible server photos — the excess *is* the duplicate tiles. Cause:
+  `register-encrypted` dedups by hash and returns the EXISTING photo id, the phone
+  marks its row with it, and `deduplicateLocalEntities` only considers rows with
+  **no** `serverPhotoId`, so the twins are never collapsed.
+- **D3 Re-upload of what the server already has.** 4,565 of 5,078 uploaded filenames
+  already existed server-side before 11-17. Bytes travel, then the server discards them.
+- **S1 Secure leak on Android main grid.** 158 of those registrations landed on photos
+  hidden by secure albums. `excludeSecure` matches only `serverBlobId`; the server hides
+  by `photos.id NOT IN (original_blob_id)` and `/galleries/secure/blob-ids` already
+  carries those photo ids (158/158 verified). A row whose blob id is the phone's own
+  upload is shown.
+- **S2 Web secure removal strands burst frames.** The grid collapses a burst to one
+  tile; the trash button removes only that item id. Android expands (`expandForRemoval`).
+- **S3 Web has no multi-select removal**, and "Select" only appears when another secure
+  album exists. Android: long-press select + remove, always.
+- **S4 Android deletes a secure album on a second tap** of the trash icon — no dialog,
+  no statement of outcome. Web: danger `ConfirmDialog` explaining it.
+- **S5 Pull picker ("Move here") splits bursts on Android** — panel collapses bursts and
+  moves only the cover id. Web shows every frame uncollapsed (inconsistent display).
+- **S6 Web secure viewer has no "Remove from secure album"** (Android's does).
+
+### Plan — one commit each, in this order
+- [ ] **P1 server** `register-encrypted` duplicate responses also return the existing
+      photo's `encrypted_blob_id` / `encrypted_thumb_blob_id`. Additive; old clients ignore.
+- [ ] **P2 android (D1)** single-flight `BackupWorker`: process-wide gate, a skipped run
+      still re-arms the reactive trigger. Pure gate + wiring guard test.
+- [ ] **P3 android (D2)** one Room row per `serverPhotoId`: pure `resolveTwins` planner
+      (keep the device row, adopt the server row's canonical blob ids/state, delete the
+      rest + their thumb files); run targeted after every register, plus one sweep per
+      process (heals existing phones). Adopt P1's canonical ids at register time.
+- [ ] **P4 android (S1)** `excludeSecure` also matches `serverPhotoId`.
+- [ ] **P5 web (S2/S3)** burst-aware removal sharing one expansion with the prompt;
+      selection bar gets Remove; batch verdict ported from Android's list-form
+      `secureRemovalPrompt`; Select available whenever the album has items.
+- [ ] **P6 android (S4)** secure-album delete asks first, same words as web.
+- [ ] **P7 both (S5)** pull picker collapses bursts for display and moves whole stacks.
+- [ ] **P8 verify** all suites; E2E for P1; browser checks of P5 on a **local** server
+      (Playwright) — never mutate the live library. **Ask before deploying to CT132.**
+
+### NOT doing this session (and why)
+- **No cleanup of orphaned blobs on CT132.** The 11-17 run left orphan media/thumbnail
+  blobs; `orphan_sweep.rs` only reclaims rendition blobs. Deleting needs a guarded
+  dry-run-first tool and the owner's OK. → follow-up F1.
+- **No pre-upload "does the server have this hash" check (D3).** New API surface; the
+  correctness bugs (D1/D2/S1) come first. → follow-up F2.
+- **No merging of server-side near-duplicates** (same filename, `taken_at` differing only
+  in sub-second precision, different bytes — phone original vs Takeout copy; ~12 live).
+  Different bytes means a product decision, not a dedup bug. → follow-up F3.
+- **S6 web viewer removal** — needs the three-way prompt inside the viewer route. → F4.
+- **No live deploy without explicit approval.**
+
+### Rollback
+Every phase is a single commit on `dev`: `git revert <sha>`. No migrations, no schema
+change, nothing destructive run against shared state. P3 deletes only *Room mirror rows*
+that duplicate another row's `serverPhotoId` (rebuildable by a full sync / rescan; the
+device's media files are never touched).
+
+---
+
+## 2. Follow-ups
+- [ ] **F1** Guarded sweeper for unreferenced photo/thumbnail blobs (dry-run default,
+      counts, refuses empty filter, test that a referenced blob survives).
+- [ ] **F2** Pre-upload hash lookup so a reinstalled phone stops re-sending its library.
+- [ ] **F3** Decide what to do with phone-vs-Takeout near-duplicates.
+- [ ] **F4** "Remove from secure album" in the web viewer.
+
+## 3. Verification debt carried from the old todo.md (still open)
+Deploy-side (CT132): A1/#42 badge counts, A2/#38 migration 033 backfill, B2/#40 3-strike
+cap + ETA calibration readout, B3/#46 codec backfill drains to zero, B4/#49 rung backfill.
+Device (S21+): B4 quality swap, E1/#43, F1/#41, D2/#50, E3, E3a, Z1e, B5.
+Browser: B4 web quality swap, D2 iOS safe-area, A3/#51 virtualization, E3 web, Z1d.
+Full detail: `git show f6c9ded^:todo.md`, section "2. Verification debt".
