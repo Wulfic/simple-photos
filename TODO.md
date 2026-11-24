@@ -66,18 +66,42 @@ simple-photos-server`, `npx vitest run` + `npx tsc -b` in `web/`,
 - [x] **P2b android (D4)** column writes (`setPhotoHashIfMissing`, `updateDimensions`)
       instead of whole stale rows; a failed copy registration is FAILED (retried), not
       SYNCED. Source guard: RED 3/3 on the old worker.
-- [ ] **P3 android (D2)** one Room row per `serverPhotoId`: pure `resolveTwins` planner
-      (keep the device row, adopt the server row's canonical blob ids/state, delete the
-      rest + their thumb files); run targeted after every register, plus one sweep per
-      process (heals existing phones). Adopt P1's canonical ids at register time.
-- [ ] **P4 android (S1)** `excludeSecure` also matches `serverPhotoId`.
-- [ ] **P5 web (S2/S3)** burst-aware removal sharing one expansion with the prompt;
-      selection bar gets Remove; batch verdict ported from Android's list-form
-      `secureRemovalPrompt`; Select available whenever the album has items.
-- [ ] **P6 android (S4)** secure-album delete asks first, same words as web.
-- [ ] **P7 both (S5)** pull picker collapses bursts for display and moves whole stacks.
-- [ ] **P8 verify** all suites; E2E for P1; browser checks of P5 on a **local** server
-      (Playwright) — never mutate the live library. **Ask before deploying to CT132.**
+- [x] **P3 android (D2)** one Room row per `serverPhotoId`: pure `planTwinCollapse`
+      (keep the oldest device row, adopt the server-only twin's canonical blob ids and
+      state, delete the rest + thumbs only they used; refuses rows of different photos).
+      Runs after every duplicate register, after a backup batch, and once per process
+      *before* the sync's SKIPPED shortcut; a heal forces that pass FULL so crop/favourite
+      reconcile. `3b0c6be` — 16 tests, RED = exactly the 3 wiring guards.
+- [x] **P4 android (S1)** `excludeSecure` also matches `serverPhotoId`. `0d45cb2`.
+- [x] **P5 web (S2/S3)** burst-aware removal (`expandBurstStacks`) sharing one expansion
+      with the prompt; selection bar Remove; list-form `secureRemovalPrompt` ported from
+      Android + `secureRemovalToast` from the same counts; Select no longer needs a second
+      album. `aac357e` — RED = exactly 4 wiring guards while 25 helper tests stay green.
+- [x] **P6 android (S4)** secure-album delete asks first; `secureAlbumDeletePrompt` on both
+      clients, strings asserted verbatim on both sides. `5e754c8`.
+- [x] **P7 both (S5)** pull picker draws one tile per stack and moves whole stacks
+      (web `resolveSecureMoves` over `expandBurstStacks`, Android `planPull`); both fixed a
+      `picked - moved` failure count that went negative. `ea84a75`.
+- [x] **P7b web (found in the browser)** the pull picker could not select ANYTHING: tile and
+      wrapper both toggled, the click bubbled, select-then-deselect → "Move here (0)"
+      forever. Browser: "(0)" before, "(1)" after. `b97b0aa`.
+- [x] **P8 verify** — see "Verification" below. **Deploy to CT132 still needs approval.**
+
+### Verification (2026-11-24)
+- Unit: server 555/555, web 339/339 + clean `tsc`, Android 318/318 (`testDebugUnitTest`).
+- E2E: `test_95` 3/3 (RED on the old server for both duplicate arms). `test_03`, `test_33`,
+  `test_73`, `test_94`, `test_95`: all green. **`test_06` 46/46** — its "known red
+  baseline" of 8 (since 2026-07-15) was stale tests omitting `x-gallery-token`; fixed in
+  `e44ad10` with a guard that the gate still refuses token-less downloads.
+- `assembleDebug` builds (`app-debug.apk`, 34 MB) — the APK to ship for F7.
+- **Browser, real UI, disposable local server (never CT132): 12/12.** Album delete dialog
+  + Cancel keeps it; burst trash removes all 3 frames ("Remove 3 photos…"); multi-select
+  Remove (2) removes both; pull picker shows 2 tiles for 1 single + 1 burst and moving the
+  burst tile moved 3 frames, the single stayed. Script + screenshots were session-scratch.
+- **Not verified on a device** (none attached): P2/P2b/P3/P4/P6/P7-Android are JVM-tested
+  only. The heal on the owner's phone should drop Room from ~18.8k rows to the server's
+  ~14.5k on the first sync after the new APK — check "Local DB photo status" in
+  `/api/admin/client-logs` after install.
 
 ### NOT doing this session (and why)
 - **No cleanup of orphaned blobs on CT132.** The 11-17 run left orphan media/thumbnail
@@ -105,6 +129,17 @@ device's media files are never touched).
 - [ ] **F2** Pre-upload hash lookup so a reinstalled phone stops re-sending its library.
 - [ ] **F3** Decide what to do with phone-vs-Takeout near-duplicates.
 - [ ] **F4** "Remove from secure album" in the web viewer.
+- [ ] **F5** Album manifests that reference a device row's *own* (orphan) blob id lose that
+      member when P3 moves the row onto the canonical blob. Rare (only where blob dedup
+      missed — e.g. videos whose server blob has no `content_hash`); remap ids in local
+      manifests if it shows up.
+- [ ] **F6** `register-encrypted`'s check-then-insert is not atomic; two concurrent
+      registrations of one hash can both insert. P2 removes the phone-side concurrency
+      that triggered it; a server-side guard (transaction or unique constraint that still
+      admits "Save Copy" rows) is still owed.
+- [ ] **F7** Install the new APK on the S21+ and confirm: Room row count ≈ server count
+      after first sync; no secured photo in the main grid; delete-album dialog; "Move
+      here" pulls a whole burst.
 
 ## 3. Verification debt carried from the old todo.md (still open)
 Deploy-side (CT132): A1/#42 badge counts, A2/#38 migration 033 backfill, B2/#40 3-strike
