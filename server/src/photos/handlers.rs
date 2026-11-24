@@ -327,6 +327,32 @@ pub async fn register_photo(
     ))
 }
 
+/// `(id, encrypted_blob_id, encrypted_thumb_blob_id)` of a photo a
+/// `register-encrypted` call turned out to duplicate.
+type ExistingEncryptedPhoto = (String, Option<String>, Option<String>);
+
+/// The `200 duplicate` answer of `register-encrypted`, shared by both dedup arms
+/// so they cannot drift apart.
+///
+/// It names the existing photo's **canonical** blobs, not the ones the caller just
+/// uploaded. Without them a re-uploading phone (reinstall, second device) records
+/// the existing photo id against its own new blob — a blob nothing server-side
+/// references, which also slips past the blob-keyed secure filter when that photo
+/// is secured. Measured live: 158 secured photos surfaced that way (TODO.md S1).
+fn duplicate_register_response(
+    (photo_id, blob_id, thumb_id): ExistingEncryptedPhoto,
+) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "photo_id": photo_id,
+            "duplicate": true,
+            "encrypted_blob_id": blob_id,
+            "encrypted_thumb_blob_id": thumb_id,
+        })),
+    )
+}
+
 /// POST /api/photos/register-encrypted
 /// Create a photos record linked to already-uploaded encrypted blobs.
 /// This is called by mobile clients after uploading blobs to bridge the
@@ -353,54 +379,50 @@ pub async fn register_encrypted_photo(
     }
 
     // Dedup: if a photo already references this blob, return it.
-    let existing: Option<(String,)> =
-        sqlx::query_as("SELECT id FROM photos WHERE user_id = ? AND encrypted_blob_id = ? LIMIT 1")
-            .bind(&auth.user_id)
-            .bind(&req.encrypted_blob_id)
-            .fetch_optional(&state.read_pool)
-            .await?;
+    let existing: Option<ExistingEncryptedPhoto> = sqlx::query_as(
+        "SELECT id, encrypted_blob_id, encrypted_thumb_blob_id \
+         FROM photos WHERE user_id = ? AND encrypted_blob_id = ? LIMIT 1",
+    )
+    .bind(&auth.user_id)
+    .bind(&req.encrypted_blob_id)
+    .fetch_optional(&state.read_pool)
+    .await?;
 
-    if let Some((eid,)) = existing {
+    if let Some(existing) = existing {
         tracing::info!(
             user_id = %auth.user_id,
-            existing_photo_id = %eid,
+            existing_photo_id = %existing.0,
             blob_id = %req.encrypted_blob_id,
             "register-encrypted: photo already exists for this blob"
         );
-        return Ok((
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "photo_id": eid,
-                "duplicate": true,
-            })),
-        ));
+        return Ok(duplicate_register_response(existing));
     }
 
     // Content-hash dedup.
     if let Some(ref hash) = req.photo_hash {
         if !hash.is_empty() {
-            let existing: Option<(String,)> = sqlx::query_as(
-                "SELECT id FROM photos WHERE user_id = ? AND photo_hash = ? LIMIT 1",
+            let existing: Option<ExistingEncryptedPhoto> = sqlx::query_as(
+                "SELECT id, encrypted_blob_id, encrypted_thumb_blob_id \
+                 FROM photos WHERE user_id = ? AND photo_hash = ? LIMIT 1",
             )
             .bind(&auth.user_id)
             .bind(hash)
             .fetch_optional(&state.read_pool)
             .await?;
 
-            if let Some((eid,)) = existing {
+            if let Some(existing) = existing {
+                // The caller's freshly uploaded blobs are NOT what this photo
+                // serves. Logged so an operator can see the orphans a
+                // re-uploading client leaves behind (TODO.md F1).
                 tracing::info!(
                     user_id = %auth.user_id,
-                    existing_photo_id = %eid,
+                    existing_photo_id = %existing.0,
                     photo_hash = %hash,
+                    uploaded_blob_id = %req.encrypted_blob_id,
+                    canonical_blob_id = ?existing.1,
                     "register-encrypted: duplicate hash — returning existing"
                 );
-                return Ok((
-                    StatusCode::OK,
-                    Json(serde_json::json!({
-                        "photo_id": eid,
-                        "duplicate": true,
-                    })),
-                ));
+                return Ok(duplicate_register_response(existing));
             }
         }
     }

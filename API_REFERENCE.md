@@ -65,6 +65,7 @@ All endpoints are prefixed with `/api` unless noted. Auth = `Authorization: Bear
 |--------|------|------|----------------------|----------|
 | `GET` | `/api/photos` | Bearer | Query: `after`, `limit`, `media_type`, `favorites_only` | `{ photos: [PhotoRecord], next_cursor? }` |
 | `POST` | `/api/photos/register` | Bearer | `{ filename, file_path, mime_type, media_type?, size_bytes, width?, height?, duration_secs?, taken_at?, latitude?, longitude? }` | **201** `{ photo_id, thumb_path, photo_hash }` |
+| `POST` | `/api/photos/register-encrypted` | Bearer | `{ filename, mime_type, media_type?, width?, height?, duration_secs?, taken_at?, latitude?, longitude?, encrypted_blob_id, encrypted_thumb_blob_id?, photo_hash?, photo_subtype?, burst_id?, motion_video_blob_id?, camera_model? }` | **201** `{ photo_id }`, or **200** `{ photo_id, duplicate: true, encrypted_blob_id, encrypted_thumb_blob_id }` when a photo already holds this blob or `photo_hash` — the blob ids are the **existing** photo's, and a client must record those, not the ones it just uploaded |
 | `POST` | `/api/photos/upload` | Bearer | raw bytes; Headers: `X-Filename`, `X-Mime-Type`, optional `X-Source-Album`, `X-Source-Album-Title` | **201** `{ photo_id, filename, file_path, size_bytes, photo_hash }` (or **200** with existing record if hash dedup matches) |
 | `GET` | `/api/photos/{id}/file` | Bearer | — | streaming file; supports Range, ETag, 304 |
 | `GET` | `/api/photos/{id}/thumb` | Bearer | — | `image/jpeg` stream; or **202** `{ status: "pending" }` |
