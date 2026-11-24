@@ -251,6 +251,17 @@ describe("the secure removal prompt is actually wired up", () => {
     expect(secureGallery).toContain("otherSecureTiles.map(");
   });
 
+  it("a pull-picker tile toggles its selection exactly once per click", () => {
+    // Found in a real browser (2026-11-24): the wrapper AND the tile both called
+    // toggleMoveSelect, the tile's click bubbled into the wrapper, and every
+    // click selected-then-deselected — "Move here (0)" forever, so nothing could
+    // ever be pulled in from another secure album on web.
+    const start = secureGallery.indexOf("otherSecureTiles.map(");
+    const tile = secureGallery.slice(start, secureGallery.indexOf("{selected && (", start));
+    expect(start).toBeGreaterThan(0);
+    expect(tile.match(/toggleMoveSelect\(it\.id\)/g) ?? []).toHaveLength(1);
+  });
+
   it("does not ask with window.confirm", () => {
     // `confirm()` cannot render a conditional body, cannot be themed, and is
     // suppressible by the browser — see the ConfirmDialog module doc.

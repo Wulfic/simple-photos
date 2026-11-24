@@ -848,10 +848,12 @@ export default function SecureGallery() {
                 {otherSecureTiles.map((it) => {
                   const selected = moveSelected.has(it.id);
                   return (
+                    // ONE toggle, on the tile. The wrapper used to toggle too,
+                    // and the tile's click bubbles into it — select, then
+                    // deselect, every click: nothing could ever be picked here.
                     <div
                       key={it.id}
                       className={`relative aspect-square rounded overflow-hidden cursor-pointer ${selected ? "ring-2 ring-accent-500" : ""}`}
-                      onClick={() => toggleMoveSelect(it.id)}
                     >
                       <SecureGalleryItem
                         item={it}
