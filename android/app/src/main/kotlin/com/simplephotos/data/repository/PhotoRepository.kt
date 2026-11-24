@@ -27,9 +27,12 @@ import com.simplephotos.data.remote.dto.MetadataUpdateResponse
 import com.simplephotos.data.remote.dto.SetCropRequest
 import com.simplephotos.data.remote.dto.toDomain
 import com.simplephotos.data.remote.dto.WriteExifResponse
+import androidx.room.withTransaction
 import com.simplephotos.data.sync.SyncCursorStore
 import com.simplephotos.data.sync.SyncMode
+import com.simplephotos.data.sync.canonicalBlobIds
 import com.simplephotos.data.sync.decideSyncMode
+import com.simplephotos.data.sync.planTwinCollapse
 import com.simplephotos.data.sync.isDeltaFeed
 import com.simplephotos.data.sync.tombstoneVictims
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_SERVER_URL
@@ -620,7 +623,12 @@ class PhotoRepository @Inject constructor(
         val regRes = api.registerEncryptedPhoto(regReq)
         android.util.Log.d(TAG, "registerAndMark: registered photo, serverPhotoId=${regRes.photoId}, duplicate=${regRes.duplicate}")
 
-        db.photoDao().markSynced(photo.localId, regRes.photoId, photoBlobId, thumbBlobId, contentHash)
+        // On a duplicate the server already holds this photo under OTHER blobs;
+        // the ones just uploaded are referenced by nothing. Record the canonical
+        // pair it names (TODO.md D2/S1) — older servers omit it, and then the
+        // twin collapse below adopts it from the server-only twin instead.
+        val (canonicalBlob, canonicalThumb) = canonicalBlobIds(regRes, photoBlobId, thumbBlobId)
+        db.photoDao().markSynced(photo.localId, regRes.photoId, canonicalBlob, canonicalThumb, contentHash)
         // Persist locally too so the device gallery badges it immediately
         // (server timestamp-burst grouping is reflected on the next sync).
         if (detected.photoSubtype != null || detected.burstId != null) {
@@ -631,6 +639,10 @@ class PhotoRepository @Inject constructor(
         if (thumbnailData != null && thumbnailData.isNotEmpty()) {
             saveThumbnailToDisk(photo.localId, thumbnailData)
         }
+
+        // Last, because it may delete THIS row (when another device row already
+        // represents the photo) — and with it the thumbnail file just written.
+        if (regRes.duplicate == true) collapseTwinsOf(regRes.photoId)
     }
 
     /**
@@ -892,7 +904,18 @@ class PhotoRepository @Inject constructor(
     suspend fun syncFromServer(): Int {
         val cursor = syncCursor.read()
         val headSeq = fetchHeadSeq()
-        val mode = decideSyncMode(cursor, headSeq)
+        var mode = decideSyncMode(cursor, headSeq)
+
+        // Heal twins left by older builds (TODO.md D2) — BEFORE the SKIPPED
+        // shortcut, because a phone in steady state never gets past it, and the
+        // phone this was measured on had 4,283 of them sitting in steady state.
+        // A collapse picks favourite/crop from one twin, so the pass that follows
+        // must be the FULL walk: its whole-library crop/favourite reconcile is the
+        // existing recovery path for exactly that.
+        if (healTwinsOncePerProcess() > 0 && mode != SyncMode.FULL) {
+            android.util.Log.i(TAG, "syncFromServer: collapsed twin rows — running a full walk to reconcile them")
+            mode = SyncMode.FULL
+        }
 
         if (mode == SyncMode.SKIPPED) {
             // The steady state, and the entire point of the issue: a library
@@ -939,6 +962,70 @@ class PhotoRepository @Inject constructor(
         result.headAtStart?.let { syncCursor.write(it) }
 
         return result.changed + extra
+    }
+
+    // ── One row per server photo (TODO.md D2) ────────────────────────────
+
+    /** Set once this process has swept for twins; reset if the sweep failed. */
+    private val twinSweepDone = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /**
+     * Collapse every Room row holding [serverPhotoId] into one (see
+     * [planTwinCollapse] for which survives and whose state it keeps). Returns how
+     * many rows were removed — 0 in the normal one-row case.
+     *
+     * Only Room mirror rows are deleted, never device media; a removed row is
+     * rebuildable by a full sync or a rescan. The read and the writes share one
+     * transaction so a concurrent sync cannot insert between them.
+     */
+    suspend fun collapseTwinsOf(serverPhotoId: String): Int {
+        val plan = db.withTransaction {
+            val plan = planTwinCollapse(db.photoDao().getAllByServerPhotoId(serverPhotoId))
+                ?: return@withTransaction null
+            db.photoDao().update(plan.keeper)
+            for (victim in plan.victims) db.photoDao().deleteById(victim.localId)
+            plan
+        } ?: return 0
+        // Files after commit: a rolled-back transaction must not have deleted the
+        // thumbnail of a row that still exists.
+        for (path in plan.orphanedThumbnails) {
+            val f = File(path)
+            if (f.exists() && !f.delete()) {
+                android.util.Log.w(TAG, "collapseTwinsOf: could not delete orphaned thumbnail $path")
+            }
+        }
+        android.util.Log.i(
+            TAG,
+            "collapseTwinsOf: server photo $serverPhotoId kept ${plan.keeper.localId} " +
+                "(device=${plan.keeper.localPath != null}), removed ${plan.victims.size} twin row(s) " +
+                plan.victims.map { it.localId },
+        )
+        return plan.victims.size
+    }
+
+    /** Collapse every twinned server photo in the mirror. Returns rows removed. */
+    suspend fun collapseAllTwins(): Int {
+        val ids = db.photoDao().twinnedServerPhotoIds()
+        if (ids.isEmpty()) return 0
+        var removed = 0
+        for (id in ids) removed += collapseTwinsOf(id)
+        android.util.Log.i(TAG, "collapseAllTwins: ${ids.size} server photo(s) had twins; removed $removed row(s)")
+        return removed
+    }
+
+    /**
+     * [collapseAllTwins] at most once per process. A failure is logged and leaves
+     * the flag clear so the next sync retries — never fatal to the sync itself.
+     */
+    private suspend fun healTwinsOncePerProcess(): Int {
+        if (!twinSweepDone.compareAndSet(false, true)) return 0
+        return try {
+            collapseAllTwins()
+        } catch (e: Exception) {
+            twinSweepDone.set(false)
+            android.util.Log.e(TAG, "healTwinsOncePerProcess: twin sweep failed, will retry next sync", e)
+            0
+        }
     }
 
     /**

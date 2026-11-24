@@ -146,6 +146,14 @@ interface PhotoDao {
     @Query("SELECT * FROM photos WHERE serverPhotoId = :photoId LIMIT 1")
     suspend fun getByServerPhotoId(photoId: String): PhotoEntity?
 
+    /** EVERY row holding [photoId] — normally one; more is a twin (TODO.md D2). */
+    @Query("SELECT * FROM photos WHERE serverPhotoId = :photoId")
+    suspend fun getAllByServerPhotoId(photoId: String): List<PhotoEntity>
+
+    /** Server photo ids drawn by more than one row — the duplicate tiles. */
+    @Query("SELECT serverPhotoId FROM photos WHERE serverPhotoId IS NOT NULL GROUP BY serverPhotoId HAVING COUNT(*) > 1")
+    suspend fun twinnedServerPhotoIds(): List<String>
+
     /** Batch lookup: get all photos whose serverPhotoId is in the given list.
      *  Callers must chunk — see [com.simplephotos.data.repository.SQLITE_VARIABLE_CHUNK]. */
     @Query("SELECT * FROM photos WHERE serverPhotoId IN (:photoIds)")

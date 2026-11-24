@@ -50,5 +50,12 @@ data class RegisterEncryptedPhotoRequest(
 
 data class RegisterEncryptedPhotoResponse(
     @SerializedName("photo_id") val photoId: String,
-    val duplicate: Boolean? = null
+    val duplicate: Boolean? = null,
+    /**
+     * On a duplicate: the blobs the EXISTING photo serves (servers from `9c3a7a0`). Record
+     * these, not the ones just uploaded — those are referenced by nothing
+     * server-side. Null from older servers.
+     */
+    @SerializedName("encrypted_blob_id") val encryptedBlobId: String? = null,
+    @SerializedName("encrypted_thumb_blob_id") val encryptedThumbBlobId: String? = null,
 )

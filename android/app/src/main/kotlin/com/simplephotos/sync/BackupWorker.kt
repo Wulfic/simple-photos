@@ -32,6 +32,7 @@ import com.simplephotos.data.local.entities.SyncStatus
 import com.simplephotos.data.remote.ApiService
 import com.simplephotos.data.repository.PhotoRepository
 import com.simplephotos.data.repository.SyncRepository
+import com.simplephotos.data.sync.canonicalBlobIds
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_DIAGNOSTIC_LOGGING
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_WIFI_ONLY_BACKUP
 import dagger.assisted.Assisted
@@ -387,14 +388,21 @@ class BackupWorker @AssistedInject constructor(
                                     cameraModel = donor.cameraModel
                                 )
                                 val regRes = api.registerEncryptedPhoto(regReq)
-                                db.photoDao().markSynced(
-                                    photo.localId, regRes.photoId,
-                                    donor.serverBlobId!!, donor.thumbnailBlobId, contentHash
+                                val (blob, thumb) = canonicalBlobIds(
+                                    regRes, donor.serverBlobId!!, donor.thumbnailBlobId
                                 )
+                                db.photoDao().markSynced(photo.localId, regRes.photoId, blob, thumb, contentHash)
+                                // Identical content resolves to the donor's server
+                                // photo, so this row and the donor now draw one photo
+                                // twice — collapse them (TODO.md D2). This may delete
+                                // THIS row; everything after uses column writes that
+                                // no-op on a missing row.
+                                val removed = photoRepository.collapseTwinsOf(regRes.photoId)
                                 diag.debug(TAG, "Registered copy via hash-dedup: ${photo.filename} → ${regRes.photoId}", mapOf(
                                     "localId" to photo.localId,
                                     "donorId" to donor.localId,
-                                    "contentHash" to contentHash
+                                    "contentHash" to contentHash,
+                                    "twinRowsCollapsed" to removed.toString()
                                 ))
                                 uploaded++
                             } catch (e: Exception) {
@@ -544,6 +552,18 @@ class BackupWorker @AssistedInject constructor(
                     ))
                     failed++
                     // uploadPhoto already sets FAILED status internally
+                }
+            }
+
+            // Belt and braces for D2: a sync running beside this pass can insert a
+            // server-only row for a photo this pass registered after its targeted
+            // collapse ran. One GROUP BY over the mirror, and only after real work.
+            if (uploaded > 0) {
+                try {
+                    val healed = photoRepository.collapseAllTwins()
+                    if (healed > 0) diag.info(TAG, "Collapsed $healed twin row(s) after the batch")
+                } catch (e: Exception) {
+                    diag.warn(TAG, "Twin sweep after batch failed: ${e.message}", emptyMap())
                 }
             }
 
