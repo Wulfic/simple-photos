@@ -17,7 +17,9 @@ class SecureExclusionTest {
     private fun photo(
         localId: String,
         serverBlobId: String? = localId,
+        serverPhotoId: String? = null,
     ) = PhotoEntity(
+        serverPhotoId = serverPhotoId,
         localId = localId,
         filename = "$localId.jpg",
         takenAt = 0L,
@@ -36,6 +38,20 @@ class SecureExclusionTest {
         val src = listOf(photo("a"), photo("secret"), photo("b"), photo("secret2"))
         val out = src.excludeSecure(setOf("secret", "secret2"))
         assertEquals(listOf("a", "b"), out.map { it.localId })
+    }
+
+    @Test
+    fun `a row secured by its PHOTO id is hidden even when its blob id is its own upload`() {
+        // TODO.md S1, measured 2026-11-17: the phone re-uploaded 158 photos that
+        // were in secure albums. register-encrypted mapped each onto the hidden
+        // server photo, but the row kept the blob IT uploaded — not in the set —
+        // so it showed in the main grid. The server hides by
+        // `photos.id NOT IN (original_blob_id)`, and `/galleries/secure/blob-ids`
+        // already carries those photo ids (158/158 verified live).
+        val reuploaded = photo("dev", serverBlobId = "blob-the-phone-uploaded", serverPhotoId = "secured-photo")
+        val ordinary = photo("ok", serverBlobId = "b-ok", serverPhotoId = "p-ok")
+        val out = listOf(reuploaded, ordinary).excludeSecure(setOf("secured-photo", "some-clone-blob"))
+        assertEquals(listOf("ok"), out.map { it.localId })
     }
 
     @Test
