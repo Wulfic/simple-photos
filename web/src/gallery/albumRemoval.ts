@@ -81,64 +81,113 @@ export function albumRemovalPrompt(count: number, albumName?: string): RemovalPr
 }
 
 /**
- * Removing an item from a SECURE album.
+ * Removing items from a SECURE album — one item or a whole selection.
  *
- * `otherSecureAlbums` is how many OTHER secure albums still hold this photo, as
- * resolved by {@link otherSecureAlbumCount}. It decides which of three genuinely
- * different outcomes the user is agreeing to:
+ * `otherSecureAlbums` holds, **per item actually being removed**, how many OTHER
+ * secure albums still hold it, as resolved by {@link otherSecureAlbumCount}. Each
+ * entry decides one of three genuinely different outcomes:
  *
  *  - 0         → the photo leaves the secure domain and becomes visible in the
  *                regular gallery again. Pre-Z1 behaviour, still the usual one.
  *  - >0        → the photo stays hidden and stays secured, because another secure
  *                album still contains it. Telling the user it "returns to your
- *                gallery" here would be a privacy-shaped lie: they would believe
- *                they had un-secured something they had not, or believe they had
- *                exposed something they had not.
- *  - undefined → we cannot tell the two apart, so we refuse rather than guess.
+ *                gallery" here would be a privacy-shaped lie.
+ *  - undefined → we cannot tell the two apart.
  *
- * **The parameter is required and has no default**, deliberately. It used to
- * default to 0, which meant every call site that had not thought about
- * membership silently got the "returns to your gallery" promise — the most
- * dangerous of the three answers, handed out by omission. An argument you must
- * pass is the only version of this function that cannot be misused by accident.
+ * **One unknown blocks the whole batch, and an empty list is unknown too**: a
+ * caller that resolved nothing has not answered the question. A batch can mix
+ * the first two outcomes, so the prompt says how many go each way.
+ *
+ * The list form (rather than one scalar for every item) is Android's
+ * `AlbumRemoval.secureRemovalPrompt`, ported so both clients ask the same
+ * question the same way. The scalar form could not describe a multi-select at
+ * all — which is why web had no multi-select removal (TODO.md S3).
+ *
+ * The argument is required and has no default, deliberately: a default of "0
+ * other albums" hands the most dangerous answer to every call site by omission.
  */
 export function secureRemovalPrompt(
-  count: number,
+  otherSecureAlbums: ReadonlyArray<number | undefined>,
   albumName: string | undefined,
-  otherSecureAlbums: number | undefined,
 ): SecureRemovalVerdict {
+  const count = otherSecureAlbums.length;
   const where = albumName ? `“${albumName}”` : "this secure album";
-  const subject = count === 1 ? "It" : "They";
 
-  if (otherSecureAlbums === undefined) {
+  if (count === 0 || otherSecureAlbums.some((n) => n === undefined)) {
+    const these = count === 1 ? "this photo" : "these photos";
+    const them = count === 1 ? "it" : "them";
     return {
       kind: "blocked",
       title: `Can’t remove from ${where} yet`,
       body:
-        `This server did not report which secure albums hold ` +
-        `${count === 1 ? "this photo" : "these photos"}, so we can’t tell you whether ` +
-        `removing ${count === 1 ? "it" : "them"} here would make ` +
-        `${count === 1 ? "it" : "them"} visible in your regular gallery again. ` +
-        `Refresh and try again.`,
+        `This server did not report which secure albums hold ${these}, so we can’t ` +
+        `tell you whether removing ${them} here would make ${them} visible in your ` +
+        `regular gallery again. Refresh and try again.`,
     };
   }
 
-  if (otherSecureAlbums > 0) {
-    const others = `${otherSecureAlbums} other secure album${otherSecureAlbums === 1 ? "" : "s"}`;
+  // Every entry is known past the guard above; the type guard just says so.
+  const counts = otherSecureAlbums.filter((n): n is number => n !== undefined);
+  const staying = counts.filter((n) => n > 0).length;
+  const returning = count - staying;
+  const subject = count === 1 ? "It" : "They";
+  const subjectLower = count === 1 ? "it" : "they";
+  const title = `Remove ${photoCount(count)} from ${where}?`;
+
+  if (staying === 0) {
     return {
       kind: "confirm",
-      title: `Remove ${photoCount(count)} from ${where}?`,
+      title,
       body:
-        `${subject} will stay secured — ${count === 1 ? "it is" : "they are"} also in ` +
-        `${others}, so ${count === 1 ? "it" : "they"} will NOT return to your regular gallery.`,
+        `${subject} will be unsecured and become visible in your regular gallery again. ` +
+        `Nothing is deleted.`,
+    };
+  }
+
+  if (returning === 0) {
+    const because =
+      count === 1
+        ? `it is also in ${counts[0]} other secure album${counts[0] === 1 ? "" : "s"}`
+        : "each is also in another secure album";
+    return {
+      kind: "confirm",
+      title,
+      body:
+        `${subject} will stay secured — ${because}, so ${subjectLower} will NOT ` +
+        `return to your regular gallery.`,
     };
   }
 
   return {
     kind: "confirm",
-    title: `Remove ${photoCount(count)} from ${where}?`,
+    title,
     body:
-      `${subject} will be unsecured and become visible in your regular gallery again. ` +
+      `${returning} will return to your regular gallery. The other ${staying} will ` +
+      `stay secured — another secure album still holds ${staying === 1 ? "it" : "them"}. ` +
       `Nothing is deleted.`,
   };
+}
+
+/**
+ * The success message after a secure removal, from the SAME per-item counts the
+ * prompt was built from — a toast derived separately is how "Photo returned to
+ * your gallery" came to be shown for photos that stayed secured (Z1d). Only call
+ * this for a batch the prompt confirmed, i.e. no `undefined` entries.
+ */
+export function secureRemovalToast(otherSecureAlbums: ReadonlyArray<number>): string {
+  const count = otherSecureAlbums.length;
+  const staying = otherSecureAlbums.filter((n) => n > 0).length;
+  const returning = count - staying;
+  if (staying === 0) {
+    return count === 1 ? "Photo returned to your gallery." : `${count} photos returned to your gallery.`;
+  }
+  if (returning === 0) {
+    return count === 1
+      ? "Removed. The photo stays secured in your other secure albums."
+      : `Removed ${count}. They stay secured in your other secure albums.`;
+  }
+  return (
+    `Removed ${count}. ${returning} returned to your gallery; ` +
+    `${staying} stay secured in other secure albums.`
+  );
 }

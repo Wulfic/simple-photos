@@ -113,6 +113,38 @@ export function expandSecureSelection<T extends BurstMovableItem>(
 }
 
 /**
+ * Every item a removal of `targets` must actually remove: the targets plus all
+ * sibling frames of any burst among them.
+ *
+ * The grid and viewer collapse a burst to ONE tile, so removing just the tapped
+ * item stranded every other frame in the album while only the cover returned to
+ * the gallery (TODO.md S2). Android fixed this in `SecureMovePlan.expandForRemoval`;
+ * this is the same rule, and the confirmation dialog must describe the result of
+ * THIS call, not the tiles that were tapped.
+ *
+ * Gallery-scoped: siblings share both `burst_id` and the owning album. Frames of
+ * one burst live in one album, so this only guards a hypothetical cross-album
+ * `burst_id` collision — but in a smart view, where items from every album sit
+ * side by side, that guard is what keeps a removal inside the album it names.
+ */
+export function expandSecureRemoval<T extends BurstMovableItem>(
+  allItems: ReadonlyArray<T>,
+  targets: ReadonlyArray<T>,
+): T[] {
+  const burstKeys = new Set(
+    targets.filter((t) => t.burst_id).map((t) => `${t.gallery_id ?? ""}\u0000${t.burst_id}`),
+  );
+  const out = new Map<string, T>();
+  for (const t of targets) out.set(t.id, t);
+  for (const it of allItems) {
+    if (it.burst_id && burstKeys.has(`${it.gallery_id ?? ""}\u0000${it.burst_id}`)) {
+      if (!out.has(it.id)) out.set(it.id, it);
+    }
+  }
+  return [...out.values()];
+}
+
+/**
  * Real secure albums a selection can be pushed INTO, excluding the album
  * currently open. For a synthetic smart view the open id matches nothing, so
  * every real album is offered — each selected item still routes from its own

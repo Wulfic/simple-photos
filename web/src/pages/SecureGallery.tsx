@@ -21,6 +21,7 @@ import {
   otherSecureAlbumItems,
   resolveSecureMoves,
   expandSecureSelection,
+  expandSecureRemoval,
   planSecureAddsToTarget,
   secureMoveTargets,
 } from "../gallery/secureMovePicker";
@@ -52,6 +53,7 @@ import { ConfirmDialog } from "../components/ui";
 import {
   otherSecureAlbumCount,
   secureRemovalPrompt,
+  secureRemovalToast,
   type SecureRemovalVerdict,
 } from "../gallery/albumRemoval";
 
@@ -152,15 +154,15 @@ export default function SecureGallery() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
-  // Pending single-item removal (Z1d). Held as state rather than run inline
-  // behind `confirm()`, because the question is now conditional: what removal
-  // does depends on how many OTHER secure albums hold the photo, and one of the
-  // three answers is "we don't know, so don't ask".
+  // Pending removal — one tile or a whole selection (Z1d, S2/S3). Held as state
+  // rather than run inline behind `confirm()`, because the question is
+  // conditional: what removal does depends on how many OTHER secure albums hold
+  // each photo, and one of the three answers is "we don't know, so don't ask".
   const [pendingRemoval, setPendingRemoval] = useState<{
-    item: GalleryItem;
-    owningGalleryId: string;
-    /** How many other secure albums hold it; `undefined` = unknown. */
-    otherAlbums: number | undefined;
+    /** Everything the removal acts on — bursts already expanded. */
+    targets: { item: GalleryItem; owningGalleryId: string | undefined }[];
+    /** Per target: how many other secure albums hold it; `undefined` = unknown. */
+    otherAlbums: (number | undefined)[];
     verdict: SecureRemovalVerdict;
   } | null>(null);
   const [removing, setRemoving] = useState(false);
@@ -379,78 +381,100 @@ export default function SecureGallery() {
     }
   }
 
-  // Ask about removing a single item from the current secure album.
+  // Ask about removing tiles from the current secure album — one tile from its
+  // trash button, or a whole selection from the selection bar.
   //
   // Since Z1 a photo may live in several secure albums, so removal has two
   // genuinely different outcomes — the photo returns to the regular gallery, or
   // it stays hidden because another secure album still holds it — and the user
-  // is entitled to know which one they are agreeing to BEFORE agreeing. The
-  // verdict is resolved here, from the `galleries` array the feed publishes, and
-  // rendered by the dialog below.
-  function requestRemoveItem(item: GalleryItem) {
-    if (!selectedGallery) return;
-    // In a smart view the selected "gallery" is synthetic — route removal to
-    // the item's REAL owning album. `gallery_id` is always present on both the
-    // per-album and aggregate feeds.
+  // is entitled to know which one they are agreeing to BEFORE agreeing.
+  //
+  // A burst tile stands in for every frame, so the tiles are expanded FIRST and
+  // the prompt describes that expanded set (S2): removing only the tapped cover
+  // stranded the other frames in the album while the cover alone came back.
+  function requestRemoval(tiles: GalleryItem[]) {
+    if (!selectedGallery || tiles.length === 0) return;
+    // In a smart view the selected "gallery" is synthetic — route each removal
+    // to the item's REAL owning album. `gallery_id` is present on both feeds.
     const smartView = isSecureSmartAlbum(selectedGallery.id);
-    const owningGalleryId = smartView ? item.gallery_id : selectedGallery.id;
-    if (!owningGalleryId) {
-      setError("Could not determine which album this photo belongs to.");
-      return;
-    }
-    // The album NAME must come from the owning album, not from the open view: in
-    // a smart view `selectedGallery.name` is "Videos", and naming that as the
-    // thing being removed from is wrong in the one dialog whose job is accuracy.
-    const owningName = smartView
-      ? (item.gallery_name ?? galleries.find((g) => g.id === owningGalleryId)?.name)
-      : selectedGallery.name;
-    const otherAlbums = otherSecureAlbumCount(item.galleries, owningGalleryId);
-    setPendingRemoval({
+    const targets = expandSecureRemoval(items, tiles).map((item) => ({
       item,
-      owningGalleryId,
+      owningGalleryId: smartView ? (item.gallery_id ?? undefined) : selectedGallery.id,
+    }));
+    // No owning album means we cannot even name the membership set — unknown,
+    // which the prompt turns into a refusal rather than a guess.
+    const otherAlbums = targets.map(({ item, owningGalleryId }) =>
+      owningGalleryId ? otherSecureAlbumCount(item.galleries, owningGalleryId) : undefined,
+    );
+    // The album NAME must come from the owning album, not the open view: in a
+    // smart view `selectedGallery.name` is "Videos", and naming that as the thing
+    // being removed from is wrong in the one dialog whose job is accuracy. A
+    // batch spanning several albums names none rather than the wrong one.
+    const owningNames = new Set(
+      targets.map(({ item, owningGalleryId }) =>
+        smartView
+          ? (item.gallery_name ?? galleries.find((g) => g.id === owningGalleryId)?.name)
+          : selectedGallery.name,
+      ),
+    );
+    const owningName = owningNames.size === 1 ? [...owningNames][0] : undefined;
+    setPendingRemoval({
+      targets,
       otherAlbums,
-      verdict: secureRemovalPrompt(1, owningName, otherAlbums),
+      verdict: secureRemovalPrompt(otherAlbums, owningName),
     });
   }
 
   // Perform the removal the dialog just described.
-  // The cloned blob is deleted server-side. Whether the original photo becomes
+  // The server drops each membership row. Whether the original photo becomes
   // visible again in the regular gallery depends on whether this was its LAST
-  // secure membership — the server drops only the membership row, and
-  // `/galleries/secure/blob-ids` stops reporting the id only once none remain.
-  async function confirmRemoveItem() {
-    if (!pendingRemoval || removing) return;
-    const { item, owningGalleryId, otherAlbums } = pendingRemoval;
-    if (!selectedGallery) return;
+  // secure membership — `/galleries/secure/blob-ids` stops reporting the id only
+  // once none remain. Each item is isolated so one failure never aborts the rest.
+  async function confirmRemoval() {
+    if (!pendingRemoval || removing || !selectedGallery) return;
+    const { targets, otherAlbums } = pendingRemoval;
     const smartView = isSecureSmartAlbum(selectedGallery.id);
     setRemoving(true);
-    try {
-      await api.secureGalleries.removeItem(owningGalleryId, item.id);
-      // Drop the local IDB clone entry that `handleAddSelectedPhotos`
-      // created at add time, so the secure album view stays consistent
-      // even before the next reload.
-      try { await db.photos.delete(item.blob_id); } catch { /* non-fatal */ }
-      // The toast reports what actually happened, for the same reason the
-      // prompt does. "Photo returned to your gallery" was unconditional and was
-      // false whenever another secure album still held it — a user told that
-      // believes they have un-secured something they have not.
-      setSuccess(
-        otherAlbums && otherAlbums > 0
-          ? "Removed. The photo stays secured in your other secure albums."
-          : "Photo returned to your gallery.",
-      );
-      setPendingRemoval(null);
-      // Refresh the aggregate feed (smart items re-derive from it via effect)
-      // and the album list; real albums also re-fetch their own items.
-      await loadAllItems();
-      await loadGalleries();
-      if (!smartView) await loadItems(selectedGallery.id);
-    } catch (err: unknown) {
-      setError(getErrorMessage(err));
-      setPendingRemoval(null);
-    } finally {
-      setRemoving(false);
+    const removedCounts: number[] = [];
+    let failed = 0;
+    for (let i = 0; i < targets.length; i++) {
+      const { item, owningGalleryId } = targets[i];
+      const others = otherAlbums[i];
+      if (!owningGalleryId || others === undefined) {
+        // Unreachable behind a `confirm` verdict; counted, never guessed.
+        console.error("[SecureGallery] removal target without a known owning album", item.id);
+        failed++;
+        continue;
+      }
+      try {
+        await api.secureGalleries.removeItem(owningGalleryId, item.id);
+        removedCounts.push(others);
+      } catch (err) {
+        console.error("[SecureGallery] remove item failed", item.id, err);
+        failed++;
+        continue;
+      }
+      // Drop the local IDB clone entry created at add time, so the view stays
+      // consistent before the next reload. Failure only leaves a stale cache row.
+      try {
+        await db.photos.delete(item.blob_id);
+      } catch (err) {
+        console.warn("[SecureGallery] could not drop local cache row", item.blob_id, err);
+      }
     }
+    // The toast reports what actually happened, from the prompt's own counts —
+    // an unconditional "returned to your gallery" was false whenever another
+    // secure album still held the photo (Z1d).
+    setSuccess(removedCounts.length > 0 ? secureRemovalToast(removedCounts) : "");
+    setError(failed > 0 ? `${failed} item${failed !== 1 ? "s" : ""} couldn't be removed.` : "");
+    setPendingRemoval(null);
+    pushSelect.clear();
+    setRemoving(false);
+    // Refresh the aggregate feed (smart items re-derive from it via effect) and
+    // the album list; real albums also re-fetch their own items.
+    await loadAllItems();
+    await loadGalleries();
+    if (!smartView) await loadItems(selectedGallery.id);
   }
 
   // Recovery path for the `blocked` verdict: re-fetch the feeds, which is the
@@ -680,14 +704,15 @@ export default function SecureGallery() {
             </div>
             {!isBackupServer && !pushSelect.selectionMode && (
               <div className="flex gap-2">
-                {/* Select items to push OUT to another secure album (#43). Works
-                    in real AND smart albums, whenever there's a target to move
-                    into. */}
-                {items.length > 0 && moveTargets.length > 0 && (
+                {/* Multi-select: remove the selection (S3), or add it to another
+                    secure album (#43) when one exists. Works in real AND smart
+                    albums. Not gated on having a second album — removing needs
+                    none, and that gate made multi-select removal unreachable. */}
+                {items.length > 0 && (
                   <button
                     onClick={() => pushSelect.enterEmpty()}
                     className="btn btn-secondary btn-md inline-flex items-center"
-                    title="Select photos to move to another secure album"
+                    title="Select photos to remove or to add to another secure album"
                   >
                     Select
                   </button>
@@ -757,15 +782,33 @@ export default function SecureGallery() {
                     : "Select All"}
                 </button>
               </div>
-              <button
-                onClick={() => setShowMoveTarget(true)}
-                disabled={pushSelect.selectedIds.size === 0 || movingPush}
-                className="btn btn-primary btn-md inline-flex items-center gap-1.5"
-                title="Add selected photos to another secure album — they stay in this one too"
-              >
-                <span>🔒</span>
-                {`Add to album (${pushSelect.selectedIds.size})`}
-              </button>
+              <div className="flex items-center gap-2">
+                {moveTargets.length > 0 && (
+                  <button
+                    onClick={() => setShowMoveTarget(true)}
+                    disabled={pushSelect.selectedIds.size === 0 || movingPush}
+                    className="btn btn-primary btn-md inline-flex items-center gap-1.5"
+                    title="Add selected photos to another secure album — they stay in this one too"
+                  >
+                    <span>🔒</span>
+                    {`Add to album (${pushSelect.selectedIds.size})`}
+                  </button>
+                )}
+                {/* Remove the selection (S3). The dialog it opens is the same
+                    three-way verdict a single tile gets, counted per photo. */}
+                <button
+                  onClick={() =>
+                    requestRemoval(displayItems.filter((i) => pushSelect.selectedIds.has(i.id)))
+                  }
+                  disabled={pushSelect.selectedIds.size === 0 || removing}
+                  className="btn btn-secondary btn-md inline-flex items-center gap-1.5"
+                  title="Remove selected photos from this secure album"
+                  aria-label="Remove selected from secure album"
+                >
+                  <AppIcon name="trashcan" size="w-4 h-4" />
+                  {`Remove (${pushSelect.selectedIds.size})`}
+                </button>
+              </div>
             </div>
           )}
 
@@ -885,7 +928,7 @@ export default function SecureGallery() {
                   )}
                   {!isBackupServer && !pushSelect.selectionMode && (
                     <button
-                      onClick={(e) => { e.stopPropagation(); requestRemoveItem(item); }}
+                      onClick={(e) => { e.stopPropagation(); requestRemoval([item]); }}
                       className="absolute top-1 right-1 hidden group-hover:flex items-center justify-center w-7 h-7 bg-black/60 hover:bg-red-600 text-white rounded-full transition-colors z-10"
                       // No outcome claim here (Z1d). This tooltip used to
                       // promise the photo went back to the main gallery, which
@@ -917,7 +960,7 @@ export default function SecureGallery() {
               cancelLabel="Cancel"
               busy={removing}
               busyLabel="Removing…"
-              onConfirm={confirmRemoveItem}
+              onConfirm={confirmRemoval}
               onCancel={() => setPendingRemoval(null)}
             />
           )}

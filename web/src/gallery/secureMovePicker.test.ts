@@ -3,6 +3,7 @@ import {
   otherSecureAlbumItems,
   resolveSecureMoves,
   expandSecureSelection,
+  expandSecureRemoval,
   secureMoveTargets,
   type MovableSecureItem,
   type BurstMovableItem,
@@ -84,6 +85,30 @@ describe("expandSecureSelection", () => {
 
   it("keeps an id with no matching item so downstream resolving can drop it", () => {
     expect(expandSecureSelection(burstItems, ["zzz"])).toEqual(new Set(["zzz"]));
+  });
+});
+
+describe("expandSecureRemoval (TODO.md S2)", () => {
+  it("removing a burst's cover tile removes every frame, not just the cover", () => {
+    // The trash button sits on the collapsed tile; before this, only "b1" was
+    // removed and b2/b3 stayed behind in the album.
+    const out = expandSecureRemoval(burstItems, [burstItems[1]]);
+    expect(out.map((i) => i.id).sort()).toEqual(["b1", "b2", "b3"]);
+  });
+
+  it("leaves non-burst targets alone and never duplicates", () => {
+    const out = expandSecureRemoval(burstItems, [burstItems[0], burstItems[4], burstItems[0]]);
+    expect(out.map((i) => i.id)).toEqual(["a", "c"]);
+  });
+
+  it("is scoped to the owning album — a smart view must not reach into another album", () => {
+    const mixed: BurstMovableItem[] = [
+      { id: "x1", gallery_id: "g1", burst_id: "same" },
+      { id: "x2", gallery_id: "g1", burst_id: "same" },
+      { id: "y1", gallery_id: "g2", burst_id: "same" },
+    ];
+    const out = expandSecureRemoval(mixed, [mixed[0]]);
+    expect(out.map((i) => i.id).sort()).toEqual(["x1", "x2"]);
   });
 });
 
