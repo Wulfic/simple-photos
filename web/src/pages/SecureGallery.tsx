@@ -21,7 +21,8 @@ import {
   otherSecureAlbumItems,
   resolveSecureMoves,
   expandSecureSelection,
-  expandSecureRemoval,
+  expandBurstStacks,
+  collapseBurstStacks,
   planSecureAddsToTarget,
   secureMoveTargets,
 } from "../gallery/secureMovePicker";
@@ -398,7 +399,7 @@ export default function SecureGallery() {
     // In a smart view the selected "gallery" is synthetic — route each removal
     // to the item's REAL owning album. `gallery_id` is present on both feeds.
     const smartView = isSecureSmartAlbum(selectedGallery.id);
-    const targets = expandSecureRemoval(items, tiles).map((item) => ({
+    const targets = expandBurstStacks(items, tiles).map((item) => ({
       item,
       owningGalleryId: smartView ? (item.gallery_id ?? undefined) : selectedGallery.id,
     }));
@@ -495,6 +496,16 @@ export default function SecureGallery() {
   const otherSecureItems = selectedGallery
     ? otherSecureAlbumItems(allItems, selectedGallery.id)
     : [];
+  // What the pull picker DRAWS: one tile per burst stack, badged with its frame
+  // count, like every other secure grid (S5). `resolveSecureMoves` expands a
+  // picked tile back to its whole stack, so the two must be used together.
+  const otherSecureTiles = collapseBurstStacks(otherSecureItems);
+  const otherSecureStackSizes = new Map<string, number>();
+  for (const it of otherSecureItems) {
+    if (it.burst_id) {
+      otherSecureStackSizes.set(it.burst_id, (otherSecureStackSizes.get(it.burst_id) ?? 0) + 1);
+    }
+  }
 
   // Real secure albums the current selection can be pushed INTO (#43). Excludes
   // the open album; for a smart view its synthetic id matches nothing, so every
@@ -518,10 +529,14 @@ export default function SecureGallery() {
     setMoving(true);
     let moved = 0;
     let failed = 0;
-    // Resolve each selected item to its owning gallery, then reassign it. Each
-    // is isolated so one failure never aborts the rest (mirrors secure-add).
+    // Resolve each selected tile to its owning gallery — a burst tile to its
+    // whole stack (S5) — then reassign each item. Each is isolated so one
+    // failure never aborts the rest (mirrors secure-add).
     const moves = resolveSecureMoves(otherSecureItems, moveSelected);
-    failed += moveSelected.size - moves.length; // selections we couldn't route
+    // Tiles we could not route at all. NOT `selected - moves`: one burst tile
+    // expands to several moves, which made that difference go negative.
+    const routable = new Set(otherSecureItems.filter((i) => i.gallery_id).map((i) => i.id));
+    failed += [...moveSelected].filter((id) => !routable.has(id)).length;
     for (const mv of moves) {
       try {
         await api.secureGalleries.moveItem(mv.sourceGalleryId, mv.itemId, selectedGallery.id);
@@ -830,7 +845,7 @@ export default function SecureGallery() {
                 </button>
               </div>
               <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-2">
-                {otherSecureItems.map((it) => {
+                {otherSecureTiles.map((it) => {
                   const selected = moveSelected.has(it.id);
                   return (
                     <div
@@ -838,7 +853,11 @@ export default function SecureGallery() {
                       className={`relative aspect-square rounded overflow-hidden cursor-pointer ${selected ? "ring-2 ring-accent-500" : ""}`}
                       onClick={() => toggleMoveSelect(it.id)}
                     >
-                      <SecureGalleryItem item={it} onClick={() => toggleMoveSelect(it.id)} />
+                      <SecureGalleryItem
+                        item={it}
+                        burstCount={it.burst_id ? otherSecureStackSizes.get(it.burst_id) : undefined}
+                        onClick={() => toggleMoveSelect(it.id)}
+                      />
                       {selected && (
                         <div className="absolute top-1 right-1 w-5 h-5 rounded-full bg-green-500 flex items-center justify-center z-10 pointer-events-none">
                           <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>

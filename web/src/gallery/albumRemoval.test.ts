@@ -215,7 +215,7 @@ describe("the secure removal prompt is actually wired up", () => {
   });
 
   it("expands bursts before asking, so the prompt counts what is removed (S2)", () => {
-    expect(secureGallery).toContain("expandSecureRemoval(");
+    expect(secureGallery).toContain("expandBurstStacks(");
   });
 
   it("derives the success toast from the prompt's own counts", () => {
@@ -241,6 +241,14 @@ describe("the secure removal prompt is actually wired up", () => {
       secureGallery.indexOf("onClick={() => pushSelect.enterEmpty()}"),
     );
     expect(header).not.toContain("moveTargets.length > 0");
+  });
+
+  it("the pull picker draws one tile per stack (S5)", () => {
+    // resolveSecureMoves expands a picked tile to its stack; drawing every frame
+    // instead shows one burst as N tiles, unlike every other secure grid and
+    // unlike Android's picker.
+    expect(secureGallery).toContain("collapseBurstStacks(otherSecureItems)");
+    expect(secureGallery).toContain("otherSecureTiles.map(");
   });
 
   it("does not ask with window.confirm", () => {

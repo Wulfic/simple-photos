@@ -718,9 +718,9 @@ private fun ColumnScope.MoveFromSecurePanel(
     onMove: () -> Unit,
     onCancel: () -> Unit,
 ) {
-    // Collapse bursts so one tile represents a stack (the move pulls the cover;
-    // the server keeps membership rows per frame — bursts move as their cover
-    // here for parity with the add/remove flows' single-tile display).
+    // Collapse bursts so one tile represents a stack. Picking it moves the WHOLE
+    // stack — SecureMovePlan.planPull expands it, exactly as a removal does —
+    // because moving only the cover split bursts across albums (TODO.md S5).
     val display = remember(items) { collapseSecureBursts(items) }
     val burstCounts = remember(items) {
         items.mapNotNull { it.burstId }.filter { it.isNotEmpty() }.groupingBy { it }.eachCount()

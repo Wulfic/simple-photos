@@ -3,7 +3,8 @@ import {
   otherSecureAlbumItems,
   resolveSecureMoves,
   expandSecureSelection,
-  expandSecureRemoval,
+  expandBurstStacks,
+  collapseBurstStacks,
   secureMoveTargets,
   type MovableSecureItem,
   type BurstMovableItem,
@@ -88,16 +89,16 @@ describe("expandSecureSelection", () => {
   });
 });
 
-describe("expandSecureRemoval (TODO.md S2)", () => {
+describe("expandBurstStacks (TODO.md S2)", () => {
   it("removing a burst's cover tile removes every frame, not just the cover", () => {
     // The trash button sits on the collapsed tile; before this, only "b1" was
     // removed and b2/b3 stayed behind in the album.
-    const out = expandSecureRemoval(burstItems, [burstItems[1]]);
+    const out = expandBurstStacks(burstItems, [burstItems[1]]);
     expect(out.map((i) => i.id).sort()).toEqual(["b1", "b2", "b3"]);
   });
 
   it("leaves non-burst targets alone and never duplicates", () => {
-    const out = expandSecureRemoval(burstItems, [burstItems[0], burstItems[4], burstItems[0]]);
+    const out = expandBurstStacks(burstItems, [burstItems[0], burstItems[4], burstItems[0]]);
     expect(out.map((i) => i.id)).toEqual(["a", "c"]);
   });
 
@@ -107,8 +108,42 @@ describe("expandSecureRemoval (TODO.md S2)", () => {
       { id: "x2", gallery_id: "g1", burst_id: "same" },
       { id: "y1", gallery_id: "g2", burst_id: "same" },
     ];
-    const out = expandSecureRemoval(mixed, [mixed[0]]);
+    const out = expandBurstStacks(mixed, [mixed[0]]);
     expect(out.map((i) => i.id).sort()).toEqual(["x1", "x2"]);
+  });
+});
+
+describe("the pull picker carries whole bursts (TODO.md S5)", () => {
+  const pool: BurstMovableItem[] = [
+    { id: "p", gallery_id: "g2", burst_id: null },
+    { id: "s1", gallery_id: "g2", burst_id: "stack" },
+    { id: "s2", gallery_id: "g2", burst_id: "stack" },
+    { id: "s3", gallery_id: "g2", burst_id: "stack" },
+    { id: "q", gallery_id: "g3", burst_id: null },
+  ];
+
+  it("draws one tile per stack, in order", () => {
+    expect(collapseBurstStacks(pool).map((i) => i.id)).toEqual(["p", "s1", "q"]);
+  });
+
+  it("collapses per album, so the same burst id in two albums stays two tiles", () => {
+    const twoAlbums: BurstMovableItem[] = [
+      { id: "a1", gallery_id: "g2", burst_id: "b" },
+      { id: "b1", gallery_id: "g3", burst_id: "b" },
+    ];
+    expect(collapseBurstStacks(twoAlbums).map((i) => i.id)).toEqual(["a1", "b1"]);
+  });
+
+  it("moving the stack's tile moves every frame from its source album", () => {
+    // Android moved only the cover here, splitting the burst across two albums.
+    const moves = resolveSecureMoves(pool, ["s1"]);
+    expect(moves.map((m) => m.itemId).sort()).toEqual(["s1", "s2", "s3"]);
+    expect(new Set(moves.map((m) => m.sourceGalleryId))).toEqual(new Set(["g2"]));
+  });
+
+  it("picking a frame twice, or a frame and its cover, moves each frame once", () => {
+    const moves = resolveSecureMoves(pool, ["s1", "s2", "s1"]);
+    expect(moves.map((m) => m.itemId).sort()).toEqual(["s1", "s2", "s3"]);
   });
 });
 

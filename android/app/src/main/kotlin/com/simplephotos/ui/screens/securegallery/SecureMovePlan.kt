@@ -119,6 +119,29 @@ object SecureMovePlan {
         return (targets + siblings).distinctBy { it.id }
     }
 
+    /** A single pull move: reassign [itemId] from [sourceGalleryId] into the open album. */
+    data class Move(val sourceGalleryId: String, val itemId: String)
+
+    /**
+     * Resolve the tiles picked in the "Move here" panel (#31) to concrete moves.
+     *
+     * The panel shows one tile per burst, and this used to move only that tile's
+     * id — splitting the burst across two albums (TODO.md S5). A picked tile now
+     * carries its whole stack from its own source album, via the SAME gallery-
+     * scoped expansion a removal uses ([expandForRemoval]), so a burst behaves
+     * identically everywhere. Mirrors web's `resolveSecureMoves`.
+     *
+     * Tiles not in [pool], and items with no owning album, cannot be routed and
+     * are dropped — the caller counts them as failures.
+     */
+    fun planPull(pool: List<SecureGalleryItem>, selectedIds: Set<String>): List<Move> {
+        val byId = pool.associateBy { it.id }
+        val tiles = selectedIds.mapNotNull { byId[it] }
+        return expandForRemoval(pool, tiles).mapNotNull { item ->
+            item.galleryId?.let { Move(sourceGalleryId = it, itemId = item.id) }
+        }
+    }
+
     /**
      * Real albums a selection can be filed INTO, excluding the album currently
      * open. For a synthetic smart view [currentGalleryId] is null, so every album

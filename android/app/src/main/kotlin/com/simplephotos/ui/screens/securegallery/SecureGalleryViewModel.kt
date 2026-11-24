@@ -418,33 +418,32 @@ class SecureGalleryViewModel @Inject constructor(
     fun moveItemsIntoSelected(itemIds: List<String>) {
         val target = selectedGallery ?: return
         if (itemIds.isEmpty()) return
-        val pool = otherSecureItems.associateBy { it.id }
+        val pool = otherSecureItems
+        // A picked burst tile carries its whole stack (S5) — see planPull.
+        val moves = SecureMovePlan.planPull(pool, itemIds.toSet())
+        val routable = pool.filter { it.galleryId != null }.map { it.id }.toSet()
+        val unrouted = itemIds.toSet().count { it !in routable }
+        if (unrouted > 0) Log.e(TAG, "  cannot move $unrouted picked tile(s): not in pool / no source gallery")
         viewModelScope.launch {
             val outcomes = withContext(Dispatchers.IO) {
                 coroutineScope {
-                    itemIds.mapNotNull { id ->
-                        val item = pool[id]
-                        val src = item?.galleryId
-                        if (src == null) {
-                            Log.e(TAG, "  cannot move item $id: not in pool / no source gallery")
-                            null
-                        } else {
-                            async {
-                                try {
-                                    secureGalleryRepository.moveItem(src, id, target.id)
-                                    true
-                                } catch (e: Exception) {
-                                    Log.e(TAG, "  move failed for item $id", e)
-                                    false
-                                }
+                    moves.map { mv ->
+                        async {
+                            try {
+                                secureGalleryRepository.moveItem(mv.sourceGalleryId, mv.itemId, target.id)
+                                true
+                            } catch (e: Exception) {
+                                Log.e(TAG, "  move failed for item ${mv.itemId}", e)
+                                false
                             }
                         }
                     }.awaitAll()
                 }
             }
             val moved = outcomes.count { it }
-            val failed = itemIds.size - moved
-            Log.i(TAG, "Moved $moved/${itemIds.size} items into ${target.id} ($failed failed)")
+            // NOT `itemIds.size - moved`: one burst tile expands to several moves.
+            val failed = unrouted + outcomes.count { !it }
+            Log.i(TAG, "Moved $moved/${moves.size} items (${itemIds.size} tiles) into ${target.id} ($failed failed)")
             if (failed > 0) {
                 error = "$failed item${if (failed != 1) "s" else ""} couldn't be moved"
             }

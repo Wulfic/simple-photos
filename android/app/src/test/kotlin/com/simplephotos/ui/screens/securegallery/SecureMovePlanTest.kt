@@ -140,4 +140,34 @@ class SecureMovePlanTest {
         val targets = SecureMovePlan.addTargets(listOf(gallery("g1"), gallery("g2")), null)
         assertEquals(listOf("g1", "g2"), targets.map { it.id })
     }
+
+    // ── planPull (TODO.md S5) ───────────────────────────────────────────────
+
+    @Test
+    fun `pulling a burst tile moves every frame from its source album`() {
+        // The "Move here" panel shows only b1; this used to move b1 alone and
+        // leave b2/b3 behind, splitting the burst across two albums.
+        val moves = SecureMovePlan.planPull(items, setOf("b1"))
+        assertEquals(setOf("b1", "b2", "b3"), moves.map { it.itemId }.toSet())
+        assertEquals(setOf("g1"), moves.map { it.sourceGalleryId }.toSet())
+    }
+
+    @Test
+    fun `pull expansion stays inside the source album`() {
+        val pool = listOf(item("x1", "g1", "same"), item("x2", "g1", "same"), item("y1", "g2", "same"))
+        assertEquals(listOf("x1", "x2"), SecureMovePlan.planPull(pool, setOf("x1")).map { it.itemId }.sorted())
+    }
+
+    @Test
+    fun `unroutable picks are dropped, not guessed`() {
+        val pool = listOf(item("a", "g1"), item("orphan", null))
+        assertEquals(listOf("a"), SecureMovePlan.planPull(pool, setOf("a", "orphan", "missing")).map { it.itemId })
+    }
+
+    @Test
+    fun `picking a frame and its cover moves each frame once`() {
+        val moves = SecureMovePlan.planPull(items, setOf("b1", "b2"))
+        assertEquals(3, moves.size)
+        assertEquals(setOf("b1", "b2", "b3"), moves.map { it.itemId }.toSet())
+    }
 }

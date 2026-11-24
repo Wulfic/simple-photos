@@ -47,21 +47,28 @@ export interface SecureMove {
 }
 
 /**
- * Resolve a set of selected item ids to concrete move operations against the
- * source pool. Selections that aren't in the pool (or lack a source gallery)
- * are dropped — they can't be safely moved.
+ * Resolve the selected picker tiles to concrete move operations against the
+ * source pool.
+ *
+ * A selected burst tile carries its whole stack from its own source album: the
+ * picker shows one tile per burst ({@link collapseBurstStacks}), and moving only
+ * the cover split the burst across two albums (TODO.md S5 — Android did exactly
+ * that; web showed every frame instead, so the two pickers disagreed too).
+ * Selections that aren't in the pool (or lack a source gallery) are dropped —
+ * they can't be safely moved.
  */
 export function resolveSecureMoves(
-  pool: MovableSecureItem[],
+  pool: BurstMovableItem[],
   selectedItemIds: Iterable<string>,
 ): SecureMove[] {
   const byId = new Map(pool.map((it) => [it.id, it]));
-  const moves: SecureMove[] = [];
-  for (const id of selectedItemIds) {
+  const tiles = [...new Set(selectedItemIds)].flatMap((id) => {
     const it = byId.get(id);
-    if (it?.gallery_id) moves.push({ sourceGalleryId: it.gallery_id, itemId: it.id });
-  }
-  return moves;
+    return it ? [it] : [];
+  });
+  return expandBurstStacks(pool, tiles).flatMap((it) =>
+    it.gallery_id ? [{ sourceGalleryId: it.gallery_id, itemId: it.id }] : [],
+  );
 }
 
 // ── Push direction (#43): move items OUT of the open album into another ──────
@@ -112,36 +119,54 @@ export function expandSecureSelection<T extends BurstMovableItem>(
   return out;
 }
 
+/** A burst stack's identity: its burst id WITHIN its owning album. */
+function stackKey(it: BurstMovableItem): string {
+  return `${it.gallery_id ?? ""}\u0000${it.burst_id}`;
+}
+
 /**
- * Every item a removal of `targets` must actually remove: the targets plus all
- * sibling frames of any burst among them.
+ * Every item an operation on `targets` must actually touch: the targets plus all
+ * sibling frames of any burst among them. Used by removal AND by the pull picker,
+ * so both treat a burst tile identically.
  *
- * The grid and viewer collapse a burst to ONE tile, so removing just the tapped
- * item stranded every other frame in the album while only the cover returned to
- * the gallery (TODO.md S2). Android fixed this in `SecureMovePlan.expandForRemoval`;
- * this is the same rule, and the confirmation dialog must describe the result of
- * THIS call, not the tiles that were tapped.
+ * The grid, viewer and pickers collapse a burst to ONE tile, so acting on just
+ * the tapped item stranded every other frame: a removal returned only the cover
+ * to the gallery (TODO.md S2), a pull split the burst across albums (S5).
+ * Android's twin is `SecureMovePlan.expandForRemoval`. A confirmation dialog must
+ * describe the result of THIS call, not the tiles that were tapped.
  *
  * Gallery-scoped: siblings share both `burst_id` and the owning album. Frames of
  * one burst live in one album, so this only guards a hypothetical cross-album
- * `burst_id` collision — but in a smart view, where items from every album sit
- * side by side, that guard is what keeps a removal inside the album it names.
+ * `burst_id` collision — but in a smart view or the pull pool, where items from
+ * every album sit side by side, that guard keeps an operation inside one album.
  */
-export function expandSecureRemoval<T extends BurstMovableItem>(
+export function expandBurstStacks<T extends BurstMovableItem>(
   allItems: ReadonlyArray<T>,
   targets: ReadonlyArray<T>,
 ): T[] {
-  const burstKeys = new Set(
-    targets.filter((t) => t.burst_id).map((t) => `${t.gallery_id ?? ""}\u0000${t.burst_id}`),
-  );
+  const burstKeys = new Set(targets.filter((t) => t.burst_id).map(stackKey));
   const out = new Map<string, T>();
   for (const t of targets) out.set(t.id, t);
   for (const it of allItems) {
-    if (it.burst_id && burstKeys.has(`${it.gallery_id ?? ""}\u0000${it.burst_id}`)) {
-      if (!out.has(it.id)) out.set(it.id, it);
-    }
+    if (it.burst_id && burstKeys.has(stackKey(it)) && !out.has(it.id)) out.set(it.id, it);
   }
   return [...out.values()];
+}
+
+/**
+ * One tile per burst stack (per owning album) for a picker; non-burst items pass
+ * through in order. The inverse of {@link expandBurstStacks}, which a picker
+ * applies on the way back.
+ */
+export function collapseBurstStacks<T extends BurstMovableItem>(items: ReadonlyArray<T>): T[] {
+  const seen = new Set<string>();
+  return items.filter((it) => {
+    if (!it.burst_id) return true;
+    const key = stackKey(it);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 /**

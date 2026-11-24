@@ -175,4 +175,13 @@ class SecureRemovalWiringTest {
             galleryListView.contains("Tap again to confirm delete"),
         )
     }
+
+    @Test
+    fun `the pull moves whole stacks (S5)`() {
+        assertTrue(
+            "moveItemsIntoSelected must resolve picks through SecureMovePlan.planPull, " +
+                "or a burst tile moves only its cover",
+            secureViewModel.contains("SecureMovePlan.planPull("),
+        )
+    }
 }
