@@ -321,8 +321,11 @@ class APIClient:
         r.raise_for_status()
         return r.json()
 
-    def download_blob(self, blob_id: str) -> requests.Response:
-        return self.get(f"/api/blobs/{blob_id}")
+    def download_blob(self, blob_id: str, gallery_token: str = None) -> requests.Response:
+        """Download a blob. A blob that belongs to a secure gallery is gated:
+        pass the unlock token, exactly as the clients do (`x-gallery-token`)."""
+        headers = {"x-gallery-token": gallery_token} if gallery_token else None
+        return self.get(f"/api/blobs/{blob_id}", headers=headers)
 
     def delete_blob(self, blob_id: str) -> requests.Response:
         return self.delete(f"/api/blobs/{blob_id}")

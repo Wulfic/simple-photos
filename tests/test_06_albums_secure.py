@@ -566,7 +566,7 @@ class TestSecureGalleryDecryption:
         )
 
         # Download the blob
-        resp = user_client.download_blob(item_blob_id)
+        resp = user_client.download_blob(item_blob_id, gallery_token=token)
         assert resp.status_code == 200, (
             f"Failed to download gallery item blob {item_blob_id}: HTTP {resp.status_code}"
         )
@@ -591,6 +591,31 @@ class TestSecureGalleryDecryption:
         # (the wire format used by server-side encryption)
         assert len(plaintext) > 0, "Decrypted payload is empty"
 
+    def test_gallery_item_blob_requires_the_gallery_token(self, user_client):
+        """The secure gate itself: a secured item's blob is NOT downloadable with
+        a session alone.
+
+        This class was red from 2026-07-15 to 2026-11-24 because its downloads
+        omitted `x-gallery-token` and got the gate's 401 — the gate was right and
+        the tests were stale. Fixing them meant adding the token, and this guard
+        is what stops that fix from hiding a gate that later opens up: the same
+        download WITHOUT the token must still be refused.
+        """
+        photo = user_client.upload_photo(unique_filename())
+        gallery = user_client.create_secure_gallery("Gate Test")
+        token = user_client.unlock_secure_gallery(USER_PASSWORD)["gallery_token"]
+        user_client.add_secure_gallery_item(gallery["gallery_id"], photo["photo_id"], token)
+        time.sleep(3)
+        items = user_client.list_secure_gallery_items(gallery["gallery_id"], token)["items"]
+        assert len(items) == 1
+        blob_id = items[0]["blob_id"]
+
+        assert user_client.download_blob(blob_id).status_code == 401, (
+            "a secured blob was served to a session with no gallery token"
+        )
+        assert user_client.download_blob(blob_id, gallery_token="sec_garbage").status_code == 401
+        assert user_client.download_blob(blob_id, gallery_token=token).status_code == 200
+
     def test_gallery_item_blob_is_not_raw_photo_data(self, user_client):
         """Verify that the blob returned for a gallery item is NOT the raw
         unencrypted photo data.  If it is, the server is serving the wrong blob.
@@ -610,7 +635,7 @@ class TestSecureGalleryDecryption:
         items = user_client.list_secure_gallery_items(gallery["gallery_id"], token)
         item_blob_id = items["items"][0]["blob_id"]
 
-        resp = user_client.download_blob(item_blob_id)
+        resp = user_client.download_blob(item_blob_id, gallery_token=token)
         assert resp.status_code == 200
         blob_data = resp.content
 
@@ -661,7 +686,7 @@ class TestSecureGalleryDecryption:
         item_blob_id = items["items"][0]["blob_id"]
 
         # Download the blob on backup
-        resp = backup_user.download_blob(item_blob_id)
+        resp = backup_user.download_blob(item_blob_id, gallery_token=backup_token)
         assert resp.status_code == 200, (
             f"Failed to download gallery item blob on backup: HTTP {resp.status_code}.  "
             f"The encrypted blob may not have been synced."
@@ -737,7 +762,7 @@ class TestSecureGalleryDecryption:
         assert thumb_blob_id, "encrypted_thumb_blob_id missing from response"
 
         # Download the thumbnail blob directly
-        resp = user_client.download_blob(thumb_blob_id)
+        resp = user_client.download_blob(thumb_blob_id, gallery_token=token)
         assert resp.status_code == 200, (
             f"Failed to download thumbnail blob {thumb_blob_id}: "
             f"HTTP {resp.status_code}"
@@ -804,7 +829,7 @@ class TestSecureGalleryDecryption:
         )
 
         # And the thumbnail blob must actually be downloadable on backup
-        resp = backup_user.download_blob(thumb_blob_id)
+        resp = backup_user.download_blob(thumb_blob_id, gallery_token=backup_token)
         assert resp.status_code == 200, (
             f"Thumbnail blob download on backup failed: HTTP {resp.status_code}. "
             f"The encrypted thumbnail blob was not synced to backup."
@@ -872,7 +897,7 @@ class TestSecureGalleryDecryption:
         )
 
         # Download on primary works
-        resp = user_client.download_blob(primary_blob_id)
+        resp = user_client.download_blob(primary_blob_id, gallery_token=token)
         assert resp.status_code == 200, (
             f"Primary download failed: HTTP {resp.status_code}"
         )
@@ -901,7 +926,7 @@ class TestSecureGalleryDecryption:
         )
 
         # Download the blob on backup — THIS is where the 404 occurs
-        resp = backup_user.download_blob(backup_blob_id)
+        resp = backup_user.download_blob(backup_blob_id, gallery_token=backup_token)
         assert resp.status_code == 200, (
             f"Client-encrypted gallery blob download on backup failed: "
             f"HTTP {resp.status_code}. The clone blob was likely excluded "
@@ -976,7 +1001,7 @@ class TestSecureGalleryDecryption:
         blob_id = item["blob_id"]
 
         # Download the blob — this is what the web client does
-        resp = backup_user.download_blob(blob_id)
+        resp = backup_user.download_blob(blob_id, gallery_token=backup_token)
         assert resp.status_code == 200, (
             f"Gallery blob download on backup failed after prior sync: "
             f"HTTP {resp.status_code}. blob_id={blob_id}. "
@@ -993,7 +1018,7 @@ class TestSecureGalleryDecryption:
         # Also verify thumbnail is downloadable if present
         thumb_blob_id = item.get("encrypted_thumb_blob_id")
         if thumb_blob_id:
-            resp = backup_user.download_blob(thumb_blob_id)
+            resp = backup_user.download_blob(thumb_blob_id, gallery_token=backup_token)
             assert resp.status_code == 200, (
                 f"Thumbnail blob download on backup failed after prior sync: "
                 f"HTTP {resp.status_code}. thumb_blob_id={thumb_blob_id}."
@@ -1285,7 +1310,7 @@ class TestSecureAddAlreadyEncrypted:
         assert len(items["items"]) == 1
         item_blob_id = items["items"][0]["blob_id"]
 
-        resp = user_client.download_blob(item_blob_id)
+        resp = user_client.download_blob(item_blob_id, gallery_token=token)
         assert resp.status_code == 200, (
             f"Failed to download clone blob: HTTP {resp.status_code}"
         )
