@@ -1,125 +1,161 @@
 ---
 name: debug-errors
-description: "Systematic error triage and fix loop. Use when: build fails, type errors appear, runtime exceptions occur, get_errors returns problems, tests fail with unexpected errors, logs show exceptions. Reads VS Code diagnostics, terminal output, and log files to form hypotheses and drive fixes to zero errors."
-argument-hint: "Describe the error or paste the error message"
+description: "Systematic error triage with a hard attempt budget. Use when: build fails, type errors appear, runtime exceptions occur, diagnostics return problems, or something that worked stopped working. Drives to zero errors, or to a documented blocker — never to a suppression."
+argument-hint: "The error message or a description of the failure"
 ---
 
-# Debug Errors — Triage to Zero
+# Debug Errors — Triage to Zero, or to a Documented Stop
 
-Errors block everything. Fix them systematically, not by guessing. Never apply a fix without understanding the root cause first.
+Fix root causes, not symptoms. Never apply a fix you can't explain. **This loop has a
+budget of 3** — see below. Grinding past it produces worse code than stopping does.
 
 ## When to Use
 
-- `get_errors` returns diagnostics
-- Build step exits non-zero
-- Test runner reports unexpected errors (not assertion failures — those go to `test-iterate`)
-- Runtime exception in logs
-- TypeScript/compiler errors after a change
+- Diagnostics return errors (`get_errors`)
+- A build or typecheck exits non-zero
+- A runtime exception appears in logs
 - "It was working and now it's not"
+
+> **Assertion failures belong to `test-iterate`, not here.** This skill is for errors;
+> that one is for a test that ran correctly and reported the wrong answer.
+
+---
+
+## The Budget
+
+| Attempt | What you do |
+|---|---|
+| 1 | Diagnose, form a hypothesis, apply the minimal fix. |
+| 2 | **Re-diagnose from scratch.** Attempt 1 failing means the diagnosis was wrong, not the fix. Do not patch the patch. |
+| 3 | Last attempt. Narrow it — add logging, isolate in a scratch file, bisect the change. |
+| 4 | **STOP.** Write to `.agent/memory/gotchas.md` and report to the user. |
+
+**Stopping at 3 is a correct, professional outcome.** A clear report — "here is the error,
+here are three hypotheses I tested, here is what each ruled out, here is where I'd look
+next" — is far more useful than a fourth guess that mutates unrelated code.
+
+**What is never acceptable** is widening the fix so the symptom disappears: adding
+`@ts-ignore` / `as any` / `# type: ignore`, an empty `catch`, an `eslint-disable`, or
+deleting the code that surfaced the error. That converts a visible bug into an invisible one.
+
+---
 
 ## Procedure
 
-### Step 1 — Collect all errors first
-
-Run `get_errors` across the relevant files — not just the file you changed:
+### Step 1 — Collect every error before fixing any
 
 ```
-get_errors(filePaths: ["<changed file>", "<related files>"])
-// or omit filePaths to scan everything
-get_errors()
+get_errors()                    // whole workspace
+get_errors(filePaths: [...])    // or scoped to changed + related files
 ```
 
-Do NOT start fixing until you have the full error list. Fixing one error in isolation often reveals it was masking others or was a symptom of a deeper problem.
+Do not start fixing from a partial list. Errors cascade — the 12th message is often the
+only real one, and fixing #1 in isolation can be fixing a symptom of #12.
 
-### Step 2 — Read the logs
+**Find the first error, not the last.** Compilers report cascades; the first failure is
+usually the true one.
 
-If the error is runtime (not compile-time), find the log file:
+### Step 2 — Read the actual output
+
+For runtime errors, get the full stack trace:
 
 ```powershell
-# Common log locations — adapt per project
 Get-Content .\logs\app.log -Tail 50
-Get-Content .\logs\error.log -Tail 50
 ```
 
-Look for the full stack trace, not just the last line. The root cause is almost always higher up in the stack.
+Read the **whole** trace, not the last line. The root cause is usually several frames up,
+in the caller. If the trace is truncated or unhelpful, that's a signal to add logging
+(step 5) rather than to guess.
 
-### Step 3 — Form a hypothesis with think
-
-Before touching code:
-
-```json
-mcp_wulfnet-think_think_invoke_tool
-tool_name: "think"
-tool_input: {
-  "thought": "The error is [X]. The file it occurs in is [Y]. The change that preceded it was [Z]. What is the most likely root cause? What are alternative causes? What is the minimal fix?"
-}
-```
-
-Do not skip this. Blind edits without a hypothesis create new errors.
-
-### Step 4 — Read the failing code in context
+### Step 3 — Read the code in context
 
 ```
 read_file(filePath, startLine, endLine)
 ```
 
-Read at least 20 lines before and after the error location. Errors are almost never exactly where they're reported — the real problem is usually in the caller or the type definition.
+At least 20 lines either side. The reported line is where the problem *surfaced*, not
+where it *originated* — that's usually the caller or the type definition.
 
-For TypeScript errors, also read the type definition:
+For type errors, read the type itself before touching anything:
+
 ```
 grep_search(query: "interface <TypeName>|type <TypeName>", isRegexp: true)
 ```
 
-### Step 5 — Apply the minimal fix
+### Step 4 — State the hypothesis before editing
 
-- Fix the root cause, not the symptom
-- Do NOT add `// @ts-ignore` or `as any` as a fix — this is a smell, not a solution
-- Do NOT add empty catch blocks to hide errors
-- If the fix requires understanding a library API, invoke `research-docs` first
+Write it out explicitly — one sentence each:
 
-### Step 6 — Verify to zero
+- **Symptom:** the exact error text
+- **Hypothesis:** why it happens, mechanically
+- **Prediction:** what changes if the hypothesis is right
+- **Minimal fix:** the smallest edit that tests it
 
-After each fix:
+**A fix without a stated hypothesis is a guess**, and guesses create new errors while
+hiding old ones. If you can't fill in "Hypothesis", you haven't read enough yet — go back
+to step 3.
+
+### Step 5 — When you can't form a hypothesis, get data
+
+Don't guess harder. Make the failure observable:
+
+- Add logging around the failure point — inputs, state, branch taken
+- Re-run and read the real values
+- Isolate the failing piece in a scratch file
+- Bisect: what was the last state where this worked?
+
+Adding logging is progress, not a detour. It also usually stays in as the error-path
+logging the code should have had.
+
+### Step 6 — Apply the minimal fix, one at a time
+
+One change. Then re-check:
+
 ```
 get_errors()
 ```
 
-Repeat until zero errors. Then run the build:
-```powershell
-# run whatever build command the project uses
-```
+**Never stack multiple fixes before re-checking.** If you change three things and the
+error count drops, you've learned nothing about which one mattered — and you may have
+added two new problems masked by the fix to the first.
 
-Zero errors in `get_errors` + clean build = done.
+If the fix requires a third-party API you're not certain of, use `research-docs` before
+writing it. Inventing an API signature from memory is how attempt 2 gets burned.
 
-### Step 7 — Post-mortem for non-trivial bugs
+### Step 7 — Verify to zero
 
-If the bug took more than 2 fix attempts, save it to mem0:
+Repeat 3–6 until `get_errors()` is clean, then run the real build via `build-run`.
+Zero diagnostics **and** a clean build. Diagnostics alone are not proof — they don't
+catch everything a bundler does.
 
-```json
-tool_name: "add_memory"
-tool_input: {
-  "content": "Bug: [description]. Root cause: [cause]. Fix: [what worked]. What didn't work: [failed attempts].",
-  "user_id": "tyler",
-  "metadata": { "project": "<project>", "type": "bug" }
-}
-```
+### Step 8 — Record it
+
+If the bug took more than 2 attempts, or the cause was non-obvious, append to
+`.agent/memory/gotchas.md` via `save-memory`. **If you exhausted the budget, this is
+mandatory** — that is exactly the case the file exists for.
+
+Include the dead ends. "We tried X, it doesn't work because Y" is what stops the next
+session from burning an hour on X.
 
 ## Rules
 
-- **Never add suppressions** (`@ts-ignore`, `eslint-disable`, `as any`) without a documented reason
-- **Read before you edit** — always read the full context before applying a fix
-- **Fix root cause** — if you find yourself fixing the same error in 3 places, you're fixing a symptom
-- **One fix at a time** — apply one change, run `get_errors`, assess, repeat
-- If you're on the 4th attempt at the same error, stop and use `think` again with the full error history
+- **Budget of 3.** Then stop and report. No exceptions.
+- **Two failures means the diagnosis is wrong**, not the fix. Re-diagnose, don't re-patch.
+- **No suppressions.** Ever, without an explicit written justification the user has agreed to.
+- **Read before you edit.** Always.
+- **One fix per verification cycle.**
+- **Never delete code to make an error go away** unless deleting it is genuinely the fix.
 
 ## Error Pattern Reference
 
-| Pattern | Likely Cause |
-|---------|-------------|
-| `Cannot find module` | Missing import, wrong path, not installed |
-| `Property X does not exist on type Y` | Wrong type, missing field in interface, outdated type def |
-| `is not assignable to type` | Type mismatch — read both types fully before fixing |
-| `undefined is not a function` | Missing null check, wrong variable scope, async/await missing |
-| `ENOENT: no such file` | Wrong working directory, wrong path, file not created yet |
-| `EADDRINUSE` | Port already in use — kill the existing process |
-| `Cannot read properties of undefined` | Missing null check or incorrect async flow |
+| Pattern | Likely cause |
+|---|---|
+| `Cannot find module` | Missing install, wrong path, missing path alias in tsconfig |
+| `Property X does not exist on type Y` | Stale type, wrong generic, needs a narrowing guard |
+| `is not assignable to type` | Read **both** types fully before touching either |
+| `undefined is not a function` | Wrong import shape (default vs named), or missing `await` |
+| `Cannot read properties of undefined` | Missing null check, or an async result used before it resolved |
+| `ENOENT: no such file` | Wrong CWD — check where the process actually starts |
+| `EADDRINUSE` | Leaked dev server from an earlier run; kill it |
+| Works locally, fails in CI | Env var, case-sensitive path, or install-order difference |
+| Intermittent failure | Race condition, shared state between tests, or real clock/timezone dependency |

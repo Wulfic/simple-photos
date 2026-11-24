@@ -1,108 +1,99 @@
-# GitHub Copilot Instructions — simple-photos
+# Copilot Instructions
 
-These instructions apply to every Copilot interaction in this repository.
+**Read [`AGENTS.md`](../AGENTS.md) at the repo root — it is the authoritative version of
+these rules.** This file is the condensed set that applies even if you never open it.
 
----
+## Rule zero — destructive actions
 
-## 1 — Always Plan Before Acting
+An action is destructive if **a mistake would lose state that isn't reproducible from
+what's on disk and committed**: `rm -rf`, `Remove-Item -Recurse`, overwriting a file you
+never read, `git reset --hard` / `clean -fd` / `push --force` / `branch -D` / `rebase`,
+`DROP` / `TRUNCATE` / `DELETE` with no `WHERE`, migration `down`, `docker volume rm` /
+`compose down -v` / `system prune`, `terraform apply` or `destroy`, publishing, releasing,
+or closing anything other people can see.
 
-Before writing or modifying any code:
+**Five gates, all five, in order, before it runs:**
 
-1. **Write a plan** listing every file, function, route, and migration that will be touched.
-2. **Run impact analysis** (`gitnexus_impact`) on every symbol in the plan. Report the blast radius to the user.
-3. **Warn immediately** if any symbol returns HIGH or CRITICAL risk — do not proceed without explicit user approval.
-4. **Track progress** with `manage_todo_list`: mark one item in-progress at a time, mark it completed immediately when done.
+1. **Resolve the target** — print the variable, expand the glob, `ls` the directory. You
+   destroy what you just read, never the pattern you typed. An unset variable turns a
+   scoped delete into a root delete.
+2. **Prove it's recoverable** — name the commit, the verified backup, the snapshot. If the
+   honest answer is *nowhere*, make the copy first.
+3. **Dry-run it** — `git clean -nd`, `terraform plan`, `--dry-run`. No dry-run in the tool?
+   Build one: `SELECT` before `DELETE`, `COUNT(*)` before `TRUNCATE`. Read the output.
+4. **Narrow the scope** — the file not the directory, one named branch not `-fd`,
+   `WHERE id = @id` not the table. **Never inside a `&&` chain or a loop.**
+5. **Write the undo, then confirm** — quote the exact command and blast radius to the user.
+   Can't write the reversing command? You have a hope, not a plan.
 
-Never begin implementation without a written, user-approved plan.
+**Absolute stops, needing explicit in-the-moment instruction:** `rm -rf` on `/` `~` a drive
+root or the repo root · `push --force` to a shared branch · `reset --hard` or `clean -fd`
+with uncommitted work · dropping a database this session didn't create · `docker volume rm`
+· `terraform destroy` · deleting `.agent/memory/`, `.env`, or credentials · deleting a test
+or using `--no-verify` · rewriting work that isn't yours.
 
----
+**"I assumed that's what you meant" is not authorization.** Ambiguous instruction plus
+irreversible action means stop and ask. Approval for one destructive action never carries
+to the next.
 
-## 2 — Testing: DDT and E2E First
+**Code you write that destroys gets the same treatment:** `--dry-run` is the default and
+`--force` the opt-in; the confirmation states what *and how many*; an empty filter is
+refused, never treated as "match everything"; back up and verify before destroying; log
+before and after with the recovery path; and **a test feeds the bad input and asserts
+nothing was destroyed** — a guard with no test gets refactored away as dead code.
 
-### Data-Driven Tests (DDT / parametrized)
-- Every code path that accepts variable input **must** be covered by a `pytest.mark.parametrize` table.
-- Pattern: one named constant table per logical group (e.g. `BRIGHTNESS_CASES`). Each row is a `pytest.param(...)` with a descriptive `id=` string. Shared test logic; only inputs vary per row.
-- Reference files: `tests/test_35_edit_save_ddt.py`, `tests/test_38_edit_dimensions_ddt.py`.
-- Boundary values, minimums, maximums, and invalid inputs must each be a distinct row.
+There is no permission layer in Copilot. This section is the only guard. Full procedure:
+[`guard-destructive`](skills/guard-destructive/SKILL.md).
 
-### End-to-End (E2E) Tests
-- Every user-facing feature **must** have at least one E2E test exercising the full request → server → storage → response cycle via `APIClient` (`tests/helpers.py`).
-- New test files use the next sequential number: find the highest `test_NN_` prefix and increment by one.
-- E2E tests run against the real server (`conftest.py` fixture) — never mock internals.
-- After implementing a feature, run `pytest tests/test_NN_*.py -v` and confirm all pass before closing the task.
+## Before the first edit
 
-### General rules
-- Do not remove or weaken existing assertions.
-- `helpers.py` is shared — any edit there requires running `pytest tests/ -x` to validate nothing broke.
-- Prefer adding rows to an existing DDT table over writing new one-off test functions.
+1. Read `.agent/memory/state.md` — it says where the last session stopped.
+2. Grep `.agent/memory/decisions.md` and `gotchas.md` for the area you're touching.
+   **Check whether your approach was already tried and rejected before proposing it.**
+3. Write the plan into `TODO.md`. A plan that lives only in chat did not happen.
+4. Find the existing pattern in the codebase and follow it. Don't invent a second way
+   to do something this repo already does.
 
----
+## While working
 
-## 3 — Security (OWASP Top 10)
+- **Small diffs, verified often.** One logical unit → build → next. Never stack ten
+  edits and then build.
+- **Every loop has a budget of 3.** Three failed fixes for the same build error, test,
+  or exception means stop, write the failure and all three attempts to
+  `.agent/memory/gotchas.md`, and report to the user. Reporting a documented blocker is
+  a valid outcome. A fourth guess is not.
+- **Two failed fixes means the diagnosis is wrong, not the fix.** Re-diagnose from
+  scratch instead of patching again.
+- **Never widen the fix to make a symptom disappear.** Deleting the failing test, adding
+  `@ts-ignore` / `as any` / `# type: ignore`, or an empty `catch` is not a fix.
+- Update `.agent/memory/state.md` at each phase boundary, not just at the end — if
+  context gets truncated, that file is how the next turn recovers.
 
-- **Auth** — every new API endpoint must validate the session token. No route may skip auth middleware.
-- **Input validation** — validate and sanitize all user-supplied data at the API boundary before it reaches business logic.
-- **Injection** — use parameterized queries or the ORM only. String-interpolated SQL is forbidden.
-- **Secrets** — no hard-coded credentials, tokens, or keys. Use environment variables or `config.toml` (gitignored). Never commit `config.toml` or `.env`.
-- **File uploads** — validate MIME type and magic bytes (not just extension). Store files outside the web root. Enforce size limits.
-- **TLS** — all external-facing endpoints must support TLS. See `tests/test_22_tls_combos.py`.
-- **Dependencies** — after adding a dependency run `cargo deny check` (Rust) or `pip-audit` (Python). Fix all HIGH/CRITICAL findings before merging.
-- **Prompt injection** — sanitize any user text fed to an AI/LLM. Alert the developer if prompt injection is detected.
+## Before saying it's done
 
----
+- [ ] Build exits 0, zero diagnostics, lint and typecheck clean
+- [ ] A test exists that fails if the change is reverted
+- [ ] Full suite green
+- [ ] Every error path logs something useful
+- [ ] Every destructive path is guarded, and a test proves the guard blocks
+- [ ] Every destructive step taken had a verified rollback, written into `TODO.md`
+- [ ] `TODO.md` matches reality
+- [ ] `.agent/memory/` updated if anything non-obvious was decided or discovered
+- [ ] Diff self-reviewed — no debug code, no commented-out blocks, no secrets
 
-## 4 — Skills (Read Before Acting)
+## Tone
 
-Read the relevant skill file before starting common tasks:
+Direct. Assume code is broken until a test proves otherwise. Don't pad reports with
+praise — silence means "no objection". When something is wrong, say so plainly and fix it.
 
-| Task | Skill file |
-|------|-----------|
-| Implement a feature end-to-end | `.claude/skills/feature-workflow/SKILL.md` |
-| Create a new test file | `.claude/skills/new-test/SKILL.md` |
-| Write parametrized / DDT tests | `.claude/skills/ddt-test-pattern/SKILL.md` |
-| Add a new Rust API endpoint | `.claude/skills/new-api-endpoint/SKILL.md` |
-| Build server / run tests / debug | `.claude/skills/build-and-test/SKILL.md` |
-| Understand architecture / trace code | `.claude/skills/gitnexus/gitnexus-exploring/SKILL.md` |
-| Blast radius before editing | `.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
-| Debug a failing test | `.claude/skills/gitnexus/gitnexus-debugging/SKILL.md` |
-| Rename / refactor safely | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md` |
+## Skills
 
----
+Detailed procedures live in [`.github/skills/`](skills/). Invoke with `/skill-name`:
+`guard-destructive`, `recall-session`, `plan-work`, `code-explore`, `research-docs`,
+`build-run`, `debug-errors`, `test-iterate`, `code-review`, `save-memory`, `git-github`.
 
-## 5 — Tool Usage
+**Prefer native tools** — file editing, search, terminal, git, and web fetch are all
+built in. Only two MCP servers exist: `github` (fall back to the `gh` CLI if it's
+unavailable) and `context7` (live library docs).
 
-Use the right tool for the job — don't guess or grep manually when a smarter tool exists:
-
-| Need | Tool |
-|------|------|
-| Understand code / trace execution | `gitnexus_query`, `gitnexus_context` |
-| Blast radius before editing | `gitnexus_impact` |
-| Safe rename across call graph | `gitnexus_rename` |
-| Verify scope of changes before commit | `gitnexus_detect_changes` |
-| Exact text / regex search | `grep_search` |
-| Find files by name/glob | `file_search` |
-| Conceptual / semantic search | `semantic_search` |
-| Read source files | `read_file` (large ranges; parallel reads) |
-| Run tests / shell commands | `run_in_terminal` |
-| Check for compile/lint errors | `get_errors` |
-| Multiple file edits at once | `multi_replace_string_in_file` |
-| Track multi-step work | `manage_todo_list` |
-
-- Run independent read-only tools in parallel.
-- Run write and terminal operations sequentially.
-- Always read a file before editing it.
-
----
-
-## 5 — GitNexus Quick Reference
-
-This repo is indexed as **simple-photos** (11 661 symbols, 22 029 relationships, 300 execution flows).
-
-| Resource | Purpose |
-|----------|---------|
-| `gitnexus://repo/simple-photos/context` | Overview + index freshness |
-| `gitnexus://repo/simple-photos/clusters` | All functional areas |
-| `gitnexus://repo/simple-photos/processes` | All execution flows |
-| `gitnexus://repo/simple-photos/process/{name}` | Step-by-step trace |
-
-If any GitNexus tool reports a stale index, run `npx gitnexus analyze` first.
+> `.github/skills/` and `.claude/skills/` are hand-synced copies. Edit a skill in both.

@@ -110,11 +110,14 @@ golangci-lint run
 ### When Build Fails
 
 1. Read the full output — don't just look at the last line
-2. Find the first error (not the last)
-3. If it's a type/compile error → use `debug-errors` skill
+2. Find the **first** error, not the last — the rest are usually cascades from it
+3. If it's a type/compile error → hand off to `debug-errors` (which enforces the 3-attempt budget)
 4. If it's a missing package → `npm install <package>` or equivalent
 5. If it's a config error → read the config file the error references
-6. Re-run after each fix — don't stack multiple untested changes
+6. Re-run after each fix — **never stack multiple untested changes**
+
+Exit code 0 does not mean success on its own. Some tools print errors to stdout and still
+exit clean. Read the output, not just the code.
 
 ## Dev Server Management
 
@@ -138,6 +141,32 @@ Verify the server is actually up before testing:
 Invoke-WebRequest http://localhost:3000 -Method Head
 ```
 
+## Commands That Destroy State
+
+A build command is safe to re-run. These are not — they are the ones that turn "the build
+is weird, let me clean" into an afternoon of lost work. **Run the `guard-destructive` five
+gates before any of them**, and never chain one behind `&&`.
+
+| Command | What it actually does |
+|---|---|
+| `npm ci` | **Deletes `node_modules` entirely** before installing. Fine — unless something in there was patched by hand |
+| `git clean -xfd` | Deletes ignored files too: `.env`, local configs, certs, uncommitted scratch work |
+| `rm -rf node_modules dist build` | Fine *if* the paths resolved to what you think. Print them first |
+| `docker system prune -a` | Every stopped container, unused image, and build cache on the machine — not just this project's |
+| `docker compose down -v` | **`-v` deletes the volumes.** That's the database |
+| `npx prisma migrate reset`, `rails db:reset`, `alembic downgrade` | Drops and recreates the schema. Data gone |
+| `terraform apply` | Destroys and recreates any resource the plan marks as replaced. **Read the plan** |
+| `npm publish` | Outward-facing and effectively permanent — unpublish windows are narrow |
+
+**Before "let me just clean and rebuild":** a broken build is a diagnosis problem, and
+`debug-errors` handles it with a budget. Wiping state is not a debugging step — it destroys
+the evidence that would have told you the cause, and it usually doesn't fix anything. If
+you've reached for a clean twice, the problem is somewhere else.
+
+**Redirection is destruction.** `> file` truncates before the command even runs — if the
+command then fails, the file is empty and its contents are gone. Use `>>` when appending,
+and never redirect over a file you haven't read.
+
 ## Linting as a Gate
 
 Lint before every commit. Zero warnings policy:
@@ -154,6 +183,12 @@ If lint fails:
 
 - **Always read exit code AND output** — exit 0 with error messages in stdout is a thing
 - **Never suppress warnings** to make a build pass — fix them
+- **Never chain a destructive command behind `&&`** — run it alone and read the result
+- **"Clean and rebuild" is not a debugging step.** It destroys the evidence. Use `debug-errors`
 - **Kill async terminals** when done — don't litter background processes
 - **Run typecheck before build** — catching type errors before bundler errors saves time
+- **Verify before you build, don't build before you verify** — run the cheap check
+  (typecheck) before the expensive one (full bundle)
 - If a command times out repeatedly, check if it's hanging on user input — some tools prompt interactively
+- If an install or build fails 3 times in a row, stop guessing and hand off to
+  `debug-errors`; repeated identical failures are a diagnosis problem, not a retry problem

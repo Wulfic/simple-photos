@@ -1,98 +1,99 @@
 ---
 name: recall-session
-description: "Start or resume a work session. Use when: beginning a new conversation on an existing project, resuming after a break, onboarding to a codebase, or needing to establish what was done and what's next. Searches mem0 for project history, reads TODO.md, and produces a focused next-steps plan."
-argument-hint: "Project name or area of focus (e.g. 'auth service' or 'the whole project')"
+description: "Start or resume a work session. Use when: beginning a new conversation on an existing project, resuming after a break, onboarding to a codebase, or needing to establish what was done and what's next. Reads .agent/memory/, TODO.md, and git state to produce a focused session brief."
+argument-hint: "Project area of focus (e.g. 'auth service' or 'the whole project')"
 ---
 
-# Session Kickoff — Recall and Plan
+# Session Kickoff — Recall Before You Touch Anything
 
-Never start working blind. Spend 2 minutes recalling context before touching a single file. This prevents duplicate work, contradicting past decisions, and losing track of in-progress items.
+Two minutes of recall prevents duplicate work, contradicted decisions, and re-running an
+approach that already failed. Starting blind is the most expensive way to begin.
 
 ## When to Use
 
-- First message in a new conversation about an ongoing project
+- First message in a new conversation about an existing project
 - Resuming after any break longer than an hour
-- Handing off work or starting a new phase
+- Taking over work someone (or some other session) started
 - "What was I doing?" — any time context is fuzzy
 
 ## Procedure
 
-### Step 1 — Search mem0 for project history
+### Step 1 — Read the state file
 
 ```
-mcp_wulfnet-mem0_mem0_get_tool_schema("search_memory")
-```
-Then:
-```json
-tool_name: "search_memory"
-tool_input: {
-  "query": "<project name or relevant keywords>",
-  "user_id": "tyler"
-}
+read_file(".agent/memory/state.md")
 ```
 
-Look for:
-- Past architectural decisions
-- Known issues or blockers
-- Conventions established (naming, stack choices, patterns)
-- Last known state of the work
+This is deliberately short. It tells you the current task, the next action, open blockers,
+and anything short-lived worth knowing (a running dev server, a disabled test).
 
-### Step 2 — Read TODO.md
+If it doesn't exist, this is a fresh project — go to `plan-work`.
 
-Read the workspace `TODO.md` to find:
-- Unchecked items → what's still pending
-- Recently checked items → what was just finished
-- Blocked items → what needs attention
+### Step 2 — Search memory for the area you're about to touch
 
-### Step 3 — Check recent git activity (optional but recommended)
+Don't read the whole memory files — grep them for the relevant area:
+
+```
+grep_search(query: "<feature|module|library name>", includePattern: ".agent/memory/*.md")
+```
+
+You are looking for two specific things:
+
+- **In `decisions.md`** — has this already been decided? Proposing a rewrite of something
+  that was deliberately chosen last month wastes everyone's time.
+- **In `gotchas.md`** — has this already failed? The dead-ends section exists so you don't
+  re-run a dead end.
+
+**Read the `Rejected:` and `Dead ends:` lines specifically.** Those are the highest-value
+content in the file and the easiest to skim past.
+
+### Step 3 — Read TODO.md
+
+- Unchecked items → still pending
+- Recently checked → just finished, likely still fresh in the code
+- Anything marked blocked → needs attention or a decision
+
+### Step 4 — Check git state
 
 ```powershell
 git log --oneline -10
 git status
 ```
 
-This tells you what files were last touched and if there's uncommitted work.
+Uncommitted work is a strong signal that the last session ended mid-task. Cross-reference
+it against `state.md` — if they disagree, **`git status` is the truth** and `state.md`
+is stale.
 
-### Step 4 — Think about the current state
+### Step 5 — Produce the session brief
 
-```json
-mcp_wulfnet-think_think_invoke_tool
-tool_name: "think"
-tool_input: {
-  "thought": "Given what I know about this project from mem0 and TODO.md, what is the actual next priority? What blockers exist? What context does the user need before we start?"
-}
+Report back, **10 bullets maximum**:
+
+1. **Where things stand** — from `state.md` + git log
+2. **Relevant prior decisions** — anything from `decisions.md` that constrains this work
+3. **Known traps** — anything from `gotchas.md` in this area
+4. **Blockers or open questions**
+5. **Recommended next action** — one, specific, actionable
+
+If you need more than 10 bullets, you're transcribing rather than summarizing.
+
+### Step 6 — Flag anything stale
+
+Memory reflects what was true when it was written. If a decision references a file, flag,
+or dependency, **verify it still exists** before recommending action on it:
+
+```
+file_search(query: "<path from the memory entry>")
 ```
 
-### Step 5 — Produce a session brief
-
-Report back with:
-1. **What was done** (from mem0 + git log)
-2. **Current blockers or open questions**
-3. **Recommended next action** (single, specific, actionable)
-4. **Any context the user should confirm** (decisions that may have changed)
-
-## After the Session — Save to mem0
-
-At the end of a productive session, persist what was learned:
-
-```json
-tool_name: "add_memory"
-tool_input: {
-  "content": "<what was built, decided, or discovered>",
-  "user_id": "tyler",
-  "metadata": { "project": "<project-name>", "date": "<YYYY-MM-DD>" }
-}
-```
-
-Save:
-- Architectural decisions and the reasons behind them
-- Non-obvious gotchas discovered during implementation
-- Which approach was tried and failed (so we don't try it again)
-- Current status at end of session
+Say so explicitly when memory and reality disagree — a confidently stated stale fact is
+worse than no memory at all.
 
 ## Rules
 
-- Do NOT start writing code before completing steps 1–4
-- If mem0 returns nothing, that means this is a genuinely new project — proceed to `think-plan` skill
-- Session brief must be ≤ 10 bullet points — if you need more, you're not summarizing
-- Always save to mem0 at session end — memory that isn't persisted is wasted work
+- **No code before steps 1–4 are done.** This is the whole point of the skill.
+- **Never contradict a recorded decision without acknowledging it.** If you think a past
+  decision was wrong, say which entry you're overriding and why, then append a new
+  decision recording the reversal.
+- Empty memory means a genuinely new project — go to `plan-work`, don't stall.
+- **Update `state.md` at the end of the session** via `save-memory`. Recall only works if
+  someone did the recording.

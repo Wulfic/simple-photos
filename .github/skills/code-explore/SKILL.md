@@ -1,157 +1,119 @@
 ---
 name: code-explore
-description: "Explore and understand an existing codebase before implementing. Use when: starting work on an unfamiliar codebase, finding where a function is defined or called, looking for existing patterns to follow, checking if a feature already exists before building it, or doing cross-repo code intelligence. Uses gitnexus MCP and workspace search tools."
-argument-hint: "What you're looking for (e.g. 'authentication logic', 'how API routes are structured', 'where UserService is defined')"
+description: "Explore and understand a codebase before implementing. Use when: working in unfamiliar code, finding where a function is defined or called, looking for an existing pattern to follow, checking whether a feature already exists, or tracing callers before changing a signature."
+argument-hint: "What you're looking for (e.g. 'how API routes are structured', 'where UserService is defined')"
 ---
 
 # Code Explore — Understand Before You Build
 
-Never implement without first understanding what already exists. Duplicated code and ignored conventions are the two fastest ways to create a maintenance nightmare. Spend 5 minutes exploring before writing a single line.
+Duplicating existing code and ignoring existing conventions are the two fastest ways to
+make a codebase unmaintainable, and both come from skipping five minutes of reading.
 
 ## When to Use
 
-- Starting work on any codebase you haven't touched in > 1 day
-- Before adding a new feature — does something similar already exist?
-- Before creating a new file — where do similar files live?
-- Finding all callers of a function before renaming or changing its signature
-- Understanding the pattern used for X so you follow it
-- Cross-repo: "does this function exist in another repo we own?"
+- Any codebase you haven't touched in over a day
+- Before adding a feature — does something like it already exist?
+- Before creating a file — where do similar files live?
+- Before changing a signature — who calls this?
+- "How does this codebase do X?"
 
-## Tool Selection
+## Tool Selection — Cheapest First
+
+Escalate only when the cheaper tool genuinely came back empty.
 
 | Goal | Tool |
-|------|------|
-| Find callers/definitions across repos | `gitnexus` MCP |
-| Find text patterns in current workspace | `grep_search` |
-| Find files by name pattern | `file_search` |
-| Find code by concept/meaning | `semantic_search` |
-| Find all usages of a symbol | `vscode_listCodeUsages` |
+|---|---|
+| Known string or symbol name | `grep_search` |
+| Find files by name/path | `file_search` |
+| Concept, exact name unknown | `semantic_search` |
+| All usages of a symbol | `vscode_listCodeUsages` |
+| Structure of an unfamiliar directory | `list_dir` |
+
+Use `semantic_search` only when you *don't* know the exact name — if you do, `grep_search`
+is faster and exact. Semantic search over a known string is a slower way to get a worse answer.
 
 ## Procedure
 
-### Step 1 — Get the lay of the land
-
-For an unfamiliar codebase:
+### Step 1 — Orient (unfamiliar codebase only)
 
 ```
-list_dir("/path/to/project")
-list_dir("/path/to/project/src")
+list_dir("<project>")
+list_dir("<project>/src")
 ```
 
-Then read the key entry points:
-- `package.json` / `pyproject.toml` / `go.mod` — dependencies and scripts
-- `README.md` — how to run it
-- Main entry file (`src/index.ts`, `main.py`, `main.go`, etc.)
+Read the entry points, in this order:
+- `package.json` / `pyproject.toml` / `go.mod` — deps, scripts, and how it's actually run
+- `README.md` — intended usage
+- The main entry file — how it wires together
 
-### Step 2 — Find relevant existing code
-
-**In the current workspace:**
+### Step 2 — Check memory first
 
 ```
-semantic_search("authentication middleware user login")
-grep_search(query: "function handleAuth|const auth|class AuthService", isRegexp: true)
+grep_search(query: "<area>", includePattern: ".agent/memory/*.md")
+```
+
+Cheaper than reading code, and it's where the *why* lives. If a decision already records
+how this area works, start from that instead of reverse-engineering it.
+
+### Step 3 — Find the relevant code
+
+```
+grep_search(query: "class AuthService|function handleAuth", isRegexp: true)
 file_search(query: "**/auth/**")
+semantic_search("authentication middleware user login")
 ```
 
-**Across repos (gitnexus):**
+Start with the narrowest query that could work, then widen. A regex that returns 200 hits
+told you nothing; one that returns 3 told you where to read.
+
+### Step 4 — Extract the pattern, don't just find the file
+
+Read **at least two examples** before concluding you understand a convention. One example
+is an anecdote; the second tells you which parts are the pattern and which were incidental.
+
+Note specifically:
+- **Naming** — files, functions, types, test files
+- **Imports** — relative vs alias, barrel files
+- **Errors** — throw vs return, Result type vs try/catch, custom error classes
+- **Logging** — which logger, what levels, what gets included
+- **Async** — promises, async/await, callbacks
+- **Tests** — co-located or separate, what's mocked
+- **Config** — env vars, config objects, defaults
+
+### Step 5 — Find every caller before changing a signature
 
 ```
-mcp_wulfnet-gitne_gitnexus_get_tool_schema("search_symbols")  // get exact schema first
-mcp_wulfnet-gitne_gitnexus_invoke_tool(tool_name, {
-  "query": "AuthService",
-  "type": "definition"
-})
+vscode_listCodeUsages(symbol: "functionName", filePath: "...", lineContent: "export function functionName")
+grep_search(query: "functionName", isRegexp: false)
 ```
 
-Always call `get_tool_schema` before invoking gitnexus — parameter names vary by version.
+Run **both**. `vscode_listCodeUsages` understands types but misses anything the language
+server can't resolve; `grep_search` catches the rest, including comments and docs that
+reference the old name.
 
-### Step 3 — Understand the pattern
+**Every caller gets updated or explicitly confirmed compatible.** Also check for dynamic
+callers a symbol search won't find: string-keyed dispatch, DI containers, reflection,
+config-driven routing. Those are exactly the ones that fail in production rather than at
+compile time.
 
-Once you find relevant code, read it:
+### Step 6 — Summarise before you build
 
-```
-read_file(filePath, 1, 100)  // get the full picture, not just a snippet
-```
-
-Look for:
-- Naming conventions (camelCase, snake_case, PascalCase, file naming)
-- Import patterns (relative vs absolute, barrel files)
-- Error handling pattern (throw vs return error, Result type vs try/catch)
-- Logging pattern (which logger, what log levels, what gets logged)
-- Test co-location (tests next to code, or in a `__tests__` dir?)
-
-### Step 4 — Find all callers before changing anything
-
-If you're modifying an existing function:
-
-```
-vscode_listCodeUsages(
-  symbol: "functionName",
-  filePath: "src/path/to/file.ts",
-  lineContent: "export function functionName"
-)
-```
-
-Or via gitnexus for cross-repo:
-
-```
-mcp_wulfnet-gitne_gitnexus_invoke_tool(tool_name, {
-  "query": "functionName",
-  "type": "references"
-})
-```
-
-**Every caller must be updated or confirmed compatible before you change a signature.**
-
-### Step 5 — Document your findings (for non-trivial exploration)
-
-Before implementing, write a brief summary of what you found:
+State plainly:
 - Where similar code lives
-- What pattern to follow
-- What to avoid (and why)
-- Any gotchas discovered
+- Which pattern you'll follow, and the file you're copying it from
+- What to avoid, and why
+- Anything surprising
 
-For significant findings, save to mem0:
-
-```json
-tool_name: "add_memory"
-tool_input: {
-  "content": "In [project], [pattern X] is implemented at [path]. Convention: [what to follow]. Gotcha: [what to watch for].",
-  "user_id": "tyler",
-  "metadata": { "project": "<project>", "type": "convention" }
-}
-```
-
-## Common Exploration Patterns
-
-### "Where does X happen?"
-```
-semantic_search("X behavior description")
-grep_search(query: "keyword1|keyword2", isRegexp: true)
-```
-
-### "How is Y structured in this codebase?"
-```
-file_search(query: "**/*Y*")
-// then read 2-3 examples
-```
-
-### "Does this feature already exist?"
-```
-semantic_search("feature description")
-grep_search(query: "relatedFunctionName|RelatedClassName", isRegexp: true)
-```
-If you find it — don't rebuild it. Use it or extend it.
-
-### "What calls function Z?"
-```
-vscode_listCodeUsages(symbol: "Z", ...)
-```
+If a convention was non-obvious or a trap cost you time, append it via `save-memory` — the
+next session shouldn't have to rediscover it.
 
 ## Rules
 
-- **Never implement without exploring first** — duplication is a bug you caused
-- **Follow existing patterns** — even if you think there's a better way, match conventions first, refactor in a separate PR
-- **Read at least 2 examples** before concluding you understand a pattern
-- **Check across repos** for shared utilities before writing new ones (gitnexus)
-- If exploration takes > 15 minutes, something is wrong with the codebase structure — note it but don't fix it now
+- **Never implement without exploring.** Duplication you caused is a bug you caused.
+- **Follow existing patterns.** Even if you'd do it differently — match first, refactor in
+  a separate change. A codebase with three competing conventions is worse than one with a
+  single mediocre convention.
+- **Two examples minimum** before you trust a pattern.
+- **If it already exists, use it.** Don't rebuild it because you didn't like the name.
+- **Budget ~10 minutes.** If you still can't find it, stop and say what you searched for
+  and where — don't quietly assume it doesn't exist and build a duplicate.

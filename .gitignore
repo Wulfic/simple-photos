@@ -57,6 +57,8 @@ android/google-services.json   # if ever added
 .device-test/
 
 # ── IDE & Editor ─────────────────────────────────────────────────────────────
+.agent/
+.github/skills/
 .idea/
 .vscode/settings.json
 .vscode/launch.json

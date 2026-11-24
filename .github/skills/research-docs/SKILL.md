@@ -53,10 +53,18 @@ tool_input: {
 
 - Quote or summarize the relevant section in your response
 - If the docs contradict your training data, **trust the docs**
-- If the docs are incomplete, note that and fall back to `context-mode` for web research
+- If the docs are incomplete, fall back to native web search, then to reading the
+  library's source in `node_modules/` or the vendor directory — the installed source is
+  the most authoritative answer available, because it's the version actually running
 
 ## Rules
 
 - Always run this before answering any "how do I use library X" question
-- Never invent API signatures from memory for libraries you haven't confirmed
-- If `resolve-library-id` returns nothing useful, try `web-task` skill instead
+- **Never invent API signatures from memory** for libraries you haven't confirmed. A
+  plausible-looking wrong signature costs more than the lookup would have.
+- Pin what you learn to a **version** — "this is the v3 API" — since the next reader may
+  be on a different one
+- If `resolve-library-id` returns nothing useful, use native web search, or read the
+  installed source directly
+- If the live docs contradict what you expected, that's a `gotchas.md` entry — use
+  `save-memory`. Surprising API behaviour will surprise the next session too.
