@@ -197,14 +197,27 @@ describe("the secure removal prompt is actually wired up", () => {
     expect(secureGallery).toContain("export default function SecureGallery");
   });
 
+  // Since F4 the grid and the viewer share one plan → execute → report pipeline
+  // in `secureRemoval.ts`, so the calls below are asserted where they now live:
+  // the page must route through the pipeline, and the pipeline must call the
+  // prompt/membership/expansion/toast helpers. Its behaviour is pinned by
+  // `secureRemoval.test.ts`; these keep the wiring from silently going dead.
+  const pipeline = readFileSync(join(HERE, "secureRemoval.ts"), "utf8");
+
+  it("routes removal through the shared pipeline", () => {
+    expect(pipeline.length).toBeGreaterThan(1000);
+    expect(secureGallery).toContain("planSecureRemoval(");
+    expect(secureGallery).toContain("executeSecureRemoval(");
+  });
+
   it("calls secureRemovalPrompt", () => {
-    expect(secureGallery).toContain("secureRemovalPrompt(");
+    expect(pipeline).toContain("secureRemovalPrompt(");
   });
 
   it("resolves membership through otherSecureAlbumCount", () => {
     // Without this the call site can pass a hardcoded 0 and re-create the bug
     // while satisfying the assertion above.
-    expect(secureGallery).toContain("otherSecureAlbumCount(");
+    expect(pipeline).toContain("otherSecureAlbumCount(");
   });
 
   it("no longer promises a return to the regular gallery in the UI text", () => {
@@ -215,11 +228,12 @@ describe("the secure removal prompt is actually wired up", () => {
   });
 
   it("expands bursts before asking, so the prompt counts what is removed (S2)", () => {
-    expect(secureGallery).toContain("expandBurstStacks(");
+    expect(pipeline).toContain("expandBurstStacks(");
   });
 
   it("derives the success toast from the prompt's own counts", () => {
-    expect(secureGallery).toContain("secureRemovalToast(");
+    expect(pipeline).toContain("secureRemovalToast(");
+    expect(secureGallery).toContain("secureRemovalOutcome(");
   });
 
   it("offers Remove on a multi-select, not only one tile at a time (S3)", () => {

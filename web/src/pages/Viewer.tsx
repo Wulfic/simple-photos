@@ -6,6 +6,7 @@
  * and prev/next navigation via photoIds passed through location.state.
  */
 import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from "react";
+import type { TouchEvent as ReactTouchEvent } from "react";
 import { useParams, useLocation } from "react-router-dom";
 import { useAppNavigate } from "../hooks/useAppNavigate";
 import { db } from "../db";
@@ -38,6 +39,14 @@ import { useAuthStore } from "../store/auth";
 import { appendGalleryTokenParam } from "../utils/galleryToken";
 import type { PhotoInfoData } from "../hooks/useViewerMedia";
 import type { Rendition } from "../gallery/renditionChoice";
+import { api } from "../api/client";
+import { ConfirmDialog } from "../components/ui";
+import {
+  planSecureRemoval,
+  executeSecureRemoval,
+  secureRemovalOutcome,
+  type SecureRemovalPlan,
+} from "../gallery/secureRemoval";
 
 // ── Navigation context passed via location.state ─────────────────────────────
 interface ViewerLocationState {
@@ -72,6 +81,14 @@ interface SecureGalleryItemMeta {
   blob_id: string;
   /** Owning secure album — the target for the secure crop endpoint (#31). */
   gallery_id?: string | null;
+  /** Owning album's name; set only by the aggregate feed. */
+  gallery_name?: string | null;
+  /**
+   * Every secure album holding the photo (Z1). The removal prompt (F4) counts
+   * the OTHER ones to say whether the photo returns to the regular gallery.
+   * Absent/empty = UNKNOWN, which makes the prompt refuse rather than guess.
+   */
+  galleries?: Array<{ id: string; name: string }> | null;
   encrypted_thumb_blob_id?: string | null;
   width?: number | null;
   height?: number | null;
@@ -182,6 +199,40 @@ export default function Viewer() {
     () => (secureGallery ? secureItems?.find((i) => i.blob_id === id) : undefined),
     [secureGallery, secureItems, id],
   );
+
+  // ── Remove from secure album (F4, Android `SecurePhotoViewer` parity) ──────
+  // The same plan → ask → execute pipeline as the secure grid, so the viewer
+  // asks the same three-way question about the same burst-expanded set. Offered
+  // only when the open album and the open item are both known: without them
+  // there is nothing to route the removal to.
+  const [pendingSecureRemoval, setPendingSecureRemoval] =
+    useState<SecureRemovalPlan<SecureGalleryItemMeta> | null>(null);
+  const [removingSecure, setRemovingSecure] = useState(false);
+  const stopTouch = useCallback((e: ReactTouchEvent) => e.stopPropagation(), []);
+  const canRemoveFromSecureAlbum =
+    secureGallery && !isBackupServer && !!secureAlbumId && !!currentSecureItem && !!secureItems;
+
+  const requestSecureRemoval = useCallback(() => {
+    if (!secureAlbumId || !currentSecureItem || !secureItems) return;
+    // `secureItems` is the un-collapsed pool, so a burst — opened on ANY frame
+    // via the strip — expands to its whole stack, like the grid's tile does.
+    setPendingSecureRemoval(
+      planSecureRemoval(secureItems, [currentSecureItem], { id: secureAlbumId }),
+    );
+  }, [secureAlbumId, currentSecureItem, secureItems]);
+
+  const confirmSecureRemoval = useCallback(async () => {
+    if (!pendingSecureRemoval || removingSecure) return;
+    setRemovingSecure(true);
+    const result = await executeSecureRemoval(pendingSecureRemoval, {
+      removeItem: (galleryId, itemId) => api.secureGalleries.removeItem(galleryId, itemId),
+      dropCacheRow: (blobId) => db.photos.delete(blobId),
+    });
+    // Close the viewer, like Android: the nav-state item list is now stale, and
+    // the grid re-fetches on mount. `replace` so Back cannot reopen a photo
+    // that is no longer in this album. The toast rides along as route state.
+    navigate(backTo, { replace: true, state: { secureFlash: secureRemovalOutcome(result) } });
+  }, [pendingSecureRemoval, removingSecure, navigate, backTo]);
 
   // In-session crop overrides for secure items, keyed by blob id. A secure save
   // records the fresh crop here so swiping to another frame and back re-applies
@@ -528,6 +579,12 @@ export default function Viewer() {
   // ── Keyboard navigation ────────────────────────────────────────────────
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
+      // The removal dialog owns the keyboard. An arrow here would move the
+      // photo UNDER a dialog that still removes the one it was opened for.
+      // Escape is NOT protected by this guard alone — closing the dialog flushes
+      // before this listener runs — which is why Modal consumes the Escape it
+      // acts on (`modalEscapeHandler`).
+      if (pendingSecureRemoval) return;
       if (e.key === "Escape") {
         if (showLeavePrompt) setShowLeavePrompt(false);
         else if (editMode) setShowLeavePrompt(true);
@@ -540,7 +597,7 @@ export default function Viewer() {
     }
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [goPrev, goNext, navigate, backTo, editMode, showLeavePrompt]);
+  }, [goPrev, goNext, navigate, backTo, editMode, showLeavePrompt, pendingSecureRemoval]);
 
   // ── Measure the edit panel so the media area can sit above it (#13) ─────
   // The panel height changes with the active tab (crop is short, trim is
@@ -612,6 +669,7 @@ export default function Viewer() {
         onDownload={handleDownload}
         onDelete={handleDelete}
         onRemoveFromAlbum={handleRemoveFromAlbum}
+        onRemoveFromSecureAlbum={canRemoveFromSecureAlbum ? requestSecureRemoval : undefined}
         onStartSlideshow={() => slideshow.start(currentIndex)}
         hasSlideshow={hasSlideshow}
       />
@@ -1089,6 +1147,44 @@ export default function Viewer() {
           onSourceDownload={handleDownloadSource}
           onCancel={() => setShowDownloadChoice(false)}
         />
+      )}
+
+      {/* Remove from secure album (F4) — the grid's dialog, over the viewer, so
+          Cancel keeps you here. `blocked` = membership unknown; the only thing
+          that can resolve it is a fresh feed, which the grid fetches on mount.
+          The wrapper stops touches reaching the root's swipe handlers: Modal is
+          not a portal (and React events bubble through portals anyway), so a
+          swipe on the dialog would move the photo under it — the touch twin of
+          the keyboard guard in `handleKey`. */}
+      {pendingSecureRemoval && (
+      <div
+        onTouchStart={stopTouch}
+        onTouchMove={stopTouch}
+        onTouchEnd={stopTouch}
+      >
+      {pendingSecureRemoval.verdict.kind === "confirm" && (
+        <ConfirmDialog
+          title={pendingSecureRemoval.verdict.title}
+          body={pendingSecureRemoval.verdict.body}
+          confirmLabel="Remove"
+          cancelLabel="Cancel"
+          busy={removingSecure}
+          busyLabel="Removing…"
+          onConfirm={confirmSecureRemoval}
+          onCancel={() => setPendingSecureRemoval(null)}
+        />
+      )}
+      {pendingSecureRemoval.verdict.kind === "blocked" && (
+        <ConfirmDialog
+          title={pendingSecureRemoval.verdict.title}
+          body={pendingSecureRemoval.verdict.body}
+          confirmLabel="Refresh"
+          cancelLabel="Cancel"
+          onConfirm={() => navigate(backTo, { replace: true })}
+          onCancel={() => setPendingSecureRemoval(null)}
+        />
+      )}
+      </div>
       )}
 
       {/* Save Copy success toast */}

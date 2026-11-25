@@ -165,8 +165,19 @@ device's media files are never touched).
       re-check, restore live-row check, path normalization). Server 588/588, clippy
       `-D warnings` + fmt clean; E2E 98/03/04/33/95/96/97 = 57/57 against a binary verified
       to contain the new routes. **Not run on CT132 — needs deploy + approval, dry-run first.**
-- [ ] **F4 web** "Remove from secure album" in the secure viewer, reusing the three-way
-      prompt + `expandBurstStacks` from P5.
+- [x] **F4 web** "Remove from secure album" in the secure viewer, reusing the three-way
+      prompt + `expandBurstStacks` from P5. See "F4 design" below. Shared pipeline
+      `gallery/secureRemoval.ts` (23 tests; RED = exactly the 4 viewer wiring guards on the
+      pre-F4 viewer, exactly the 3 burst tests with expansion mutated out). **Browser, real UI,
+      disposable local server: 22/22** — single/burst/shared dialogs, Cancel + Escape + arrows
+      keep the viewer, confirm closes to the grid with the right toast, Back/reload don't
+      reopen or replay, server counts match, grid trash still works, main viewer has no item.
+- [x] **F4a web (found in the browser)** Escape on ANY Modal also reached the viewer's
+      `window` Escape and left the viewer. A guard in the viewer can't see it: React flushes the
+      close between the `document` and `window` listeners. Fix: Modal `stopPropagation`s the
+      Escape it acts on. RED in the browser on the old Modal; 3 unit tests. Also fixes the same
+      shape on `LeavePrompt` / `DownloadChoiceModal` over the viewer (not browser-verified).
+      Web 368/368 + clean `tsc`.
 - [ ] **F8 server (found 2026-11-25, PRE-EXISTING)** `DELETE /api/photos/:id` returns 500
       `database is locked` (SQLITE_BUSY 5 / BUSY_SNAPSHOT 517) when it races the `[SERVER_MIG]`
       background encrypt of the same photo. `soft_delete_photo` (`trash/operations.rs`) opens a
@@ -236,6 +247,27 @@ No `storage_path` is shared by two rows. Live schema columns holding blob ids: p
 - **Not doing:** sweeping media or manifests; registering the 57 direct blobs; a scheduler
   (manual only); running it on CT132 (needs deploy + approval).
 - Rollback: `git revert`; migration 040 is additive (reverse = `DROP TABLE quarantined_blobs`).
+
+### F4 design (decided 2026-11-25)
+- **Parity target = Android `SecurePhotoViewer`**: overflow item "Remove from secure album";
+  acts on the open item's whole burst stack; the three-way dialog renders OVER the viewer
+  (Cancel keeps it open); Confirm removes, closes the viewer, toast shows on the grid.
+- **One planner, two callers.** Extract `requestRemoval`/`confirmRemoval` from
+  `SecureGallery.tsx` into pure `gallery/secureRemoval.ts`: `planSecureRemoval(pool, tiles,
+  openAlbum)` → `{targets, otherAlbums, verdict}` and `executeSecureRemoval(plan, deps)` →
+  `{removedCounts, failed}` + `secureRemovalOutcome` → `{success, error}`. SecureGallery and
+  Viewer both call them. Rejected: a viewer-local copy — a separately derived second copy is
+  how Z1d's false toast happened.
+- Owning-album name: open album's name, else the item's own `galleries` membership (both
+  feeds publish it), else `gallery_name`. No new nav state for the name.
+- Viewer hides the item when there is no `secureAlbumId`, no matching secure item, or on a
+  backup server. Back stack: removal navigates with `replace` so Back cannot reopen it.
+- Toast crosses the route as `location.state.secureFlash`, read once on mount.
+- Tests: planner/executor unit tests (stack expansion from a non-cover frame, smart-view
+  owning id, name source, unknown ⇒ blocked, per-item failure isolation, cache-drop failure
+  is not a removal failure); wiring guards on Viewer/ViewerTopBar/SecureGallery source.
+- Not doing: advance-to-next-photo after removal (Android closes; parity wins).
+- Rollback: `git revert` — web only, no server or schema change.
 
 ### NOT doing (and why)
 - **F3 won't-fix** (owner, 2026-11-25): phone-vs-Takeout pairs have different bytes; both stay.

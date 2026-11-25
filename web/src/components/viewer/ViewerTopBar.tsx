@@ -34,6 +34,13 @@ export interface ViewerTopBarProps {
   onDownload: () => void;
   onDelete: () => void;
   onRemoveFromAlbum: () => void;
+  /**
+   * Secure viewer only (F4): shown when set, independently of `isBackupServer`
+   * — secure mode passes that flag to hide favorite/tags/delete, and removal
+   * from the secure album is the one membership action it does offer (Android
+   * parity). The caller leaves it unset where removal is not possible.
+   */
+  onRemoveFromSecureAlbum?: () => void;
   onStartSlideshow?: () => void;
   hasSlideshow?: boolean;
 }
@@ -58,6 +65,7 @@ export default function ViewerTopBar({
   onDownload,
   onDelete,
   onRemoveFromAlbum,
+  onRemoveFromSecureAlbum,
   onStartSlideshow,
   hasSlideshow,
 }: ViewerTopBarProps) {
@@ -215,6 +223,22 @@ export default function ViewerTopBar({
                       Delete
                     </button>
                   )}
+                </>
+              )}
+              {onRemoveFromSecureAlbum && (
+                <>
+                  <div className="border-t border-edge my-1" />
+                  {/* Names the action only. Whether the photo returns to the
+                      regular gallery depends on its other secure albums, and
+                      the dialog this opens is what says which (Z1d). */}
+                  <button
+                    onClick={() => { onRemoveFromSecureAlbum(); setMenuOpen(false); }}
+                    className="w-full text-left px-4 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 flex items-center gap-2 transition-colors"
+                    role="menuitem"
+                  >
+                    <AppIcon name="trashcan" />
+                    Remove from secure album
+                  </button>
                 </>
               )}
             </div>
