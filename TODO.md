@@ -123,11 +123,55 @@ device's media files are never touched).
 
 ---
 
-## 2. Follow-ups
-- [ ] **F1** Guarded sweeper for unreferenced photo/thumbnail blobs (dry-run default,
-      counts, refuses empty filter, test that a referenced blob survives).
-- [ ] **F2** Pre-upload hash lookup so a reinstalled phone stops re-sending its library.
-- [ ] **F3** Decide what to do with phone-vs-Takeout near-duplicates.
+## 2. Session 2026-11-25 — follow-ups F1/F2/F4/F6 (Tier 2)
+
+### Measured at start (read-only against CT132 + the phone's client logs)
+- CT132 runs `5286392` (image built 06:52Z today), `setup_complete:true`: **not wiped**, so
+  the 11-17 orphans are still there.
+- The S21+ got the new APK as a **fresh install** (~07:00Z): Room is rebuilding from empty
+  (3,000 → 7,904 rows in 3 min, pending climbing to 3,118). The heal works: every
+  hash-dedup registration logs `twinRowsCollapsed: 1`, plus "Collapsed 6 twin row(s)".
+- **D3 is live, measured:** in the first ~4 min the phone did 278 full uploads (536.7 MB).
+  The server reported **298/298 media uploads** as `Duplicate blob upload detected
+  (content_hash match)` and kept none of them. Every one also uploaded a **thumbnail that
+  WAS stored** (no hash match on encrypted thumbs), then `register-encrypted` answered
+  "photo already exists for this blob". So **each re-upload leaves one orphan thumbnail
+  blob**. Device holds ~5.3k media, so expect ~5k orphan thumbs from this install.
+
+### Plan — one commit each, in this order
+- [ ] **F2a server** `POST /api/photos/lookup-hashes` — batch (≤500) of content hashes →
+      `{hash: {photo_id, encrypted_blob_id, encrypted_thumb_blob_id}}` for this user only.
+      Read-only, additive. Test: hit, miss, other user's hash is a miss, >500 rejected.
+- [ ] **F2b android** before preparing a batch, look up its hashes; a hit takes the
+      existing register-copy path with the server's ids and uploads **no bytes and no
+      thumbnail**. Lookup failure → fall back to today's upload (fail open on bandwidth,
+      never on correctness). Test: a hit uploads nothing; a lookup error still uploads.
+- [ ] **F6 server** make `register-encrypted` check-then-insert atomic (single write-pool
+      transaction / `BEGIN IMMEDIATE`), still admitting "Save Copy" rows. Test: two
+      concurrent registrations of one hash → one photo.
+- [ ] **F1 server** guarded sweeper for unreferenced `photo`/`thumbnail`/`gif`/`video`
+      blobs: admin endpoint, **dry-run default**, returns counts + bytes, grace period
+      (blob older than 24h — an upload in flight is unreferenced for a moment), refuses
+      when the reference set is empty, soft-delete (move to a quarantine dir) not unlink.
+      Tests: referenced blob survives; young orphan survives; empty-reference refusal;
+      dry-run touches nothing. **Running it on CT132 = separate approval, dry-run first.**
+- [ ] **F4 web** "Remove from secure album" in the secure viewer, reusing the three-way
+      prompt + `expandBurstStacks` from P5.
+
+### NOT doing (and why)
+- **F3 won't-fix** (owner, 2026-11-25): phone-vs-Takeout pairs have different bytes; both stay.
+- **F5** waits for evidence: no member loss seen yet. Re-check after the reinstall settles.
+- Not pausing the phone's backup: it's LAN traffic, it finishes on its own, and it is
+  the F7 verification. Its orphans fall to F1.
+
+### Rollback
+F2a/F2b/F4 additive (`git revert`). F6 changes write semantics only. F1 never unlinks:
+quarantine dir + restore = move back; the endpoint is inert unless called with `apply=true`.
+
+## 3. Follow-ups (carried)
+- [ ] **F1** → §2.
+- [ ] **F2** → §2.
+- [x] **F3** won't-fix (owner decision 2026-11-25).
 - [ ] **F4** "Remove from secure album" in the web viewer.
 - [ ] **F5** Album manifests that reference a device row's *own* (orphan) blob id lose that
       member when P3 moves the row onto the canonical blob. Rare (only where blob dedup
@@ -137,11 +181,11 @@ device's media files are never touched).
       registrations of one hash can both insert. P2 removes the phone-side concurrency
       that triggered it; a server-side guard (transaction or unique constraint that still
       admits "Save Copy" rows) is still owed.
-- [ ] **F7** Install the new APK on the S21+ and confirm: Room row count ≈ server count
-      after first sync; no secured photo in the main grid; delete-album dialog; "Move
-      here" pulls a whole burst.
+- [ ] **F7** APK installed 2026-11-25 (fresh install). Heal confirmed in logs. Still owed
+      once the initial scan drains: Room rows ≈ server count; no secured photo in the main
+      grid; delete-album dialog; "Move here" pulls a whole burst.
 
-## 3. Verification debt carried from the old todo.md (still open)
+## 4. Verification debt carried from the old todo.md (still open)
 Deploy-side (CT132): A1/#42 badge counts, A2/#38 migration 033 backfill, B2/#40 3-strike
 cap + ETA calibration readout, B3/#46 codec backfill drains to zero, B4/#49 rung backfill.
 Device (S21+): B4 quality swap, E1/#43, F1/#41, D2/#50, E3, E3a, Z1e, B5.
