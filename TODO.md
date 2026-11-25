@@ -150,12 +150,15 @@ device's media files are never touched).
       pass, not per photo. Pass summary logs `adoptedFromServer` + `hashLookupDisabled`.
       `ServerHashLookupTest` 8 + `BackupHashLookupWiringTest` 3 (RED 3/3 on the old worker).
       Android 329/329, `assembleDebug` builds. **Not device-verified** (no deploy).
-- [ ] **F6 server** — **re-diagnosed while testing F2a:** `idx_photos_user_hash` is a partial
+- [x] **F6 server** — **re-diagnosed while testing F2a:** `idx_photos_user_hash` is a partial
       UNIQUE index, so two concurrent registrations can NOT both insert (Save Copy rows have
-      a NULL hash and are exempt). The loser gets a raw constraint error → **500** → phone
-      marks FAILED → retry heals. Fix: map that violation to the `duplicate` answer (re-read
-      the winner). Test: insert the winner between the check and the insert → 200 duplicate
-      naming the winner's ids, not 500.
+      a NULL hash and are exempt). The loser got a raw constraint error → **500** → phone
+      marked FAILED → retry healed. Fix: `ON CONFLICT (user_id, photo_hash) WHERE photo_hash
+      IS NOT NULL DO NOTHING` + re-read the winner → `200 duplicate`. Not `INSERT OR IGNORE`
+      (would swallow PK/NOT NULL bugs as "duplicates"). `test_97` RED on the old server
+      (4/12 concurrent → 500), GREEN ×4 runs; 5 unit tests, each mutation (no clause /
+      `OR IGNORE`) turns exactly its one test red. Server 567/567, clippy + fmt clean;
+      E2E 95/96/97/03/33 green.
 - [ ] **F1 server** guarded sweeper for unreferenced `photo`/`thumbnail`/`gif`/`video`
       blobs: admin endpoint, **dry-run default**, returns counts + bytes, grace period
       (blob older than 24h — an upload in flight is unreferenced for a moment), refuses
@@ -201,10 +204,7 @@ quarantine dir + restore = move back; the endpoint is inert unless called with `
       member when P3 moves the row onto the canonical blob. Rare (only where blob dedup
       missed — e.g. videos whose server blob has no `content_hash`); remap ids in local
       manifests if it shows up.
-- [ ] **F6** `register-encrypted`'s check-then-insert is not atomic; two concurrent
-      registrations of one hash can both insert. P2 removes the phone-side concurrency
-      that triggered it; a server-side guard (transaction or unique constraint that still
-      admits "Save Copy" rows) is still owed.
+- [x] **F6** → §2 (the loser 500'd; it never double-inserted — the UNIQUE index exists).
 - [ ] **F7** APK installed 2026-11-25 (fresh install). Heal confirmed in logs. Still owed
       once the initial scan drains: Room rows ≈ server count; no secured photo in the main
       grid; delete-album dialog; "Move here" pulls a whole burst.

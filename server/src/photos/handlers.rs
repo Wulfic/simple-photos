@@ -353,6 +353,98 @@ fn duplicate_register_response(
     )
 }
 
+/// What [`insert_registered_photo`] did.
+#[derive(Debug, PartialEq)]
+enum RegisterInsert {
+    Created,
+    /// Another registration of the same `photo_hash` committed between this
+    /// call's dedup check and its insert; this is the row that won.
+    LostRace(ExistingEncryptedPhoto),
+}
+
+/// Insert the `photos` row for a `register-encrypted` call that passed the
+/// dedup checks.
+///
+/// The checks and this insert are separate statements, so two registrations of
+/// one content hash can both pass them. `idx_photos_user_hash` stops the second
+/// insert; without the conflict clause the loser surfaced that as a **500**, the
+/// phone marked its row FAILED and only a later retry healed it (TODO.md F6).
+///
+/// The conflict target is that one index, deliberately not `INSERT OR IGNORE`:
+/// any other violation (primary key, NOT NULL) is a real bug and must still fail
+/// loudly instead of being reported as a duplicate.
+async fn insert_registered_photo(
+    pool: &sqlx::SqlitePool,
+    user_id: &str,
+    photo_id: &str,
+    media_type: &str,
+    now: &str,
+    req: &RegisterEncryptedPhotoRequest,
+) -> Result<RegisterInsert, AppError> {
+    let inserted = sqlx::query(
+        "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
+         size_bytes, width, height, duration_secs, taken_at, latitude, longitude, \
+         thumb_path, created_at, encrypted_blob_id, encrypted_thumb_blob_id, photo_hash, \
+         photo_subtype, burst_id, motion_video_blob_id, camera_model) \
+         VALUES (?, ?, ?, '', ?, ?, 0, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?) \
+         ON CONFLICT (user_id, photo_hash) WHERE photo_hash IS NOT NULL DO NOTHING",
+    )
+    .bind(photo_id)
+    .bind(user_id)
+    .bind(&req.filename)
+    .bind(&req.mime_type)
+    .bind(media_type)
+    .bind(req.width.unwrap_or(0))
+    .bind(req.height.unwrap_or(0))
+    .bind(req.duration_secs)
+    .bind(req.taken_at.as_ref().map(|t| normalize_iso_timestamp(t)))
+    .bind(req.latitude)
+    .bind(req.longitude)
+    .bind(now)
+    .bind(&req.encrypted_blob_id)
+    .bind(&req.encrypted_thumb_blob_id)
+    .bind(&req.photo_hash)
+    .bind(&req.photo_subtype)
+    .bind(&req.burst_id)
+    .bind(&req.motion_video_blob_id)
+    .bind(&req.camera_model)
+    .execute(pool)
+    .await?;
+
+    if inserted.rows_affected() == 1 {
+        return Ok(RegisterInsert::Created);
+    }
+
+    // Only the hash index can make the insert a no-op, so the winner exists and
+    // is committed. Read it on the WRITE pool: it is the connection that just
+    // observed the conflict.
+    let winner: Option<ExistingEncryptedPhoto> = sqlx::query_as(
+        "SELECT id, encrypted_blob_id, encrypted_thumb_blob_id \
+         FROM photos WHERE user_id = ? AND photo_hash = ? LIMIT 1",
+    )
+    .bind(user_id)
+    .bind(&req.photo_hash)
+    .fetch_optional(pool)
+    .await?;
+
+    match winner {
+        Some(winner) => Ok(RegisterInsert::LostRace(winner)),
+        None => {
+            // Fail closed: a no-op insert with no row to point at is not a
+            // duplicate, and answering one would leave the client with no photo.
+            tracing::error!(
+                user_id = %user_id,
+                photo_hash = ?req.photo_hash,
+                blob_id = %req.encrypted_blob_id,
+                "register-encrypted: insert conflicted on photo_hash but no winner row exists"
+            );
+            Err(AppError::Internal(
+                "register-encrypted: hash conflict with no winning row".into(),
+            ))
+        }
+    }
+}
+
 /// POST /api/photos/register-encrypted
 /// Create a photos record linked to already-uploaded encrypted blobs.
 /// This is called by mobile clients after uploading blobs to bridge the
@@ -429,7 +521,7 @@ pub async fn register_encrypted_photo(
 
     let photo_id = Uuid::new_v4().to_string();
     let now = utc_now_iso();
-    let media_type = req.media_type.unwrap_or_else(|| {
+    let media_type = req.media_type.clone().unwrap_or_else(|| {
         if req.mime_type.starts_with("video/") {
             "video".to_string()
         } else if req.mime_type == "image/gif" {
@@ -439,34 +531,29 @@ pub async fn register_encrypted_photo(
         }
     });
 
-    sqlx::query(
-        "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
-         size_bytes, width, height, duration_secs, taken_at, latitude, longitude, \
-         thumb_path, created_at, encrypted_blob_id, encrypted_thumb_blob_id, photo_hash, \
-         photo_subtype, burst_id, motion_video_blob_id, camera_model) \
-         VALUES (?, ?, ?, '', ?, ?, 0, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?)",
+    match insert_registered_photo(
+        &state.pool,
+        &auth.user_id,
+        &photo_id,
+        &media_type,
+        &now,
+        &req,
     )
-    .bind(&photo_id)
-    .bind(&auth.user_id)
-    .bind(&req.filename)
-    .bind(&req.mime_type)
-    .bind(&media_type)
-    .bind(req.width.unwrap_or(0))
-    .bind(req.height.unwrap_or(0))
-    .bind(req.duration_secs)
-    .bind(req.taken_at.as_ref().map(|t| normalize_iso_timestamp(t)))
-    .bind(req.latitude)
-    .bind(req.longitude)
-    .bind(&now)
-    .bind(&req.encrypted_blob_id)
-    .bind(&req.encrypted_thumb_blob_id)
-    .bind(&req.photo_hash)
-    .bind(&req.photo_subtype)
-    .bind(&req.burst_id)
-    .bind(&req.motion_video_blob_id)
-    .bind(&req.camera_model)
-    .execute(&state.pool)
-    .await?;
+    .await?
+    {
+        RegisterInsert::Created => {}
+        RegisterInsert::LostRace(winner) => {
+            tracing::info!(
+                user_id = %auth.user_id,
+                existing_photo_id = %winner.0,
+                photo_hash = ?req.photo_hash,
+                uploaded_blob_id = %req.encrypted_blob_id,
+                canonical_blob_id = ?winner.1,
+                "register-encrypted: lost a concurrent registration race — returning winner"
+            );
+            return Ok(duplicate_register_response(winner));
+        }
+    }
 
     audit::log(
         &state,
@@ -1118,5 +1205,128 @@ mod tests {
             validate_lookup_hashes(&[huge]),
             Err(AppError::BadRequest(_))
         ));
+    }
+
+    // ── register-encrypted insert race (TODO.md F6) ─────────────────────────
+
+    fn register_req(blob: &str, hash: Option<&str>) -> RegisterEncryptedPhotoRequest {
+        serde_json::from_value(serde_json::json!({
+            "filename": "IMG_0001.jpg",
+            "mime_type": "image/jpeg",
+            "encrypted_blob_id": blob,
+            "encrypted_thumb_blob_id": format!("{blob}-thumb"),
+            "photo_hash": hash,
+        }))
+        .unwrap()
+    }
+
+    async fn insert_reg(
+        pool: &sqlx::SqlitePool,
+        user: &str,
+        photo_id: &str,
+        req: &RegisterEncryptedPhotoRequest,
+    ) -> Result<RegisterInsert, AppError> {
+        insert_registered_photo(pool, user, photo_id, "photo", "2026-11-25T00:00:00Z", req).await
+    }
+
+    async fn photo_ids_with_hash(pool: &sqlx::SqlitePool, hash: &str) -> Vec<String> {
+        sqlx::query_scalar("SELECT id FROM photos WHERE photo_hash = ? ORDER BY id")
+            .bind(hash)
+            .fetch_all(pool)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn register_insert_creates_the_row_for_a_new_hash() {
+        let pool = test_pool().await;
+        let got = insert_reg(&pool, "u1", "p1", &register_req("b1", Some("aaaaaaaaaaaa")))
+            .await
+            .unwrap();
+        assert_eq!(got, RegisterInsert::Created);
+        assert_eq!(photo_ids_with_hash(&pool, "aaaaaaaaaaaa").await, ["p1"]);
+    }
+
+    /// The race itself: the winner commits after the loser's dedup check, so
+    /// the loser reaches the insert. It must be told about the winner, not 500.
+    #[tokio::test]
+    async fn register_insert_that_loses_the_race_answers_the_winner() {
+        let pool = test_pool().await;
+        insert_hashed(
+            &pool,
+            "winner",
+            "u1",
+            "aaaaaaaaaaaa",
+            Some("wb"),
+            "2026-01-01T00:00:00Z",
+        )
+        .await;
+
+        let got = insert_reg(
+            &pool,
+            "u1",
+            "loser",
+            &register_req("lb", Some("aaaaaaaaaaaa")),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            got,
+            RegisterInsert::LostRace(("winner".into(), Some("wb".into()), Some("wb-thumb".into())))
+        );
+        assert_eq!(photo_ids_with_hash(&pool, "aaaaaaaaaaaa").await, ["winner"]);
+    }
+
+    #[tokio::test]
+    async fn register_insert_does_not_treat_another_users_hash_as_a_winner() {
+        let pool = test_pool().await;
+        insert_hashed(
+            &pool,
+            "theirs",
+            "u2",
+            "aaaaaaaaaaaa",
+            Some("tb"),
+            "2026-01-01T00:00:00Z",
+        )
+        .await;
+        let got = insert_reg(
+            &pool,
+            "u1",
+            "mine",
+            &register_req("mb", Some("aaaaaaaaaaaa")),
+        )
+        .await
+        .unwrap();
+        assert_eq!(got, RegisterInsert::Created);
+        assert_eq!(
+            photo_ids_with_hash(&pool, "aaaaaaaaaaaa").await,
+            ["mine", "theirs"]
+        );
+    }
+
+    /// Save Copy rows carry no hash; the partial index exempts them, and so
+    /// must the conflict clause.
+    #[tokio::test]
+    async fn register_insert_admits_any_number_of_hashless_rows() {
+        let pool = test_pool().await;
+        for (id, blob) in [("c1", "b1"), ("c2", "b2")] {
+            let got = insert_reg(&pool, "u1", id, &register_req(blob, None))
+                .await
+                .unwrap();
+            assert_eq!(got, RegisterInsert::Created);
+        }
+    }
+
+    /// The clause names only the hash index: a different violation is a bug
+    /// and must still fail, not be reported as a duplicate.
+    #[tokio::test]
+    async fn register_insert_still_fails_on_a_primary_key_collision() {
+        let pool = test_pool().await;
+        insert_reg(&pool, "u1", "p1", &register_req("b1", Some("aaaaaaaaaaaa")))
+            .await
+            .unwrap();
+        let got = insert_reg(&pool, "u1", "p1", &register_req("b2", Some("bbbbbbbbbbbb"))).await;
+        assert!(matches!(got, Err(AppError::Sqlx(_))), "got {got:?}");
     }
 }
