@@ -48,6 +48,19 @@ data class RegisterEncryptedPhotoRequest(
     @SerializedName("camera_model") val cameraModel: String? = null
 )
 
+/** Body of `POST /api/photos/lookup-hashes` (≤ 500 hashes). */
+data class LookupHashesRequest(val hashes: List<String>)
+
+/** A miss is absent from [matches]. Servers before `87927fd` answer 404. */
+data class LookupHashesResponse(val matches: Map<String, HashMatchDto>? = null)
+
+/** The server photo already holding some content, and the blobs it serves. */
+data class HashMatchDto(
+    @SerializedName("photo_id") val photoId: String? = null,
+    @SerializedName("encrypted_blob_id") val encryptedBlobId: String? = null,
+    @SerializedName("encrypted_thumb_blob_id") val encryptedThumbBlobId: String? = null,
+)
+
 data class RegisterEncryptedPhotoResponse(
     @SerializedName("photo_id") val photoId: String,
     val duplicate: Boolean? = null,

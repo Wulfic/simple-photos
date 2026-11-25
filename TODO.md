@@ -143,10 +143,13 @@ device's media files are never touched).
       `{matches: {hash: {photo_id, encrypted_blob_id, encrypted_thumb_blob_id}}}` for this
       user only. Unit 7 (RED by mutating the user/blob predicates: exactly the 2 scoping
       tests) + `test_96` 4/4 E2E. Server 562/562, clippy + fmt clean.
-- [ ] **F2b android** before preparing a batch, look up its hashes; a hit takes the
-      existing register-copy path with the server's ids and uploads **no bytes and no
-      thumbnail**. Lookup failure → fall back to today's upload (fail open on bandwidth,
-      never on correctness). Test: a hit uploads nothing; a lookup error still uploads.
+- [x] **F2b android** after hashing and the local-donor check, ask the server; a hit is
+      adopted (`markSynced` with its ids + `collapseTwinsOf`) with **no bytes and no
+      thumbnail**. Any failure → today's upload. A 404/405 (every server before `87927fd`,
+      i.e. CT132 today) turns the lookup off for the rest of the pass: one wasted call per
+      pass, not per photo. Pass summary logs `adoptedFromServer` + `hashLookupDisabled`.
+      `ServerHashLookupTest` 8 + `BackupHashLookupWiringTest` 3 (RED 3/3 on the old worker).
+      Android 329/329, `assembleDebug` builds. **Not device-verified** (no deploy).
 - [ ] **F6 server** — **re-diagnosed while testing F2a:** `idx_photos_user_hash` is a partial
       UNIQUE index, so two concurrent registrations can NOT both insert (Save Copy rows have
       a NULL hash and are exempt). The loser gets a raw constraint error → **500** → phone

@@ -186,6 +186,12 @@ interface ApiService {
         @Body request: SoftDeleteBlobRequest
     ): SoftDeleteBlobResponse
 
+    // ── Pre-upload hash lookup ───────────────────────────────────────────
+    @POST("api/photos/lookup-hashes")
+    suspend fun lookupHashes(
+        @Body request: LookupHashesRequest
+    ): LookupHashesResponse
+
     // ── Register encrypted photo ─────────────────────────────────────────
     @POST("api/photos/register-encrypted")
     suspend fun registerEncryptedPhoto(

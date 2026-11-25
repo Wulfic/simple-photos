@@ -30,8 +30,11 @@ import com.simplephotos.data.local.AppDatabase
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.local.entities.SyncStatus
 import com.simplephotos.data.remote.ApiService
+import com.simplephotos.data.remote.dto.LookupHashesRequest
 import com.simplephotos.data.repository.PhotoRepository
 import com.simplephotos.data.repository.SyncRepository
+import com.simplephotos.data.sync.HashLookup
+import com.simplephotos.data.sync.ServerHashLookup
 import com.simplephotos.data.sync.canonicalBlobIds
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_DIAGNOSTIC_LOGGING
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_WIFI_ONLY_BACKUP
@@ -246,9 +249,23 @@ class BackupWorker @AssistedInject constructor(
             val uploadedHashes = mutableSetOf<String>()
 
             var uploaded = 0
+            var adopted = 0
             var skipped = 0
             var failed = 0
             var purged = 0
+
+            // Asked before any bytes move: the server may already hold this content
+            // from an earlier install (TODO.md F2). One per pass, so a server that
+            // lacks the route is detected once and then left alone.
+            val hashLookup = ServerHashLookup(
+                lookup = { hashes -> api.lookupHashes(LookupHashesRequest(hashes)) },
+                onFailure = { e, disabledForPass ->
+                    diag.warn(TAG, "Hash lookup failed — uploading instead: ${e.message}", mapOf(
+                        "error" to e.javaClass.simpleName,
+                        "disabledForPass" to disabledForPass.toString()
+                    ))
+                }
+            )
 
             for (snapshot in genuinelyPending) {
                 // Re-read: this list was taken at pass start, and a long batch
@@ -431,6 +448,29 @@ class BackupWorker @AssistedInject constructor(
                         continue
                     }
 
+                    // ── Server already holds this content? ──────────────
+                    // Adopt its photo instead of uploading media + thumbnail
+                    // only for the server to discard one and orphan the other.
+                    if (photo.serverPhotoId == null) {
+                        val held = hashLookup.find(contentHash)
+                        if (held is HashLookup.Held) {
+                            db.photoDao().markSynced(
+                                photo.localId, held.photoId, held.blobId, held.thumbBlobId, contentHash
+                            )
+                            // Another row may already draw this server photo (D2).
+                            // May delete THIS row; nothing below touches it.
+                            val removed = photoRepository.collapseTwinsOf(held.photoId)
+                            diag.debug(TAG, "Adopted server copy — nothing uploaded: ${photo.filename} → ${held.photoId}", mapOf(
+                                "localId" to photo.localId,
+                                "contentHash" to contentHash,
+                                "serverBlobId" to held.blobId,
+                                "twinRowsCollapsed" to removed.toString()
+                            ))
+                            adopted++
+                            continue
+                        }
+                    }
+
                     // Store hash in entity for future dedup
                     db.photoDao().setPhotoHashIfMissing(photo.localId, contentHash)
 
@@ -558,7 +598,7 @@ class BackupWorker @AssistedInject constructor(
             // Belt and braces for D2: a sync running beside this pass can insert a
             // server-only row for a photo this pass registered after its targeted
             // collapse ran. One GROUP BY over the mirror, and only after real work.
-            if (uploaded > 0) {
+            if (uploaded + adopted > 0) {
                 try {
                     val healed = photoRepository.collapseAllTwins()
                     if (healed > 0) diag.info(TAG, "Collapsed $healed twin row(s) after the batch")
@@ -569,6 +609,8 @@ class BackupWorker @AssistedInject constructor(
 
             diag.info(TAG, "Backup worker finished", mapOf(
                 "uploaded" to uploaded.toString(),
+                "adoptedFromServer" to adopted.toString(),
+                "hashLookupDisabled" to hashLookup.disabled.toString(),
                 "skipped" to skipped.toString(),
                 "failed" to failed.toString(),
                 "purged" to purged.toString(),
