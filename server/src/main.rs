@@ -51,6 +51,7 @@ mod health;
 mod http_utils;
 mod import;
 mod ingest;
+mod maintenance;
 mod media;
 mod photos;
 mod process;

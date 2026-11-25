@@ -219,6 +219,19 @@ fn admin_routes() -> Router<AppState> {
             "/admin/import/ingest",
             post(crate::setup::import::import_ingest),
         )
+        // Orphan-thumbnail quarantine (TODO.md F1) — dry run unless apply
+        .route(
+            "/admin/maintenance/orphan-thumbnails",
+            post(crate::maintenance::handlers::sweep_orphan_thumbnails),
+        )
+        .route(
+            "/admin/maintenance/orphan-thumbnails/restore",
+            post(crate::maintenance::handlers::restore_orphan_thumbnails),
+        )
+        .route(
+            "/admin/maintenance/orphan-thumbnails/purge",
+            post(crate::maintenance::handlers::purge_orphan_thumbnails),
+        )
 }
 
 // ── Google Photos / metadata import ──────────────────────────────────

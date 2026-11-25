@@ -159,14 +159,21 @@ device's media files are never touched).
       (4/12 concurrent → 500), GREEN ×4 runs; 5 unit tests, each mutation (no clause /
       `OR IGNORE`) turns exactly its one test red. Server 567/567, clippy + fmt clean;
       E2E 95/96/97/03/33 green.
-- [ ] **F1 server** guarded sweeper for unreferenced `photo`/`thumbnail`/`gif`/`video`
-      blobs: admin endpoint, **dry-run default**, returns counts + bytes, grace period
-      (blob older than 24h — an upload in flight is unreferenced for a moment), refuses
-      when the reference set is empty, soft-delete (move to a quarantine dir) not unlink.
-      Tests: referenced blob survives; young orphan survives; empty-reference refusal;
-      dry-run touches nothing. **Running it on CT132 = separate approval, dry-run first.**
+- [x] **F1 server** guarded sweeper for orphan **thumbnails** (re-scoped, see "F1 design"
+      below). 21 unit tests; 10 guard mutations each turn their own test red (scan + txn path
+      guard, NULL filter, empty-reference refusal, confirm_count, backup mode, grace, txn id
+      re-check, restore live-row check, path normalization). Server 588/588, clippy
+      `-D warnings` + fmt clean; E2E 98/03/04/33/95/96/97 = 57/57 against a binary verified
+      to contain the new routes. **Not run on CT132 — needs deploy + approval, dry-run first.**
 - [ ] **F4 web** "Remove from secure album" in the secure viewer, reusing the three-way
       prompt + `expandBurstStacks` from P5.
+- [ ] **F8 server (found 2026-11-25, PRE-EXISTING)** `DELETE /api/photos/:id` returns 500
+      `database is locked` (SQLITE_BUSY 5 / BUSY_SNAPSHOT 517) when it races the `[SERVER_MIG]`
+      background encrypt of the same photo. `soft_delete_photo` (`trash/operations.rs`) opens a
+      DEFERRED txn, reads, then writes — a write committed in between makes the read→write
+      upgrade fail instantly; `busy_timeout` does not retry 517. test_77 fails 1–4 of 4 params
+      per run, **identically on `a5b9cbc` without F1**. Likely fix: `BEGIN IMMEDIATE` for
+      read-then-write txns. Audit how many other handlers share the shape before fixing one.
 
 ### Owner answers (2026-11-25, session start)
 - **No deploy this session** — code + tests only. CT132 and the phone stay as they are.
@@ -184,6 +191,51 @@ device's media files are never touched).
   still takes ≤500 for later callers.
 - A hit is adopted directly (`markSynced` with the server's ids + `collapseTwinsOf`), with
   no `register-encrypted` call: that call would only answer the same ids from its first arm.
+
+### F1 measured (read-only, DB copy on CT132, 2026-11-25, box `5286392`)
+| type | rows | no DB reference |
+|---|---|---|
+| thumbnail | 34,959 | **18,067 (754 MB)** — clusters 08-05/06, 09-17, 09-27, 11-17, 11-25 |
+| video_thumbnail | 691 | 30 |
+| photo / gif | 16,326 / 3,636 | **53 / 4** (Aug 5–9) |
+| video / motion_video | 1,031 / 276 | 0 / 0 |
+| album_manifest | 19 | 19 (by design: manifests are referenced by nothing server-side) |
+No `storage_path` is shared by two rows. Live schema columns holding blob ids: photos ×3 +
+`photos.id`, `encrypted_gallery_items` ×4, `video_renditions.blob_id`, `trash_items` ×3 +
+`photo_id`, `photo_metadata.blob_id`, `shared_album_photos.photo_ref`, `orphaned_rendition_blobs`.
+
+### F1 design (decided 2026-11-25 — supersedes the original "photo/thumbnail/gif/video")
+- **Thumbnails only** (`thumbnail`, `video_thumbnail`). Media is never a candidate: web's full
+  sync renders an unregistered media blob as a photo (`syncDirectBlobs`), so "no `photos`
+  row" ≠ orphan; and the D3 re-uploads left **0** media orphans (dedup kept none).
+- **The 57 direct blobs' thumbnails are invisible to the server** (their id lives only in the
+  encrypted payload). Protected by proximity: a thumbnail uploaded within **±1h** of an
+  unreferenced media blob of the same user is kept and counted (`kept_near_direct_media`).
+- **Reference set = every column above**, and a unit test enumerates every `*blob*`/`*ref*`
+  column of the migrated schema and fails if the sweeper does not know it.
+- **Path guard** (added at review): ids are not the only link — encrypted trash restore
+  re-creates a thumbnail blob at `trash_items.thumb_path`. A thumbnail whose `storage_path` is
+  named by any `*path*` column, or by a second `blobs` row, is kept (`kept_shared_path`); a
+  schema test enumerates `*path*` columns the same way. Checked again inside the move txn.
+- `unquarantine_row` must not drop the quarantine record when a live row blocks the re-insert.
+- Grace **24h** (`julianday(upload_time)` NULL ⇒ kept). Android uploads+registers in one call
+  and re-uploads on retry, so nothing legitimately references a thumb uploaded a day ago.
+- **Refuses**: backup-mode servers (blobs arrive before their photo rows); a library with
+  candidates but zero referenced blobs (an empty reference set ⇒ "everything is an orphan");
+  `apply` whose `confirm_count` ≠ the current candidate count; a path that escapes the root.
+- **Quarantine, never unlink**: migration `040` `quarantined_blobs` (the full `blobs` row +
+  `quarantine_path` + `run_id`). Per blob: one txn re-checks the reference predicate, copies the
+  row, deletes it from `blobs`; then the file is renamed to
+  `<root>/.quarantine/<run_id>/<storage_path>`. Rename fails ⇒ the txn is reversed.
+- Admin endpoints, all `apply:false` by default: `POST /api/admin/maintenance/orphan-thumbnails`
+  (`{apply, confirm_count, limit≤5000}`), `…/restore` (`{run_id, apply}`), `…/purge`
+  (`{run_id, apply, confirm_count}`; the only unlink; `run_id` required).
+- Tests: referenced (each column) survives; young survives; near-direct-media survives; empty
+  reference set refuses; dry-run moves nothing; wrong `confirm_count` refuses; quarantine →
+  restore round-trips byte-identical; purge without `run_id` refuses; backup mode refuses.
+- **Not doing:** sweeping media or manifests; registering the 57 direct blobs; a scheduler
+  (manual only); running it on CT132 (needs deploy + approval).
+- Rollback: `git revert`; migration 040 is additive (reverse = `DROP TABLE quarantined_blobs`).
 
 ### NOT doing (and why)
 - **F3 won't-fix** (owner, 2026-11-25): phone-vs-Takeout pairs have different bytes; both stay.
