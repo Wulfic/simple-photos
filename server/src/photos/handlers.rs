@@ -501,6 +501,103 @@ pub async fn register_encrypted_photo(
     ))
 }
 
+// ── Pre-upload hash lookup ──────────────────────────────────────────────────
+
+/// Longest string accepted as one hash. Real ones are 12 chars; this only stops
+/// a client from making the server bind megabytes of junk.
+const LOOKUP_HASH_MAX_LEN: usize = 128;
+
+/// Reject a lookup the server should not run. Read-only, so an empty list is
+/// simply an empty answer, not an error.
+fn validate_lookup_hashes(hashes: &[String]) -> Result<(), AppError> {
+    if hashes.len() > LOOKUP_HASHES_MAX {
+        return Err(AppError::BadRequest(format!(
+            "At most {LOOKUP_HASHES_MAX} hashes per lookup (got {})",
+            hashes.len()
+        )));
+    }
+    if let Some(bad) = hashes
+        .iter()
+        .find(|h| h.is_empty() || h.len() > LOOKUP_HASH_MAX_LEN)
+    {
+        return Err(AppError::BadRequest(format!(
+            "Hash length must be 1..={LOOKUP_HASH_MAX_LEN} (got {})",
+            bad.len()
+        )));
+    }
+    Ok(())
+}
+
+/// The photos of `user_id` that already hold content with one of `hashes`.
+///
+/// Keys on `photos.photo_hash` — the value `register-encrypted` dedups on — so a
+/// hit is exactly a registration the server would have answered `duplicate`.
+/// Only photos with an `encrypted_blob_id` count: a client can adopt only a photo
+/// it can download, and a parked/unencrypted one is a miss (it uploads as before).
+/// `idx_photos_user_hash` (UNIQUE, `photo_hash IS NOT NULL`) makes a hit unique;
+/// Save Copy rows carry no hash and never answer.
+pub async fn lookup_hashes_for(
+    pool: &sqlx::SqlitePool,
+    user_id: &str,
+    hashes: &[String],
+) -> Result<std::collections::BTreeMap<String, HashMatch>, sqlx::Error> {
+    let mut found = std::collections::BTreeMap::new();
+    if hashes.is_empty() {
+        return Ok(found);
+    }
+    // One bound JSON array instead of N placeholders.
+    let wanted = serde_json::to_string(hashes).map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
+    let rows: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
+        "SELECT photo_hash, id, encrypted_blob_id, encrypted_thumb_blob_id FROM photos \
+         WHERE user_id = ? AND encrypted_blob_id IS NOT NULL \
+           AND photo_hash IN (SELECT value FROM json_each(?))",
+    )
+    .bind(user_id)
+    .bind(&wanted)
+    .fetch_all(pool)
+    .await?;
+    for (hash, photo_id, encrypted_blob_id, encrypted_thumb_blob_id) in rows {
+        found.insert(
+            hash,
+            HashMatch {
+                photo_id,
+                encrypted_blob_id,
+                encrypted_thumb_blob_id,
+            },
+        );
+    }
+    Ok(found)
+}
+
+/// POST /api/photos/lookup-hashes
+/// Which of these content hashes does the server already hold for this user?
+///
+/// A reinstalled phone otherwise re-uploads every photo in full only for the
+/// server to discard the media blob and keep an orphan thumbnail (measured on
+/// CT132: 298/298 uploads were duplicates). Read-only.
+pub async fn lookup_hashes(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(req): Json<LookupHashesRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if let Err(e) = validate_lookup_hashes(&req.hashes) {
+        tracing::warn!(
+            user_id = %auth.user_id,
+            requested = req.hashes.len(),
+            "lookup-hashes rejected: {e}"
+        );
+        return Err(e);
+    }
+    let matches = lookup_hashes_for(&state.read_pool, &auth.user_id, &req.hashes).await?;
+    tracing::info!(
+        user_id = %auth.user_id,
+        requested = req.hashes.len(),
+        matched = matches.len(),
+        "lookup-hashes"
+    );
+    Ok(Json(serde_json::json!({ "matches": matches })))
+}
+
 // ── Favorite Toggle ─────────────────────────────────────────────────────────
 
 /// PUT /api/photos/:id/favorite
@@ -854,5 +951,172 @@ mod tests {
             &paginate_all(&pool, "u1", 1).await,
             &["mine-1".to_string(), "mine-2".to_string()],
         );
+    }
+
+    // ── lookup-hashes (TODO.md F2a) ─────────────────────────────────────────
+
+    /// A photo as `register-encrypted` leaves it. `blob = None` is a photo the
+    /// server holds but has not encrypted yet (parked / pre-migration).
+    async fn insert_hashed(
+        pool: &sqlx::SqlitePool,
+        id: &str,
+        user: &str,
+        hash: &str,
+        blob: Option<&str>,
+        created_at: &str,
+    ) {
+        sqlx::query(
+            "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
+             created_at, photo_hash, encrypted_blob_id, encrypted_thumb_blob_id) \
+             VALUES (?, ?, 'IMG.jpg', '', 'image/jpeg', 'photo', ?, ?, ?, ?)",
+        )
+        .bind(id)
+        .bind(user)
+        .bind(created_at)
+        .bind(hash)
+        .bind(blob)
+        .bind(blob.map(|b| format!("{b}-thumb")))
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    fn hashes(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[tokio::test]
+    async fn lookup_names_the_photo_and_its_blobs_for_a_hit_and_omits_a_miss() {
+        let pool = test_pool().await;
+        insert_hashed(
+            &pool,
+            "p1",
+            "u1",
+            "aaaaaaaaaaaa",
+            Some("b1"),
+            "2026-01-01T00:00:00Z",
+        )
+        .await;
+
+        let got = lookup_hashes_for(&pool, "u1", &hashes(&["aaaaaaaaaaaa", "bbbbbbbbbbbb"]))
+            .await
+            .unwrap();
+
+        assert_eq!(got.len(), 1, "the miss must not appear at all: {got:?}");
+        assert_eq!(
+            got["aaaaaaaaaaaa"],
+            HashMatch {
+                photo_id: "p1".into(),
+                encrypted_blob_id: "b1".into(),
+                encrypted_thumb_blob_id: Some("b1-thumb".into()),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn lookup_never_answers_with_another_users_photo() {
+        let pool = test_pool().await;
+        insert_hashed(
+            &pool,
+            "theirs",
+            "u2",
+            "aaaaaaaaaaaa",
+            Some("b2"),
+            "2026-01-01T00:00:00Z",
+        )
+        .await;
+
+        let got = lookup_hashes_for(&pool, "u1", &hashes(&["aaaaaaaaaaaa"]))
+            .await
+            .unwrap();
+
+        assert!(got.is_empty(), "u2's photo leaked to u1: {got:?}");
+    }
+
+    /// Adopting a photo with no encrypted blob would leave the phone a row it
+    /// can never download — it must upload instead.
+    #[tokio::test]
+    async fn lookup_treats_a_photo_without_an_encrypted_blob_as_a_miss() {
+        let pool = test_pool().await;
+        insert_hashed(
+            &pool,
+            "parked",
+            "u1",
+            "aaaaaaaaaaaa",
+            None,
+            "2026-01-01T00:00:00Z",
+        )
+        .await;
+
+        let got = lookup_hashes_for(&pool, "u1", &hashes(&["aaaaaaaaaaaa"]))
+            .await
+            .unwrap();
+
+        assert!(got.is_empty(), "{got:?}");
+    }
+
+    /// The lookup answers one photo per hash with no tiebreak because the schema
+    /// allows only one. If that index is ever dropped, this fails before the
+    /// lookup silently starts answering an arbitrary photo.
+    #[tokio::test]
+    async fn one_photo_per_user_and_hash_is_a_schema_invariant() {
+        let pool = test_pool().await;
+        insert_hashed(
+            &pool,
+            "orig",
+            "u1",
+            "aaaaaaaaaaaa",
+            Some("b1"),
+            "2026-01-01T00:00:00Z",
+        )
+        .await;
+
+        let second = sqlx::query(
+            "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
+             created_at, photo_hash) VALUES ('dup', 'u1', 'x.jpg', '', 'image/jpeg', 'photo', \
+             '2026-01-02T00:00:00Z', 'aaaaaaaaaaaa')",
+        )
+        .execute(&pool)
+        .await;
+
+        assert!(
+            second.is_err(),
+            "a second photo with the same hash was admitted"
+        );
+    }
+
+    #[tokio::test]
+    async fn lookup_of_no_hashes_is_an_empty_answer() {
+        let pool = test_pool().await;
+        assert!(lookup_hashes_for(&pool, "u1", &[])
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(validate_lookup_hashes(&[]).is_ok());
+    }
+
+    #[test]
+    fn lookup_rejects_more_than_the_batch_limit() {
+        let at_limit = vec!["aaaaaaaaaaaa".to_string(); LOOKUP_HASHES_MAX];
+        assert!(validate_lookup_hashes(&at_limit).is_ok());
+
+        let over = vec!["aaaaaaaaaaaa".to_string(); LOOKUP_HASHES_MAX + 1];
+        assert!(matches!(
+            validate_lookup_hashes(&over),
+            Err(AppError::BadRequest(_))
+        ));
+    }
+
+    #[test]
+    fn lookup_rejects_an_empty_or_oversized_hash() {
+        assert!(matches!(
+            validate_lookup_hashes(&hashes(&["aaaaaaaaaaaa", ""])),
+            Err(AppError::BadRequest(_))
+        ));
+        let huge = "a".repeat(LOOKUP_HASH_MAX_LEN + 1);
+        assert!(matches!(
+            validate_lookup_hashes(&[huge]),
+            Err(AppError::BadRequest(_))
+        ));
     }
 }

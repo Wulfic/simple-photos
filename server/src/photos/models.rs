@@ -116,6 +116,24 @@ pub struct RegisterEncryptedPhotoRequest {
     pub camera_model: Option<String>,
 }
 
+/// Most hashes one `POST /api/photos/lookup-hashes` call may ask about.
+pub const LOOKUP_HASHES_MAX: usize = 500;
+
+/// Request body for `POST /api/photos/lookup-hashes`.
+#[derive(Debug, Deserialize)]
+pub struct LookupHashesRequest {
+    /// `photo_hash` values (sha256(original)[..6] as 12 hex chars).
+    pub hashes: Vec<String>,
+}
+
+/// One photo a client can adopt instead of uploading the same bytes again.
+#[derive(Debug, Clone, PartialEq, Serialize, sqlx::FromRow)]
+pub struct HashMatch {
+    pub photo_id: String,
+    pub encrypted_blob_id: String,
+    pub encrypted_thumb_blob_id: Option<String>,
+}
+
 /// Response for secure gallery listing.
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct SecureGalleryRecord {

@@ -139,16 +139,20 @@ device's media files are never touched).
   blob**. Device holds ~5.3k media, so expect ~5k orphan thumbs from this install.
 
 ### Plan — one commit each, in this order
-- [ ] **F2a server** `POST /api/photos/lookup-hashes` — batch (≤500) of content hashes →
-      `{hash: {photo_id, encrypted_blob_id, encrypted_thumb_blob_id}}` for this user only.
-      Read-only, additive. Test: hit, miss, other user's hash is a miss, >500 rejected.
+- [x] **F2a server** `POST /api/photos/lookup-hashes` — batch (≤500) of content hashes →
+      `{matches: {hash: {photo_id, encrypted_blob_id, encrypted_thumb_blob_id}}}` for this
+      user only. Unit 7 (RED by mutating the user/blob predicates: exactly the 2 scoping
+      tests) + `test_96` 4/4 E2E. Server 562/562, clippy + fmt clean.
 - [ ] **F2b android** before preparing a batch, look up its hashes; a hit takes the
       existing register-copy path with the server's ids and uploads **no bytes and no
       thumbnail**. Lookup failure → fall back to today's upload (fail open on bandwidth,
       never on correctness). Test: a hit uploads nothing; a lookup error still uploads.
-- [ ] **F6 server** make `register-encrypted` check-then-insert atomic (single write-pool
-      transaction / `BEGIN IMMEDIATE`), still admitting "Save Copy" rows. Test: two
-      concurrent registrations of one hash → one photo.
+- [ ] **F6 server** — **re-diagnosed while testing F2a:** `idx_photos_user_hash` is a partial
+      UNIQUE index, so two concurrent registrations can NOT both insert (Save Copy rows have
+      a NULL hash and are exempt). The loser gets a raw constraint error → **500** → phone
+      marks FAILED → retry heals. Fix: map that violation to the `duplicate` answer (re-read
+      the winner). Test: insert the winner between the check and the insert → 200 duplicate
+      naming the winner's ids, not 500.
 - [ ] **F1 server** guarded sweeper for unreferenced `photo`/`thumbnail`/`gif`/`video`
       blobs: admin endpoint, **dry-run default**, returns counts + bytes, grace period
       (blob older than 24h — an upload in flight is unreferenced for a moment), refuses
@@ -157,6 +161,23 @@ device's media files are never touched).
       dry-run touches nothing. **Running it on CT132 = separate approval, dry-run first.**
 - [ ] **F4 web** "Remove from secure album" in the secure viewer, reusing the three-way
       prompt + `expandBurstStacks` from P5.
+
+### Owner answers (2026-11-25, session start)
+- **No deploy this session** — code + tests only. CT132 and the phone stay as they are.
+- F1 quarantine: **kept until a manual purge** (separate call, dry-run default). Never auto-unlinked.
+- F1 dry-run against CT132 is OK. With no deploy that means the same read-only query run
+  on a *copy* of the live DB, not the endpoint.
+
+### F2 design decisions
+- Lookup keys on `photos.photo_hash` (what `register-encrypted` dedups on), not
+  `blobs.content_hash`. Android sends the same 12-hex value as both.
+- Only hits with a non-NULL `encrypted_blob_id` are returned: a client can only adopt a
+  photo it can download. A parked/unencrypted photo is a miss → today's upload path.
+- Android looks up **per photo**, right after it hashes (the hash needs the file read
+  anyway, so there is nothing to batch ahead without a second full read). The endpoint
+  still takes ≤500 for later callers.
+- A hit is adopted directly (`markSynced` with the server's ids + `collapseTwinsOf`), with
+  no `register-encrypted` call: that call would only answer the same ids from its first arm.
 
 ### NOT doing (and why)
 - **F3 won't-fix** (owner, 2026-11-25): phone-vs-Takeout pairs have different bytes; both stay.

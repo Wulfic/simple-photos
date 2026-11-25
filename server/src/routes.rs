@@ -288,6 +288,10 @@ fn photo_routes() -> Router<AppState> {
             "/photos/register-encrypted",
             post(crate::photos::handlers::register_encrypted_photo),
         )
+        .route(
+            "/photos/lookup-hashes",
+            post(crate::photos::handlers::lookup_hashes),
+        )
         .route("/photos/upload", post(crate::photos::upload::upload_photo))
         .route("/photos/{id}/file", get(crate::photos::serve::serve_photo))
         .route(
