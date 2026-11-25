@@ -14,7 +14,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ARG CARGO_FEATURES=""
 WORKDIR /usr/src/app
 COPY Cargo.toml Cargo.lock ./
-RUN mkdir src && echo "fn main() {}" > src/main.rs && \
+# ort-sys's copy-dylibs symlinks libonnxruntime*.so into <OUT_DIR>/../../../{,examples,deps}
+# and panics (NotFound) if one is missing. With cargo's build/<pkg>/<hash>/out layout that
+# base is target/release/build, and a fresh target dir has no examples/ under it.
+RUN mkdir -p src target/release/build/examples target/release/build/deps && \
+    echo "fn main() {}" > src/main.rs && \
     cargo build --release ${CARGO_FEATURES:+--features "$CARGO_FEATURES"} && \
     rm src/main.rs
 COPY src ./src
