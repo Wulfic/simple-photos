@@ -18,6 +18,31 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { cn } from "./cn";
 
+/**
+ * The modal's Escape listener (on `document`). An Escape the modal ACTS on is
+ * consumed: it must not also reach page-level `window` listeners, which sit
+ * after `document` in the bubble path.
+ *
+ * Without the `stopPropagation`, the viewer's own Escape ("leave the viewer")
+ * fired on the same keypress — and a guard there cannot see the dialog: closing
+ * it is a discrete-event state update, which React flushes in a microtask
+ * BETWEEN the two listeners, re-registering the viewer's handler with the
+ * dialog already gone. Found in a real browser (F4): Escape on the secure
+ * removal dialog closed the dialog AND dumped you back to the grid.
+ *
+ * `stopPropagation`, not `stopImmediatePropagation`: other `document` listeners
+ * (e.g. an open overflow menu) still see the key. Other keys pass untouched.
+ */
+export function modalEscapeHandler(
+  onClose: () => void,
+): (e: Pick<KeyboardEvent, "key" | "stopPropagation">) => void {
+  return (e) => {
+    if (e.key !== "Escape") return;
+    e.stopPropagation();
+    onClose();
+  };
+}
+
 const SIZES = {
   sm: "max-w-sm",
   md: "max-w-md",
@@ -68,9 +93,7 @@ export function Modal({
   // Escape-to-close.
   useEffect(() => {
     if (!open || !closeOnEscape) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
+    const onKey = modalEscapeHandler(onClose);
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [open, closeOnEscape, onClose]);
