@@ -555,7 +555,7 @@ class TestRecoverySecureGallery:
         items_primary = user_client.list_secure_gallery_items(gid, token)
         assert len(items_primary["items"]) == 1
         item_blob_id = items_primary["items"][0]["blob_id"]
-        resp = user_client.download_blob(item_blob_id)
+        resp = user_client.download_blob(item_blob_id, gallery_token=token)
         assert resp.status_code == 200
         assert len(resp.content) >= NONCE_LENGTH + 16, (
             "Primary gallery blob too short — encryption migration didn't run"
@@ -684,8 +684,16 @@ class TestRecoverySecureGallery:
             f"instead of the encrypted_blob_id on recovered server"
         )
 
+        # The recovered server must still gate the item: a recovery that lost
+        # its gallery membership would serve it to a bare session. (test_10 was
+        # red from the B6 gate, 8a1d736, to F12 because these downloads omitted
+        # the token — this keeps the token fix from hiding a gate that opens.)
+        assert user.download_blob(blob_id).status_code == 401, (
+            "recovered server served a secure gallery blob with no gallery token"
+        )
+
         # Download the blob
-        resp = user.download_blob(blob_id)
+        resp = user.download_blob(blob_id, gallery_token=token)
         assert resp.status_code == 200, (
             f"Failed to download gallery blob {blob_id} on recovered server: "
             f"HTTP {resp.status_code}"
@@ -729,7 +737,10 @@ class TestRecoverySecureGallery:
         if not thumb_id:
             pytest.skip("No encrypted_thumb_blob_id in gallery item")
 
-        resp = user.download_blob(thumb_id)
+        assert user.download_blob(thumb_id).status_code == 401, (
+            "recovered server served a secure gallery thumbnail with no gallery token"
+        )
+        resp = user.download_blob(thumb_id, gallery_token=token)
         assert resp.status_code == 200, (
             f"Encrypted thumbnail blob {thumb_id} not available on recovered "
             f"server: HTTP {resp.status_code}"
@@ -1061,7 +1072,10 @@ class TestRecoveryPresyncedGallery:
             "list_gallery_items returned plaintext clone instead of encrypted blob"
         )
 
-        resp = user.download_blob(blob_id)
+        assert user.download_blob(blob_id).status_code == 401, (
+            "recovered server served a secure gallery blob with no gallery token"
+        )
+        resp = user.download_blob(blob_id, gallery_token=token)
         assert resp.status_code == 200
         assert len(resp.content) >= NONCE_LENGTH + 16
 
