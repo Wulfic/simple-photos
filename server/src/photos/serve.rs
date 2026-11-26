@@ -73,6 +73,8 @@ async fn peek_is_chunked(path: &std::path::Path) -> bool {
 fn chunked_decrypt_body(key: [u8; 32], path: std::path::PathBuf) -> Body {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(4);
     tokio::task::spawn_blocking(move || {
+        // N2 suspicion S1: counts how many blocking-pool threads this holds.
+        let _live = crate::diagnostics::inflight::DecryptStreamGauge::enter();
         let res = crate::blobs::chunked::for_each_plaintext_chunk(&key, &path, |chunk| {
             tx.blocking_send(Ok(axum::body::Bytes::from(chunk))).is_ok()
         });

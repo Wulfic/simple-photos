@@ -324,7 +324,25 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    // N2: track every open request (including the static fallback above) so
+    // the watchdog can say what was in flight when HTTP stopped answering.
+    let inflight = diagnostics::inflight::Registry::global();
+    app = app.layer(axum::middleware::from_fn_with_state(
+        inflight.clone(),
+        diagnostics::inflight::track,
+    ));
+
     let addr: SocketAddr = format!("{}:{}", config.server.host, config.server.port).parse()?;
+
+    let probe = diagnostics::watchdog::probe_addr(
+        &config.server.host,
+        config.server.port,
+        config.tls.enabled,
+    );
+    if let Err(e) = diagnostics::watchdog::spawn(tokio::runtime::Handle::current(), probe, inflight)
+    {
+        tracing::error!("N2 watchdog thread failed to start (server continues without it): {e}");
+    }
 
     if config.tls.enabled {
         let cert_path = config

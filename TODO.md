@@ -724,6 +724,59 @@ Migr 042 is one nullable column (old binary ignores it; `set_ignore_missing`). R
 N1a commit ⇒ old behaviour; revoked rows then purge at the next hourly cleanup. Android:
 revert N1b/N1c commits. Owner's phone right now: just log in again (evidence captured).
 
+### N1 device-verified (owner, 2026-11-26)
+APK installed on the S21+; the stranded phone landed on Login with the username filled, and
+re-login did NOT re-encrypt. N1 closed except "no 401 after the next N2".
+
+### N2 owner answers (2026-11-26)
+Browser **spins, then times out** (not an instant refusal) ⇒ the process is alive and the
+kernel accepts or queues the TCP connection, but no HTTP response comes back. Owner approved
+building + deploying a diagnostics-only build (N2a) so the next death records itself.
+
+### N2 suspicions — questions until a measurement separates them
+Facts (code): plain HTTP on CT132; `#[tokio::main]` with 4 workers; accept loop runs on the
+main thread (`block_on`), connections on workers; no header-read / request timeout, no
+connection cap; `/health` reads one atomic (no DB, no storage); storage is an SMB mount.
+- **S1 blocking-pool exhaustion by stalled streams.** `photos/serve.rs` `chunked_decrypt_body`
+  decrypts on `spawn_blocking` and `blocking_send`s into a 4-slot channel with no timeout. A
+  client that keeps the socket open but stops reading (a paused `<video>`, a phone in Doze)
+  parks that thread until the socket closes. 512 parked ⇒ every `spawn_blocking` / `tokio::fs`
+  (incl. `ServeDir`) queues forever ⇒ page spins. Fingerprint: thread count climbs; the
+  blocking-pool ping times out while the async ping is fine; many `futex` threads.
+- **S2 all 4 workers blocked in sync I/O** (std::fs on a hung SMB, std Mutex, sync process
+  wait). Fingerprint: async ping times out; worker threads in state `D` (SMB) or `futex`.
+- **S3 a handler wedged on a lock/DB held across an await.** Fingerprint: async + blocking
+  pings fine, `/health` self-probe fine, but in-flight requests stuck awaiting headers.
+- **S4 outside the process** (docker-proxy / conntrack). Fingerprint: every in-process
+  probe green while the browser times out.
+
+### N2a plan — diagnostics only, no behaviour change (Tier 1; `diagnostics/watchdog.rs`)
+1. **Request tracker layer** (outermost, also wraps the `ServeDir` fallback): registers each
+   request (method, path WITHOUT query — queries can carry tokens, start time, phase
+   `awaiting_headers` → `streaming_body`) in a registry; the guard lives inside a body
+   wrapper that forwards `poll_frame` / `is_end_stream` / `size_hint` (must keep
+   `Content-Length`, cf. B4), so a stuck body stays visible. WARN when headers took ≥10 s.
+2. **Gauge** for live chunked-decrypt threads (S1's direct counter).
+3. **Watchdog = a dedicated OS thread** (a tokio task dies with the wedge). Every 30 s:
+   async ping (`Handle::spawn`, 5 s timeout), blocking-pool ping (`spawn_blocking`, 5 s),
+   self-probe `GET /health` on 127.0.0.1:<port> (connect 5 s / response 10 s; plain HTTP
+   only), `/proc/self` threads, RSS, FD count, tokio `num_alive_tasks` /
+   `global_queue_depth`, in-flight counts + 5 oldest. INFO heartbeat every 10 min; WARN
+   immediately on an anomaly, plus a thread table grouped by (name, state, wchan) at most
+   once per 5 min while it lasts. Non-Linux: the /proc fields are absent, everything else runs.
+- Tests (unit, RED first where there's a behaviour): /proc `status` + task `stat` parsing
+  (comm with spaces/parens); anomaly classifier (pure); registry guard drop + oldest order +
+  query stripped; body wrapper keeps `size_hint`; probe vs a listener that accepts and never
+  answers ⇒ timeout, vs one that answers ⇒ ok; a 1-worker runtime whose worker is blocked ⇒
+  async ping times out.
+- Deploy: `-NoWipe -SkipAssets` after a verified DB backup (same procedure as 11-26).
+- Rollback: revert the N2a commit + the 11-26 image-tag procedure (no schema, no data).
+
+### N2a NOT doing (and why)
+- Not fixing S1 yet (e.g. a send timeout) — suspicion ≠ finding; the watchdog measures it.
+- Not adding request/header timeouts or a connection cap — behaviour change before evidence.
+- No admin endpoint for the watchdog — a wedged server can't serve it; logs are the channel.
+
 ## 5. Verification debt carried from the old todo.md (still open)
 Deploy-side (CT132): A1/#42 badge counts, A2/#38 migration 033 backfill, B2/#40 3-strike
 cap + ETA calibration readout, B3/#46 codec backfill drains to zero, B4/#49 rung backfill.
