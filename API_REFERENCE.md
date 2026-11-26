@@ -490,6 +490,8 @@ These endpoints are called by the primary server to sync/recover from a backup. 
 | `GET` | `/api/backup/download/{photo_id}` | X-API-Key | — | streaming binary; Response header: `X-File-Path` |
 | `GET` | `/api/backup/download/{photo_id}/thumb` | X-API-Key | — | `image/jpeg` stream |
 | `POST` | `/api/backup/receive` | X-API-Key | raw bytes; Headers: `X-Photo-Id`, `X-File-Path`, `X-Source` ("photos"\|"trash"), `X-Content-Hash` (SHA-256 hex, optional) | `{ status: "ok", photo_id, size_bytes }` |
+| `POST` | `/api/backup/receive-photo-rows` | X-API-Key | `{ rows: [{ id, user_id, filename, mime_type, media_type, size_bytes, width, height, duration_secs?, taken_at?, latitude?, longitude?, camera_model?, is_favorite, photo_hash?, crop_metadata?, created_at, encrypted_blob_id?, encrypted_thumb_blob_id?, tags? }] }` (≤200). Rows whose primary `file_path` is `''` (bytes live in a blob). Stored with `file_path = ''`; no path is accepted. | `{ accepted: [id], failed: [{ id, error }] }` |
+| `POST` | `/api/backup/receive-trash-rows` | X-API-Key | `{ rows: [{ id, photo_id, …same row fields…, deleted_at, expires_at }] }` (≤200). Upserts the trash row, removes the backup's `photos` row with `id = photo_id` only; blobs kept. Empty `id`/`photo_id` refused. | `{ accepted: [id], failed: [{ id, error }] }` |
 
 ---
 

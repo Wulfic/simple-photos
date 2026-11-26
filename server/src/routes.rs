@@ -611,6 +611,14 @@ fn backup_routes() -> Router<AppState> {
             post(crate::backup::serve_receive::backup_receive),
         )
         .route(
+            "/backup/receive-photo-rows",
+            post(crate::backup::serve::backup_receive_photo_rows),
+        )
+        .route(
+            "/backup/receive-trash-rows",
+            post(crate::backup::serve::backup_receive_trash_rows),
+        )
+        .route(
             "/backup/sync-deletions",
             post(crate::backup::serve::backup_sync_deletions),
         )

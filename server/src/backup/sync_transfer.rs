@@ -12,6 +12,10 @@ use sha2::{Digest, Sha256};
 
 use crate::photos::utils::normalize_iso_timestamp;
 
+use super::models::{
+    EncryptedPhotoRow, EncryptedTrashRow, RowBatch, RowBatchResult, MAX_ROWS_PER_BATCH,
+};
+
 // ── Sync data models ─────────────────────────────────────────────────────────
 
 /// All metadata columns needed to faithfully replicate a blob entry.
@@ -77,6 +81,69 @@ pub struct TrashToSync {
     pub crop_metadata: Option<String>,
     pub deleted_at: String,
     pub expires_at: String,
+    pub encrypted_blob_id: Option<String>,
+    pub encrypted_thumb_blob_id: Option<String>,
+}
+
+/// A row with no plaintext file: its bytes are a blob, so it travels as a
+/// row (`receive-*-rows`), never through `send_file` (TODO.md F9).
+pub fn is_row_only(file_path: &str) -> bool {
+    file_path.trim().is_empty()
+}
+
+impl PhotoToSync {
+    pub fn to_row(&self, tags: Vec<String>) -> EncryptedPhotoRow {
+        EncryptedPhotoRow {
+            id: self.id.clone(),
+            user_id: self.user_id.clone(),
+            filename: self.filename.clone(),
+            mime_type: self.mime_type.clone(),
+            media_type: self.media_type.clone(),
+            size_bytes: self.size_bytes,
+            width: self.width,
+            height: self.height,
+            duration_secs: self.duration_secs,
+            taken_at: self.taken_at.clone(),
+            latitude: self.latitude,
+            longitude: self.longitude,
+            camera_model: self.camera_model.clone(),
+            is_favorite: self.is_favorite,
+            photo_hash: self.photo_hash.clone(),
+            crop_metadata: self.crop_metadata.clone(),
+            created_at: self.created_at.clone(),
+            encrypted_blob_id: self.encrypted_blob_id.clone(),
+            encrypted_thumb_blob_id: self.encrypted_thumb_blob_id.clone(),
+            tags,
+        }
+    }
+}
+
+impl TrashToSync {
+    pub fn to_row(&self) -> EncryptedTrashRow {
+        EncryptedTrashRow {
+            id: self.id.clone(),
+            photo_id: self.photo_id.clone(),
+            user_id: self.user_id.clone(),
+            filename: self.filename.clone(),
+            mime_type: self.mime_type.clone(),
+            media_type: self.media_type.clone(),
+            size_bytes: self.size_bytes,
+            width: self.width,
+            height: self.height,
+            duration_secs: self.duration_secs,
+            taken_at: self.taken_at.clone(),
+            latitude: self.latitude,
+            longitude: self.longitude,
+            camera_model: self.camera_model.clone(),
+            is_favorite: self.is_favorite,
+            photo_hash: self.photo_hash.clone(),
+            crop_metadata: self.crop_metadata.clone(),
+            deleted_at: self.deleted_at.clone(),
+            expires_at: self.expires_at.clone(),
+            encrypted_blob_id: self.encrypted_blob_id.clone(),
+            encrypted_thumb_blob_id: self.encrypted_thumb_blob_id.clone(),
+        }
+    }
 }
 
 // ── Header building ──────────────────────────────────────────────────────────
@@ -407,6 +474,79 @@ pub async fn send_blob_to_backup(
     }
 }
 
+// ── Row-only transfer (F9) ───────────────────────────────────────────────────
+
+/// Send rows to `{base_url}{path}` in batches of [`MAX_ROWS_PER_BATCH`] and
+/// return one outcome per row, in input order: `None` = stored, `Some(err)` =
+/// not stored. Never fails as a whole — a transport error fails its batch.
+pub async fn send_rows<T: serde::Serialize + Clone>(
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: &Option<String>,
+    path: &str,
+    rows: &[(String, T)],
+) -> Vec<(String, Option<String>)> {
+    let mut out = Vec::with_capacity(rows.len());
+    for chunk in rows.chunks(MAX_ROWS_PER_BATCH) {
+        let ids: Vec<String> = chunk.iter().map(|(id, _)| id.clone()).collect();
+        let batch = RowBatch {
+            rows: chunk.iter().map(|(_, r)| r.clone()).collect::<Vec<T>>(),
+        };
+        let mut req = client.post(format!("{base_url}{path}")).json(&batch);
+        if let Some(ref key) = api_key {
+            req = req.header("X-API-Key", key.as_str());
+        }
+        let response = match req.send().await {
+            Ok(resp) if resp.status().is_success() => resp
+                .json::<RowBatchResult>()
+                .await
+                .map_err(|e| format!("unreadable reply from {path}: {e}")),
+            Ok(resp) if resp.status() == reqwest::StatusCode::NOT_FOUND => Err(format!(
+                "backup server has no {path} (older than this primary — upgrade it)"
+            )),
+            Ok(resp) => Err(format!("HTTP {} from {path}", resp.status())),
+            Err(e) => Err(format!("{path}: {e}")),
+        };
+        out.extend(reconcile_row_results(&ids, response));
+    }
+    out
+}
+
+/// Map a batch reply back onto the ids that were sent. An id the backup
+/// neither accepted nor rejected counts as NOT stored — a reply that drops a
+/// row must never read as success.
+pub fn reconcile_row_results(
+    sent: &[String],
+    reply: Result<RowBatchResult, String>,
+) -> Vec<(String, Option<String>)> {
+    match reply {
+        Err(e) => sent
+            .iter()
+            .map(|id| (id.clone(), Some(e.clone())))
+            .collect(),
+        Ok(res) => {
+            let accepted: HashSet<&str> = res.accepted.iter().map(String::as_str).collect();
+            let failed: std::collections::HashMap<&str, &str> = res
+                .failed
+                .iter()
+                .map(|f| (f.id.as_str(), f.error.as_str()))
+                .collect();
+            sent.iter()
+                .map(|id| {
+                    let outcome = if let Some(err) = failed.get(id.as_str()) {
+                        Some((*err).to_string())
+                    } else if accepted.contains(id.as_str()) {
+                        None
+                    } else {
+                        Some("backup reply did not mention this row".to_string())
+                    };
+                    (id.clone(), outcome)
+                })
+                .collect()
+        }
+    }
+}
+
 // ── Sync log helpers ─────────────────────────────────────────────────────────
 
 /// Update the backup_sync_log row with final status and counters.
@@ -433,5 +573,91 @@ pub async fn update_sync_log(
     .await
     {
         tracing::error!(log_id = log_id, error = %e, "Failed to update backup sync log — row stuck in 'running' state");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backup::models::RowFailure;
+
+    fn ids(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn empty_and_blank_paths_are_row_only() {
+        assert!(is_row_only(""));
+        assert!(is_row_only("  "));
+        assert!(!is_row_only("uploads/a.jpg"));
+    }
+
+    #[test]
+    fn reconcile_maps_accepted_and_failed_in_send_order() {
+        let reply = RowBatchResult {
+            accepted: ids(&["c", "a"]),
+            failed: vec![RowFailure {
+                id: "b".into(),
+                error: "hash conflict".into(),
+            }],
+        };
+        let out = reconcile_row_results(&ids(&["a", "b", "c"]), Ok(reply));
+        assert_eq!(
+            out,
+            vec![
+                ("a".to_string(), None),
+                ("b".to_string(), Some("hash conflict".to_string())),
+                ("c".to_string(), None),
+            ]
+        );
+    }
+
+    #[test]
+    fn reconcile_counts_a_row_missing_from_the_reply_as_not_stored() {
+        let reply = RowBatchResult {
+            accepted: ids(&["a"]),
+            failed: vec![],
+        };
+        let out = reconcile_row_results(&ids(&["a", "silent"]), Ok(reply));
+        assert_eq!(out[0], ("a".to_string(), None));
+        assert!(out[1].1.is_some(), "a dropped row must not read as success");
+    }
+
+    #[test]
+    fn reconcile_fails_every_row_of_a_failed_batch() {
+        let out = reconcile_row_results(&ids(&["a", "b"]), Err("HTTP 404".into()));
+        assert!(out.iter().all(|(_, e)| e.as_deref() == Some("HTTP 404")));
+    }
+
+    #[test]
+    fn photo_payload_carries_no_path() {
+        let json = serde_json::to_value(EncryptedPhotoRow {
+            id: "p".into(),
+            user_id: "u".into(),
+            filename: "f.jpg".into(),
+            mime_type: "image/jpeg".into(),
+            media_type: "photo".into(),
+            size_bytes: 0,
+            width: 1,
+            height: 1,
+            duration_secs: None,
+            taken_at: None,
+            latitude: None,
+            longitude: None,
+            camera_model: None,
+            is_favorite: false,
+            photo_hash: None,
+            crop_metadata: None,
+            created_at: "x".into(),
+            encrypted_blob_id: None,
+            encrypted_thumb_blob_id: None,
+            tags: vec![],
+        })
+        .unwrap();
+        let keys: Vec<&String> = json.as_object().unwrap().keys().collect();
+        assert!(
+            !keys.iter().any(|k| k.contains("path")),
+            "row payload must not carry a path: {keys:?}"
+        );
     }
 }

@@ -30,7 +30,8 @@ pub async fn backup_list_photos(
         "SELECT p.id, p.user_id, p.filename, p.file_path, p.mime_type, p.media_type, \
          p.size_bytes, p.width, p.height, p.duration_secs, p.taken_at, \
          p.latitude, p.longitude, p.thumb_path, p.created_at, \
-         p.is_favorite, p.camera_model, p.photo_hash, p.crop_metadata \
+         p.is_favorite, p.camera_model, p.photo_hash, p.crop_metadata, \
+         p.encrypted_blob_id, p.encrypted_thumb_blob_id \
          FROM photos p \
          WHERE p.id NOT IN (SELECT blob_id FROM encrypted_gallery_items) \
            AND p.id NOT IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL) \

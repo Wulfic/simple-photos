@@ -16,6 +16,31 @@ use crate::state::AppState;
 
 use super::serve::validate_api_key;
 
+// ── Owner mapping ────────────────────────────────────────────────────────────
+
+/// The backup-side owner for a row the primary says belongs to `primary_user_id`:
+/// that user when it exists here (phase 0 syncs users first), otherwise the
+/// oldest local admin so the `user_id` foreign key holds.
+pub(crate) async fn resolve_backup_owner(
+    pool: &sqlx::SqlitePool,
+    primary_user_id: Option<&str>,
+) -> Result<String, AppError> {
+    if let Some(uid) = primary_user_id.filter(|u| !u.is_empty()) {
+        let exists: bool = sqlx::query_scalar("SELECT COUNT(*) > 0 FROM users WHERE id = ?")
+            .bind(uid)
+            .fetch_one(pool)
+            .await
+            .unwrap_or(false);
+        if exists {
+            return Ok(uid.to_string());
+        }
+    }
+    sqlx::query_scalar("SELECT id FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1")
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| AppError::Internal("No admin user on backup server".into()))
+}
+
 // ── Backup Receive Endpoint ──────────────────────────────────────────────────
 
 /// POST /api/backup/receive
@@ -127,33 +152,8 @@ pub async fn backup_receive(
             .unwrap_or(0)
     }
 
-    // Use the primary's user_id when the corresponding user exists on the backup;
-    // otherwise fall back to the local admin so foreign-key constraints are met.
     let primary_user_id = hdr_str(&headers, "X-User-Id");
-    let owner_id: String = if let Some(ref uid) = primary_user_id {
-        let exists: bool = sqlx::query_scalar("SELECT COUNT(*) > 0 FROM users WHERE id = ?")
-            .bind(uid)
-            .fetch_one(&state.read_pool)
-            .await
-            .unwrap_or(false);
-        if exists {
-            uid.clone()
-        } else {
-            sqlx::query_scalar(
-                "SELECT id FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1",
-            )
-            .fetch_optional(&state.read_pool)
-            .await?
-            .ok_or_else(|| AppError::Internal("No admin user on backup server".into()))?
-        }
-    } else {
-        sqlx::query_scalar(
-            "SELECT id FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1",
-        )
-        .fetch_optional(&state.read_pool)
-        .await?
-        .ok_or_else(|| AppError::Internal("No admin user on backup server".into()))?
-    };
+    let owner_id = resolve_backup_owner(&state.read_pool, primary_user_id.as_deref()).await?;
 
     // Derive filename, mime_type, and media_type from headers (if provided by primary)
     // or fall back to deriving from the file path.

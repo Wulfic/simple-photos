@@ -221,6 +221,66 @@ device's media files are never touched).
       test_09 alone is 42/42. **Identical on `02521bd` (pre-F8)** — 174 passed / 1 failed both.
       Full-suite cost today: 47 failed + 3 errors in test_09/test_10, 1h37m.
 
+- [x] **F9 DONE** — see "F9 design". `test_100` RED 4/4 on the old binary ("os error 3"), GREEN
+      4/4. Server 605/605, clippy `-D warnings` + fmt clean. E2E test_01–10 + test_100 on one
+      session: **241 passed / 1 failed / 6 errors in 9m55s** (was 47 failed + 3 errors in
+      test_09/10 alone, 1h37m). test_09 fully green. The 7 remaining reds → F12.
+- [ ] **F12 tests (found by F9's run, PRE-EXISTING, masked by the cascade)** test_10
+      `TestRecoverySecureGallery` (6 setup errors) + `TestRecoveryPresyncedGallery::
+      test_presynced_gallery_decryptable_after_recovery`: `download_blob` of a secure-gallery
+      blob → **401 on the primary, before any sync/recovery** (`test_10:559`, `:1065`). Same
+      shape as test_06 before `e44ad10`: no `x-gallery-token` since the B6 gate (`8a1d736`). Fix
+      the tests to present the token + assert the gate still refuses without it — then see what
+      the recovery assertions behind them say (they may be F10).
+- [ ] **F10 server (found 2026-11-25 reading for F9, PRE-EXISTING since `b5d722d` 2026-04-05) —
+      UNVERIFIED until RED.** `recovery_engine.rs` ~L254: the recovery `INSERT … SELECT` string
+      is spliced into itself (`…AND id != ?1sh, crop_metadata) SELECT …`) → SQLite parse error at
+      runtime → every recovered photo is logged + skipped. Suspicions to prove/disprove:
+      (a) recovery registers 0 photos (does test_10 show it, once F9 stops the cascade?);
+      (b) the error and `rows_affected()==0` branches `remove_file(full_path)` on the path they
+      just wrote — if a local row already owns that path (the autoscan case the comment
+      describes), that deletes a live row's file; (c) recovery `download`s every missing row,
+      so `file_path=''` rows (Android) can't be recovered by pull at all.
+- [ ] **F11 (suspicion, unverified)** `soft_delete_photo` does not copy `encrypted_blob_id` /
+      `encrypted_thumb_blob_id` into `trash_items`. Does restoring a trashed Android
+      (`register-encrypted`) photo produce a row with no file AND no blob id?
+
+### F9 design (decided 2026-11-25, late — re-scoped from "Save Copy" after reading the code)
+- **Wider than filed.** `file_path = ''` is not a Save Copy quirk: `register-encrypted` (EVERY
+  Android upload) and encrypted Save Copy both write it, and `soft_delete_photo` copies it into
+  `trash_items`. So phase 1 (`sync_photos`) AND phase 5 (`sync_trash`) `send_file` the storage
+  ROOT for every such row → failure → `partial` forever, and **no Android photo row has ever
+  reached a backup** (only its blobs, via phase 3). No E2E covered it: test_09 uploads plaintext
+  files and bare blobs, never `register-encrypted`.
+- **Choice:** partition by `file_path`. Non-empty → unchanged `send_file`. Empty → new row-only
+  endpoints on the backup, JSON batches ≤ 200: `POST /api/backup/receive-photo-rows` and
+  `…/receive-trash-rows`. No body bytes, no file I/O, no thumbnail generation.
+- **Rejected: letting `/backup/receive` accept an empty path.** It is file-centric, and its
+  trash branch runs `DELETE FROM photos WHERE id = ? OR encrypted_blob_id = ? OR file_path = ?`
+  — with `''` that matches every encrypted-only row on the backup. A new endpoint keyed ONLY
+  on `id` cannot hit that.
+- **Row endpoint rules:** upsert `ON CONFLICT(id)` with the same COALESCE semantics as
+  `/backup/receive`; `file_path` is forced `''` server-side (never taken from the payload);
+  owner mapping shared with `/backup/receive` (extract one helper); tags replicated; stale
+  `trash_items` row with the same id removed (same as receive). Per-row result: one bad row
+  fails alone, returned as `{id, error}` and counted as a failure by the primary. A hash
+  conflict with a DIFFERENT id on the backup fails that row loudly — no delete-to-make-room.
+  Trash rows: removing the backup's live `photos` row uses `id = ?` (+ `encrypted_blob_id = ?`)
+  and refuses an empty id.
+- Extended columns (subtype, burst, motion, EXIF, geo) are NOT in the payload: phase 4's
+  `photo_states` already upserts them onto existing rows, and the row now exists.
+- A backup older than F9 answers 404 → each row counts as a failure with "backup server lacks
+  receive-photo-rows (upgrade it)" — stays `partial`, but says why.
+- **Test harness:** `wait_for_sync` treats `partial` as terminal (no more 120 s hang), and
+  `trigger_and_wait` raises on `partial` with the log's error — same strictness, fails fast.
+- Tests: E2E `test_99` — registered photo reaches the backup with its blob ids and sync is
+  `success`; trashed registered photo reaches backup trash and leaves the backup gallery;
+  an empty-path row never deletes another backup row. Unit: partition, payload never carries
+  a path, row upsert ignores a payload `file_path`, empty-id trash row refused.
+- **Not doing:** the latent `''` match in `trash/operations.rs:617` permanent-delete refcount
+  (benign: over-counts, so the file is kept) — noted, separate. Sending blobs differently.
+- Rollback: `git revert` — additive endpoints, no schema change.
+
 ### Owner answers (2026-11-25, session start)
 - **No deploy this session** — code + tests only. CT132 and the phone stay as they are.
 - F1 quarantine: **kept until a manual purge** (separate call, dry-run default). Never auto-unlinked.

@@ -24,6 +24,7 @@ mod deletions;
 mod galleries;
 mod metadata;
 mod read;
+mod rows;
 
 pub use blobs::backup_receive_blob;
 pub use deletions::backup_sync_deletions;
@@ -33,6 +34,7 @@ pub use read::{
     backup_download_photo, backup_download_thumb, backup_list_blobs, backup_list_photos,
     backup_list_trash,
 };
+pub use rows::{backup_receive_photo_rows, backup_receive_trash_rows};
 
 use axum::http::HeaderMap;
 

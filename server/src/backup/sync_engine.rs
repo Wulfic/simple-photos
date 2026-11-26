@@ -8,13 +8,13 @@ use std::collections::{HashMap, HashSet};
 
 use chrono::Utc;
 
-use super::models::{resolve_backup_url, BackupServer};
+use super::models::{resolve_backup_url, BackupServer, EncryptedPhotoRow, EncryptedTrashRow};
 use super::sync_blobs::sync_blobs;
 use super::sync_galleries::sync_secure_galleries_to_backup;
 use super::sync_metadata::sync_metadata_to_backup;
 use super::sync_transfer::{
-    build_photo_headers, build_trash_headers, fetch_remote_ids, send_file, update_sync_log,
-    PhotoToSync, TrashToSync,
+    build_photo_headers, build_trash_headers, fetch_remote_ids, is_row_only, send_file, send_rows,
+    update_sync_log, PhotoToSync, TrashToSync,
 };
 use super::sync_users::{sync_user_deletions_to_backup, sync_users_to_backup};
 
@@ -412,14 +412,45 @@ async fn sync_photos(
         .filter(|p| !remote_photo_ids.contains(&p.id))
         .collect();
 
+    // Rows with no plaintext file (Android uploads, encrypted Save Copies) have
+    // nothing for `send_file` to read — their bytes go in phase 3 as blobs. They
+    // travel as rows (TODO.md F9).
+    let (row_only, with_file): (Vec<&&PhotoToSync>, Vec<&&PhotoToSync>) = photos_to_sync
+        .iter()
+        .partition(|p| is_row_only(&p.file_path));
+
     tracing::info!(
-        "Backup sync to '{}': {}/{} photos need transfer (delta)",
+        "Backup sync to '{}': {}/{} photos need transfer (delta): {} as files, {} as rows",
         ctx.server.name,
         photos_to_sync.len(),
-        photos.len()
+        photos.len(),
+        with_file.len(),
+        row_only.len()
     );
 
-    for photo in &photos_to_sync {
+    if !row_only.is_empty() {
+        let rows: Vec<(String, EncryptedPhotoRow)> = row_only
+            .iter()
+            .map(|p| {
+                let tags = all_tags.get(&p.id).cloned().unwrap_or_default();
+                (p.id.clone(), p.to_row(tags))
+            })
+            .collect();
+        record_row_outcomes(
+            send_rows(
+                ctx.client,
+                &ctx.base_url,
+                ctx.api_key,
+                "/backup/receive-photo-rows",
+                &rows,
+            )
+            .await,
+            "photo row",
+            counters,
+        );
+    }
+
+    for photo in &with_file {
         let tags = all_tags.get(&photo.id).cloned().unwrap_or_default();
         let headers = build_photo_headers(photo, &tags);
         match send_file(
@@ -449,7 +480,8 @@ async fn sync_trash(
     let trash_items: Vec<TrashToSync> = match sqlx::query_as::<_, TrashToSync>(
         "SELECT id, photo_id, user_id, filename, file_path, mime_type, media_type, size_bytes, taken_at, latitude, longitude, \
          width, height, duration_secs, camera_model, is_favorite, photo_hash, \
-         crop_metadata, deleted_at, expires_at FROM trash_items",
+         crop_metadata, deleted_at, expires_at, encrypted_blob_id, encrypted_thumb_blob_id \
+         FROM trash_items",
     )
     .fetch_all(ctx.pool)
     .await
@@ -466,14 +498,39 @@ async fn sync_trash(
         .filter(|t| !remote_trash_ids.contains(&t.id))
         .collect();
 
+    let (row_only, with_file): (Vec<&&TrashToSync>, Vec<&&TrashToSync>) = trash_to_sync
+        .iter()
+        .partition(|t| is_row_only(&t.file_path));
+
     tracing::info!(
-        "Backup sync to '{}': {}/{} trash items need transfer (delta)",
+        "Backup sync to '{}': {}/{} trash items need transfer (delta): {} as files, {} as rows",
         ctx.server.name,
         trash_to_sync.len(),
-        trash_items.len()
+        trash_items.len(),
+        with_file.len(),
+        row_only.len()
     );
 
-    for item in &trash_to_sync {
+    if !row_only.is_empty() {
+        let rows: Vec<(String, EncryptedTrashRow)> = row_only
+            .iter()
+            .map(|t| (t.id.clone(), t.to_row()))
+            .collect();
+        record_row_outcomes(
+            send_rows(
+                ctx.client,
+                &ctx.base_url,
+                ctx.api_key,
+                "/backup/receive-trash-rows",
+                &rows,
+            )
+            .await,
+            "trash row",
+            counters,
+        );
+    }
+
+    for item in &with_file {
         let headers = build_trash_headers(item);
         match send_file(
             ctx.client,
@@ -494,6 +551,21 @@ async fn sync_trash(
 }
 
 // ── Small helpers ────────────────────────────────────────────────────────────
+
+/// Fold per-row outcomes from [`send_rows`] into the run's counters. A row
+/// carries no bytes of its own (they travel as blobs), so it adds 0 bytes.
+fn record_row_outcomes(
+    outcomes: Vec<(String, Option<String>)>,
+    kind: &str,
+    counters: &mut SyncCounters,
+) {
+    for (id, err) in outcomes {
+        match err {
+            None => counters.record_success(0),
+            Some(e) => counters.record_failure(&id, kind, e),
+        }
+    }
+}
 
 /// Pre-fetch all photo tags in one query (avoids N+1 in the transfer loop).
 async fn fetch_all_photo_tags(pool: &sqlx::SqlitePool) -> HashMap<String, Vec<String>> {

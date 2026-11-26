@@ -1297,13 +1297,22 @@ def wait_for_server(base_url: str, timeout: float = 30.0, interval: float = 0.5)
 
 def wait_for_sync(client: APIClient, server_id: str, timeout: float = 60.0,
                   interval: float = 2.0):
-    """Wait for a sync operation to complete (status != 'running')."""
+    """Wait for a sync operation to complete (status != 'running').
+
+    `partial` (some transfers failed) is terminal too, and raises at once with the
+    log's error: it used to fall through to the timeout, so one unsendable row
+    cost 120 s per test and hid WHY (TODO.md F9).
+    """
     deadline = time.time() + timeout
     while time.time() < deadline:
         logs = client.admin_get_sync_logs(server_id)
         if logs:
             latest = logs[0] if isinstance(logs, list) else logs
             status = latest.get("status", "")
+            if status == "partial":
+                raise AssertionError(
+                    f"Sync ended 'partial': {latest.get('error') or latest}"
+                )
             if status in ("success", "error", "completed"):
                 return latest
         time.sleep(interval)

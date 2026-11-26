@@ -118,6 +118,94 @@ pub struct BackupPhotoRecord {
     pub camera_model: Option<String>,
     pub photo_hash: Option<String>,
     pub crop_metadata: Option<String>,
+    /// The only useful part of a row with `file_path = ''` (an Android upload or
+    /// an encrypted Save Copy): its bytes live in this blob. `default` so recovery
+    /// still parses the list from a backup older than F9.
+    #[serde(default)]
+    pub encrypted_blob_id: Option<String>,
+    #[serde(default)]
+    pub encrypted_thumb_blob_id: Option<String>,
+}
+
+// ── Row-only transfer (F9) ───────────────────────────────────────────────────
+//
+// A row with `file_path = ''` has no plaintext file to send through
+// `/backup/receive`: its bytes travel as blobs (sync phase 3). These DTOs carry
+// just the row. They deliberately have NO path field — the backup stores `''`
+// and never takes a path from this payload.
+
+/// Most rows one `receive-*-rows` request may carry.
+pub const MAX_ROWS_PER_BATCH: usize = 200;
+
+/// A `photos` row with no plaintext file.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EncryptedPhotoRow {
+    pub id: String,
+    pub user_id: String,
+    pub filename: String,
+    pub mime_type: String,
+    pub media_type: String,
+    pub size_bytes: i64,
+    pub width: i64,
+    pub height: i64,
+    pub duration_secs: Option<f64>,
+    pub taken_at: Option<String>,
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
+    pub camera_model: Option<String>,
+    pub is_favorite: bool,
+    pub photo_hash: Option<String>,
+    pub crop_metadata: Option<String>,
+    pub created_at: String,
+    pub encrypted_blob_id: Option<String>,
+    pub encrypted_thumb_blob_id: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+/// A `trash_items` row with no plaintext file.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EncryptedTrashRow {
+    pub id: String,
+    /// The trashed photo's `photos.id` — the backup removes its live row by it.
+    pub photo_id: String,
+    pub user_id: String,
+    pub filename: String,
+    pub mime_type: String,
+    pub media_type: String,
+    pub size_bytes: i64,
+    pub width: i64,
+    pub height: i64,
+    pub duration_secs: Option<f64>,
+    pub taken_at: Option<String>,
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
+    pub camera_model: Option<String>,
+    pub is_favorite: bool,
+    pub photo_hash: Option<String>,
+    pub crop_metadata: Option<String>,
+    pub deleted_at: String,
+    pub expires_at: String,
+    pub encrypted_blob_id: Option<String>,
+    pub encrypted_thumb_blob_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RowBatch<T> {
+    pub rows: Vec<T>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RowFailure {
+    pub id: String,
+    pub error: String,
+}
+
+/// Per-row outcome of a `receive-*-rows` request: one bad row fails alone.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct RowBatchResult {
+    pub accepted: Vec<String>,
+    pub failed: Vec<RowFailure>,
 }
 
 /// Recovery progress response.
