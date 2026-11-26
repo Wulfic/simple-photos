@@ -65,6 +65,14 @@ fun NavGraph(startRoute: String? = null) {
 
     if (startDestination == null) return // Loading
 
+    // N1c: a dead session goes to Login (server and library kept) instead of
+    // leaving the user on a gallery where every request 401s.
+    LaunchedEffect(Unit) {
+        viewModel.sessionExpired.collect {
+            navController.navigate(Screen.Login.route) { popUpTo(0) }
+        }
+    }
+
     // Bounded back-history cap (#37). Registered *before* NavHost so any
     // screen-level BackHandler (registered later, deeper in the tree) wins over
     // it via the dispatcher's LIFO ordering. It only fires when the stack is
@@ -113,7 +121,9 @@ fun NavGraph(startRoute: String? = null) {
         composable(Screen.Login.route) {
             LoginScreen(
                 onLoginSuccess = { navController.navigateHome() },
-                onNavigateToRegister = { navController.navigate(Screen.Register.route) }
+                onNavigateToRegister = { navController.navigate(Screen.Register.route) },
+                // Logout keeps the server now (N1c), so Login is where it changes.
+                onChangeServer = { navController.navigate(Screen.ServerSetup.route) },
             )
         }
         composable(Screen.Register.route) {

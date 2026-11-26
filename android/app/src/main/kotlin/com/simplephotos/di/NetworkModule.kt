@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import com.simplephotos.data.remote.ApiService
 import com.simplephotos.data.remote.GalleryTokenHolder
+import com.simplephotos.data.remote.SessionEvents
 import com.simplephotos.data.remote.SessionRefresher
 import com.simplephotos.data.remote.dto.RefreshRequest
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_ACCESS_TOKEN
@@ -45,7 +46,10 @@ object NetworkModule {
 
     @Provides
     @Singleton
-    fun provideOkHttpClient(dataStore: DataStore<Preferences>): OkHttpClient {
+    fun provideOkHttpClient(
+        dataStore: DataStore<Preferences>,
+        sessionEvents: SessionEvents,
+    ): OkHttpClient {
         // Single per-request interceptor: rewrites the base URL to the
         // configured server AND injects auth headers. Merged into one so we
         // do a single blocking DataStore read per request instead of two.
@@ -112,6 +116,9 @@ object NetworkModule {
                     }
                 }
             },
+            // Under the refresher's lock: only post. NavViewModel expires the
+            // session and routes to Login.
+            onSessionDead = sessionEvents::report,
         )
 
         // Authenticator: 401 → (maybe) refresh → retry once

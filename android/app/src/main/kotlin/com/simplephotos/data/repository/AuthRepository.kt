@@ -4,6 +4,7 @@
 package com.simplephotos.data.repository
 
 import android.content.Context
+import android.util.Log
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
@@ -15,9 +16,7 @@ import com.simplephotos.data.local.AppDatabase
 import com.simplephotos.data.remote.ApiService
 import com.simplephotos.data.remote.dto.*
 import com.simplephotos.sync.SyncScheduler
-import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_ACCESS_TOKEN
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_REFRESH_TOKEN
-import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_USERNAME
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -27,9 +26,9 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Handles authentication (register, login, TOTP, token refresh) and full
+ * Handles authentication (register, login, TOTP), session expiry, and full
  * logout with cleanup of all local caches so no stale data leaks between
- * user sessions.
+ * user sessions. Token refresh lives in [com.simplephotos.data.remote.SessionRefresher].
  *
  * On login, derives the E2E encryption key via [KeyManager.deriveAndStoreKey]
  * using the same deterministic salt as the web client, ensuring cross-platform
@@ -55,11 +54,7 @@ class AuthRepository @Inject constructor(
     suspend fun login(username: String, password: String): LoginResponse {
         val response = api.login(LoginRequest(username, password))
         if (response.accessToken != null && response.refreshToken != null) {
-            saveTokens(response.accessToken, response.refreshToken, username)
-            // Derive and store encryption key from password (matches web crypto)
-            withContext(Dispatchers.IO) {
-                keyManager.deriveAndStoreKey(password, username)
-            }
+            establishSession(response.accessToken, response.refreshToken, username, password)
         }
         return response
     }
@@ -73,25 +68,48 @@ class AuthRepository @Inject constructor(
     ): LoginResponse {
         val response = api.loginTotp(TotpLoginRequest(sessionToken, totpCode, backupCode))
         if (response.accessToken != null && response.refreshToken != null) {
-            saveTokens(response.accessToken, response.refreshToken, username)
-            // Derive key after TOTP verification completes the login
-            withContext(Dispatchers.IO) {
-                keyManager.deriveAndStoreKey(password, username)
-            }
+            establishSession(response.accessToken, response.refreshToken, username, password)
         }
         return response
     }
 
-    suspend fun refreshToken(): String? {
-        val prefs = dataStore.data.first()
-        val refreshToken = prefs[KEY_REFRESH_TOKEN] ?: return null
-        return try {
-            val response = api.refresh(RefreshRequest(refreshToken))
-            dataStore.edit { it[KEY_ACCESS_TOKEN] = response.accessToken }
-            response.accessToken
-        } catch (_: Exception) {
-            null
+    /**
+     * The server issued tokens for [username]. An expired session (N1c) leaves
+     * the previous account's mirror, key and backup folders on the device so a
+     * re-login re-encrypts nothing — which is only safe if it IS that account.
+     * Anyone else (or an unknown owner) gets today's full local wipe first.
+     */
+    private suspend fun establishSession(access: String, refresh: String, username: String, password: String) {
+        if (SessionPrefs.mustWipeBeforeLogin(dataStore.data.first(), username)) {
+            val photos = db.photoDao().countAll()
+            val folders = db.backupFolderDao().count()
+            Log.i(TAG, "Login: local data is not this account's — wiping $photos photos, $folders backup folders first")
+            wipeLocalAccount()
+        } else {
+            Log.i(TAG, "Login: same account as the local mirror — keeping it")
         }
+        dataStore.edit { SessionPrefs.recordLogin(it, access, refresh, username) }
+        // Derive and store encryption key from password (matches web crypto)
+        withContext(Dispatchers.IO) {
+            keyManager.deriveAndStoreKey(password, username)
+        }
+    }
+
+    /**
+     * The server refused [deadRefreshToken] (N1c). Drop the session's tokens —
+     * nothing else; see [SessionPrefs.expire].
+     *
+     * @return true when the device now has no live session (route to Login).
+     */
+    suspend fun expireSession(deadRefreshToken: String): Boolean {
+        var noSession = false
+        dataStore.edit { noSession = SessionPrefs.expire(it, deadRefreshToken) }
+        if (noSession) {
+            // A re-login must re-unlock secure albums, as after a logout.
+            com.simplephotos.data.remote.GalleryTokenHolder.token = null
+            Log.w(TAG, "Session expired (refresh token refused); library kept, login required")
+        }
+        return noSession
     }
 
     /**
@@ -106,12 +124,24 @@ class AuthRepository @Inject constructor(
      *  - Encryption key
      */
     suspend fun logout() {
-        // 1. Notify server (best-effort)
+        // 1. Notify server (best-effort: the local wipe must happen regardless)
         val prefs = dataStore.data.first()
         prefs[KEY_REFRESH_TOKEN]?.let { token ->
-            try { api.logout(LogoutRequest(token)) } catch (_: Exception) {}
+            try {
+                api.logout(LogoutRequest(token))
+            } catch (e: Exception) {
+                Log.w(TAG, "Server logout failed (${e.javaClass.simpleName}); wiping locally anyway")
+            }
         }
+        wipeLocalAccount()
+    }
 
+    /**
+     * Everything [logout] removes locally. Also run before a DIFFERENT account
+     * logs in over an expired session's kept mirror ([establishSession]).
+     * Keeps only which server the device is set up for.
+     */
+    private suspend fun wipeLocalAccount() {
         // 2. Cancel all scheduled backup workers
         SyncScheduler.cancel(context)
 
@@ -138,12 +168,13 @@ class AuthRepository @Inject constructor(
         // 5. Clear Coil in-memory bitmap cache
         context.imageLoader.memoryCache?.clear()
 
-        // 6. Clear auth tokens and encryption key. This also drops the persisted
+        // 6. Clear auth tokens and encryption key — but not the server: "log out"
+        // used to mean "forget the server" too (N1c). This also drops the persisted
         // secure-blob-id fallback (B5), but that repository is a @Singleton whose
         // in-memory mirror outlives the account within one process, so it has to
         // be told explicitly — same reasoning as the sync cursor above.
         secureGalleryRepository.forgetSecureBlobIds()
-        dataStore.edit { it.clear() }
+        dataStore.edit { SessionPrefs.clearForLogout(it) }
         keyManager.clearKey()
         // Drop the secure-album unlock token so a re-login must re-unlock.
         com.simplephotos.data.remote.GalleryTokenHolder.token = null
@@ -159,11 +190,7 @@ class AuthRepository @Inject constructor(
         api.disable2fa(TotpDisableRequest(code))
     }
 
-    private suspend fun saveTokens(access: String, refresh: String, username: String?) {
-        dataStore.edit { prefs ->
-            prefs[KEY_ACCESS_TOKEN] = access
-            prefs[KEY_REFRESH_TOKEN] = refresh
-            if (username != null) prefs[KEY_USERNAME] = username
-        }
+    private companion object {
+        const val TAG = "AuthRepository"
     }
 }

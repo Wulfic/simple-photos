@@ -13,11 +13,17 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import android.util.Base64
+import android.util.Log
+import com.simplephotos.data.remote.SessionEvents
 import com.simplephotos.data.repository.AuthRepository
 import org.json.JSONObject
 import javax.inject.Inject
@@ -33,9 +39,11 @@ class NavViewModel @Inject constructor(
     // the theme toggle through it, matching AlbumViewModel.dataStore.
     val dataStore: DataStore<Preferences>,
     private val authRepository: AuthRepository,
+    private val sessionEvents: SessionEvents,
 ) : ViewModel() {
 
     companion object {
+        private const val TAG = "NavViewModel"
         val KEY_SERVER_CONFIGURED = booleanPreferencesKey("server_configured")
         val KEY_ACCESS_TOKEN = stringPreferencesKey("access_token")
         val KEY_REFRESH_TOKEN = stringPreferencesKey("refresh_token")
@@ -45,6 +53,8 @@ class NavViewModel @Inject constructor(
         val KEY_BIOMETRIC_ENABLED = booleanPreferencesKey("biometric_enabled")
         val KEY_THUMBNAIL_SIZE = stringPreferencesKey("thumbnail_size")
         val KEY_WIFI_ONLY_BACKUP = booleanPreferencesKey("wifi_only_backup")
+        /** "<server url>|<username>" the local mirror belongs to (N1c). */
+        val KEY_SESSION_OWNER = stringPreferencesKey("session_owner")
     }
 
     private val _startDestination = MutableStateFlow<String?>(null)
@@ -56,6 +66,13 @@ class NavViewModel @Inject constructor(
     // Logged-in username for the shared AppHeader avatar/dropdown (#35).
     private val _username = MutableStateFlow("")
     val username: StateFlow<String> = _username
+
+    // The server refused the refresh token (N1c): NavGraph routes to Login. A
+    // Channel, not a SharedFlow: a backup worker can hit the dead session before
+    // NavGraph is collecting (activity recreated), and a SharedFlow with no
+    // subscriber drops the event — leaving a token-less app on the gallery.
+    private val _sessionExpired = Channel<Unit>(Channel.CONFLATED)
+    val sessionExpired: Flow<Unit> = _sessionExpired.receiveAsFlow()
 
     init {
         viewModelScope.launch {
@@ -74,6 +91,13 @@ class NavViewModel @Inject constructor(
                 else -> Screen.Gallery.route
             }
         }
+        viewModelScope.launch {
+            // Never consumed (see SessionEvents): a token reported before a
+            // re-login is replayed here and ignored by the compare-and-clear.
+            sessionEvents.deadRefreshToken.filterNotNull().collect { dead ->
+                if (authRepository.expireSession(dead)) _sessionExpired.trySend(Unit)
+            }
+        }
     }
 
     /** Sign out (clears tokens server- and client-side), then invoke [onLoggedOut]
@@ -83,7 +107,9 @@ class NavViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 withContext(Dispatchers.IO) { authRepository.logout() }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                Log.e(TAG, "Logout cleanup failed; navigating to Login anyway", e)
+            }
             onLoggedOut()
         }
     }

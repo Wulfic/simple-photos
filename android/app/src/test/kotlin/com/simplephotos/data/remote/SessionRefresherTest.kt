@@ -31,7 +31,8 @@ class SessionRefresherTest {
     ) {
         val calls = AtomicInteger()
         var clock = 1_000_000L
-        var deadSignals = 0
+        val deadTokens = mutableListOf<String>()
+        val deadSignals get() = deadTokens.size
         var respond: (String) -> RefreshResponse = { error("no response staged") }
 
         val refresher = SessionRefresher(
@@ -39,7 +40,7 @@ class SessionRefresherTest {
             callRefresh = { rt -> calls.incrementAndGet(); respond(rt) },
             saveTokens = { a, r -> access = a; if (r != null) refresh = r },
             now = { clock },
-            onSessionDead = { deadSignals++ },
+            onSessionDead = { deadTokens += it },
         )
     }
 
@@ -78,6 +79,8 @@ class SessionRefresherTest {
         assertEquals("one definitive 401 must be the last refresh for this token", 1, f.calls.get())
         assertEquals("tokens are left for the login flow to replace", "refresh-0", f.refresh)
         assertEquals("the dead session is announced exactly once", 1, f.deadSignals)
+        // N1c compares this against the stored token before expiring the session.
+        assertEquals("the signal names the dead token", listOf("refresh-0"), f.deadTokens)
     }
 
     @Test

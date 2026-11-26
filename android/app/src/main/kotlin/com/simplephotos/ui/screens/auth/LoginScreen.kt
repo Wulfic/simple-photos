@@ -27,8 +27,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.simplephotos.R
 import com.simplephotos.data.repository.AuthRepository
+import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_USERNAME
 import com.simplephotos.ui.theme.ThemeToggleButton
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -47,6 +49,15 @@ class LoginViewModel @Inject constructor(
     var totpSessionToken by mutableStateOf<String?>(null)
     var loading by mutableStateOf(false)
     var error by mutableStateOf<String?>(null)
+
+    init {
+        // An expired session (N1c) keeps the username: pre-fill it so signing
+        // back in is one field. Empty after a logout, which clears it.
+        viewModelScope.launch {
+            val stored = dataStore.data.first()[KEY_USERNAME]
+            if (stored != null && username.isEmpty()) username = stored
+        }
+    }
 
     fun login(onSuccess: () -> Unit) {
         viewModelScope.launch {
@@ -81,6 +92,7 @@ class LoginViewModel @Inject constructor(
 fun LoginScreen(
     onLoginSuccess: () -> Unit,
     onNavigateToRegister: () -> Unit = {},
+    onChangeServer: () -> Unit = {},
     viewModel: LoginViewModel = hiltViewModel()
 ) {
     var showPassword by remember { mutableStateOf(false) }
@@ -203,6 +215,12 @@ fun LoginScreen(
                 }
             }
 
+            // Logout no longer forgets the server (N1c), so this is where a
+            // device moves to a different one.
+            Spacer(Modifier.height(8.dp))
+            TextButton(onClick = onChangeServer, enabled = !viewModel.loading) {
+                Text("Change server")
+            }
         }
     }
 }

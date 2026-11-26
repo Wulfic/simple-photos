@@ -14,15 +14,16 @@ import retrofit2.HttpException
  * thumbnail grid produces dozens of concurrent 401s, and the server rotates the
  * refresh token on use, so exactly one of them may call `/auth/refresh`.
  *
- * [onSessionDead] runs once per refresh token the server rejects with 401, on an
- * OkHttp thread while the lock is held — it must only post a signal, never block.
+ * [onSessionDead] runs once per refresh token the server rejects with 401, with
+ * that token, on an OkHttp thread while the lock is held — it must only post a
+ * signal, never block.
  */
 class SessionRefresher(
     private val readTokens: () -> Tokens,
     private val callRefresh: (refreshToken: String) -> RefreshResponse,
     private val saveTokens: (access: String, refresh: String?) -> Unit,
     private val now: () -> Long = System::currentTimeMillis,
-    private val onSessionDead: () -> Unit = {},
+    private val onSessionDead: (deadRefreshToken: String) -> Unit = {},
 ) {
     data class Tokens(val access: String?, val refresh: String?)
 
@@ -61,7 +62,7 @@ class SessionRefresher(
                 // replaces this token, so stop spending requests on it.
                 Log.w(TAG, "Refresh token rejected (401) — session is dead until re-login")
                 deadRefreshToken = refreshToken
-                onSessionDead()
+                onSessionDead(refreshToken)
             } else {
                 coolDown(retryAfterMs(e))
                 Log.w(TAG, "Token refresh failed: HTTP ${e.code()}; tokens kept, retry after cooldown")

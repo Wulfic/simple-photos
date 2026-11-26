@@ -480,6 +480,11 @@ quarantine dir + restore = move back; the endpoint is inert unless called with `
       once the initial scan drains: Room rows ≈ server count; no secured photo in the main
       grid; delete-album dialog; "Move here" pulls a whole burst.
 
+- [ ] **Android lint is red on dev** (found N1c, pre-existing): `NavGraph.kt`
+      `navController.currentBackStack` is `RestrictedApi` (#37 back-history cap). 1 error,
+      127 warnings. Replace with `currentBackStackEntryFlow` + own stack tracking, or the
+      public `visibleEntries`; then gate lint.
+
 ## 4. New issues reported 2026-11-25 (owner) — investigate after F12/F10/F11
 
 Owner answers (2026-11-25): CT132 logs + a DB **copy** may be read **read-only** for these
@@ -650,12 +655,58 @@ itself. Fix: move the decision out of the `NetworkModule` lambda into a pure
 - Dead-token memory is in-process only: an app restart costs one more refresh call (fine).
 - `onSessionDead` fires under the lock ⇒ N1c must only post a signal from it.
 
+### N1c design (decided 2026-11-26)
+A dead session is an **expiry, not a logout**: the server refused the refresh token, nothing
+about the device's library changed. So:
+1. `SessionRefresher.onSessionDead(deadRefreshToken)` → `SessionEvents.report(token)`
+   (`@Singleton`, a `StateFlow` — non-blocking under the lock, conflated, kept if no
+   collector is attached yet, and never consumed: every window (#21) decides by step 2's
+   compare, so a window opened after a re-login ignores the old dead token).
+2. `NavViewModel` collects it → `AuthRepository.expireSession(dead)` → NavGraph navigates
+   Login `popUpTo(0)`. `expireSession` removes ONLY the access + refresh token, and only if
+   the stored refresh token still IS the dead one (compare-and-clear: a login that raced
+   the signal must not be logged out). Room mirror, key, backup folders, server, username
+   all kept ⇒ re-login does not re-encrypt (the dead-session half of N4).
+3. Keeping the mirror across a re-login is only safe for the SAME account. New pref
+   `session_owner = "<server url>|<username>"` written at login; `login` with a different
+   owner ⇒ the full local wipe (today's logout minus the server call) BEFORE saving tokens.
+   Legacy installs (no owner pref) fall back to `KEY_SERVER_URL|KEY_USERNAME`. Unknown ⇒
+   wipe (fail closed).
+4. Explicit logout keeps `KEY_SERVER_URL` + `KEY_SERVER_CONFIGURED` + theme (wipes the
+   rest, as today; theme because a fresh device's first login runs the same wipe and Login
+   has its own theme toggle). Login gains a "Change server" link → ServerSetup, since logout no longer
+   forgets it. Login pre-fills the stored username.
+5. Delete dead `AuthRepository.refreshToken()`; the logout `catch {}`s get a log line.
+- Pure pref logic in `data/repository/SessionPrefs.kt` (MutablePreferences in, no Android)
+  ⇒ JVM-tested: expire keeps everything but tokens; expire with a non-matching token
+  changes nothing; logout keeps the server; owner match / mismatch / legacy / unknown.
+  `SessionRefresherTest`: the dead signal carries the token.
+- Rollback: revert the commit. One new pref key; old code ignores it.
+
+### N1c verified (2026-11-26)
+- [x] `SessionEvents` + `SessionPrefs` + `AuthRepository.expireSession/establishSession/
+  wipeLocalAccount`; `NavViewModel` → conflated `Channel` → NavGraph Login `popUpTo(0)`
+  (a SharedFlow drops the event when a worker reports before NavGraph collects);
+  Login "Change server" + username pre-fill; dead `refreshToken()` deleted; logout
+  `catch {}`s now log.
+- RED: `SessionPrefsTest` against today's behaviour stubbed in (every exit = `clear()`,
+  every login wipes) — 6/11 failed (expire keeps nothing, logout drops server, same-account
+  re-login wipes). The 5 wipe / fail-closed guards pass both ways by design.
+- GREEN: full Android unit suite 349/349 (+11). Lint: 0 hits in touched files; the 1 lint
+  ERROR (`NavGraph` `currentBackStack` RestrictedApi, #37) predates this — see §3.
+- Not device-verified: needs the next real dead session on the S21+ (expected: Login with
+  username filled, server kept, re-login does NOT re-encrypt).
+
 ### N1 NOT doing (and why)
 - Not fixing N2 here — N1a makes the client survive N2; N2 is next.
 - Not changing the secure-gate 401 → 403 (S1 was refuted; separate, cosmetic).
 - Not logging every 401 server-wide (noisy; secure gate + expiry are normal) — only the
   refresh path, which is the one that strands clients.
 - Not lengthening the Android refresh read timeout — N1a makes a timed-out refresh harmless.
+- Not a "session expired" banner on Login (cosmetic; the pre-filled username is the cue).
+- Not fixing N4 for EXPLICIT logout (that wipe is deliberate; N4 is its own item).
+- Not pausing backup workers on a dead session: their 401s now cost no network (N1b) and
+  they resume on re-login.
 
 ### N1 rollback
 Migr 042 is one nullable column (old binary ignores it; `set_ignore_missing`). Revert the
