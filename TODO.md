@@ -916,6 +916,35 @@ connection cap; `/health` reads one atomic (no DB, no storage); storage is an SM
    builder (camera keeps date, download gets date added, gone file excluded, unchanged rows
    excluded). Also: existing-row server merge adopts `taken_at` (server wins), and an
    "Undo last fix" action for the most recent batch.
+   **P1c design detail (decided 2026-11-26, before code):**
+   - Compare against the SERVER's value, not Room's: a hash-merged local row keeps its
+     scan date while the server says 1970, so a Room compare would skip exactly the broken
+     rows. ⇒ dry run walks `encrypted-sync` (metadata only, ~35 pages) for `taken_at`, and
+     sends that exact string as `expect_taken_at`.
+   - Only rows Room links to a phone file (`serverPhotoId` + `localPath`); no name/size
+     guessing. Unlinked rows counted "not on this phone"; a URI MediaStore no longer
+     resolves counted "file gone". Server additionally answers `protected` (P1b-guard).
+   - Pure `data/media/DateRepairPlanner.kt` (JVM-tested): rule = `LibraryDate.forScanOrNull`
+     (new — the scanner's "else now" fallback would re-date a photo to TODAY; repair skips
+     it as "no usable date"); a date > now + 1 day is skipped too (server would 400 the
+     whole chunk); equal ms ⇒ "already right".
+   - `DateRepairRepository`: dry run = plan + server dry runs in chunks of 500 (counts +
+     first 20 samples); apply = same chunks with `dry_run:false`, Room `takenAt` updated
+     only for `change` outcomes, batch ids saved in prefs; undo-last = undo dry run →
+     confirm → undo each batch, Room restored for `change` outcomes, prefs cleared.
+   - UI: Settings card "Photo dates" (after Backup Folders): Check → dialog with counts
+     and samples → Apply; "Undo last fix" when batches are saved. State machine in its own
+     `FixDatesViewModel`.
+   - Sync adoption: pure `ServerDate.adopt(existingMs, takenAt, createdAt)` used by the
+     existing-row branch of `syncFromServerEncrypted` (JVM-tested; same rule as web).
+   - **Found building:** the app's Retrofit Gson omits nulls ⇒ `expect_taken_at: null` would
+     go out ABSENT ⇒ server 400s the whole chunk. `DateRepairItem` has its own TypeAdapter
+     that writes that one null (`DateRepairWireTest`).
+   - [x] **P1c done (2026-11-26).** JVM 17 new (planner 13, wire 4); full JVM 380/380; lint =
+     baseline (1 `RestrictedApi` NavGraph error, 127 warnings; 0 hits in new files). RED by
+     mutation: planner on `forScan` (else-now) ⇒ "never re-dated to today" fails; adapter
+     removed ⇒ the explicit-null wire test fails. NOT device-tested yet — the dry run on the
+     S21+ after deploy is the first real run.
 4. Deploy (backup first) → owner runs the dry run on the S21+, sends the count → apply on OK.
 
 ### P1 NOT doing (and why)

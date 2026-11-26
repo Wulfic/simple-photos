@@ -38,7 +38,19 @@ object LibraryDate {
         dateAddedSecs: Long?,
         dateModifiedSecs: Long?,
         nowMs: Long,
-    ): Long {
+    ): Long = forScanOrNull(relativePath, dateTakenMs, dateAddedSecs, dateModifiedSecs) ?: nowMs
+
+    /**
+     * [forScan] without the "now" fallback: null when the file carries no usable
+     * date at all. A new backup needs SOME date, so the scanner takes now; the P1c
+     * repair must not — it would re-date an old photo to today — so it skips these.
+     */
+    fun forScanOrNull(
+        relativePath: String?,
+        dateTakenMs: Long?,
+        dateAddedSecs: Long?,
+        dateModifiedSecs: Long?,
+    ): Long? {
         val taken = dateTakenMs?.takeIf { it > 0 }
         if (taken != null && isCameraTree(relativePath)) return taken
 
@@ -49,7 +61,7 @@ object LibraryDate {
             .map { it * 1000 }
             .filter { it >= ANDROID_ERA_START_MS }
             .minOrNull()
-        return landed ?: taken ?: nowMs
+        return landed ?: taken
     }
 
     /** True when the first path segment is `DCIM` (case-insensitive). */

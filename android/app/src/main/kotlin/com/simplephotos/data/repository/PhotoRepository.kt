@@ -15,6 +15,7 @@ import com.simplephotos.data.collapseBursts
 import com.simplephotos.data.local.AppDatabase
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.local.entities.SyncStatus
+import com.simplephotos.data.media.ServerDate
 import com.simplephotos.data.media.renditionsEqual
 import com.simplephotos.data.remote.ApiService
 import com.simplephotos.data.remote.dto.DuplicatePhotoRequest
@@ -1293,6 +1294,13 @@ class PhotoRepository @Inject constructor(
                     }
                     if (existing.isFavorite != photo.isFavorite) {
                         db.photoDao().updateFavorite(existing.localId, photo.isFavorite)
+                    }
+                    // Same server-wins rule for the date (TODO §4b P1c): a date
+                    // repair — from this phone, another device or the server —
+                    // reaches a row already in the mirror only through here.
+                    ServerDate.adopt(existing.takenAt, photo.takenAt, photo.createdAt)?.let { ms ->
+                        android.util.Log.d("PhotoRepository", "syncFromServerEncrypted: '${photo.filename}' (${photo.id}) takenAt ${existing.takenAt} → $ms (server)")
+                        db.photoDao().updateTakenAt(existing.localId, ms)
                     }
                     continue
                 }

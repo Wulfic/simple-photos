@@ -134,6 +134,18 @@ interface PhotoDao {
     @Query("UPDATE photos SET cropMetadata = :metadata WHERE localId = :id")
     suspend fun updateCropMetadata(id: String, metadata: String?)
 
+    /** Server-wins date adoption on sync (TODO §4b P1c). */
+    @Query("UPDATE photos SET takenAt = :takenAt WHERE localId = :id")
+    suspend fun updateTakenAt(id: String, takenAt: Long)
+
+    /** Date repair: apply a server-confirmed new date to every row of that photo. */
+    @Query("UPDATE photos SET takenAt = :takenAt WHERE serverPhotoId = :serverPhotoId")
+    suspend fun updateTakenAtByServerId(serverPhotoId: String, takenAt: Long)
+
+    /** Rows that link a server photo to a file on this phone — the only rows a date repair may touch. */
+    @Query("SELECT serverPhotoId, localPath FROM photos WHERE serverPhotoId IS NOT NULL AND localPath IS NOT NULL")
+    suspend fun getServerFileLinks(): List<ServerFileLink>
+
     /** Persist a manual photo-subtype correction (Info-panel edit) WITHOUT
      *  clobbering the burst/motion fields that [backfillSubtypeFields] also
      *  writes. Matched by serverPhotoId so it lines up with the edit API. */
@@ -192,3 +204,9 @@ interface PhotoDao {
     @Query("DELETE FROM photos")
     suspend fun deleteAll()
 }
+
+/** Projection for [PhotoDao.getServerFileLinks]: server photo id ↔ the phone file's content URI. */
+data class ServerFileLink(
+    val serverPhotoId: String,
+    val localPath: String,
+)

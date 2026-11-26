@@ -45,7 +45,7 @@ class SyncRepository @Inject constructor(
         val KEY_LAST_SYNC_TIMESTAMP = longPreferencesKey("last_sync_timestamp")
 
         /** `RELATIVE_PATH` exists from API 29; below that only the absolute `DATA` path. */
-        private val PATH_COLUMN: String =
+        internal val PATH_COLUMN: String =
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) MediaStore.MediaColumns.RELATIVE_PATH
             else MediaStore.MediaColumns.DATA
     }

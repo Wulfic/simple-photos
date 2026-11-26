@@ -616,6 +616,13 @@ interface ApiService {
     @POST("api/photos/{id}/metadata/write-exif")
     suspend fun writeExif(@Path("id") photoId: String): WriteExifResponse
 
+    // ── Batch date repair (TODO §4b P1c) — server defaults to a dry run ──
+    @POST("api/photos/dates/repair")
+    suspend fun repairDates(@Body request: DateRepairRequest): DateRepairResponse
+
+    @POST("api/photos/dates/repair/undo")
+    suspend fun undoDateRepair(@Body request: DateRepairUndoRequest): DateRepairUndoResponse
+
     // ── Export ───────────────────────────────────────────────────────────
     @POST("api/export")
     suspend fun startExport(@Body request: ExportStartRequest): ExportStartResponse
