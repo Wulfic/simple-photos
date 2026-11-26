@@ -1044,6 +1044,20 @@ Applied repairs: `…/repair/undo {batch_id}`, or restore the pre-deploy DB back
   secure-media gate (`8a1d736`) — same stale-test class as test_10 (fixed in `ae95a0f`). A HEAD
   worktree run was attempted and could not build (gotchas 2026-11-26). → follow-up F13 below.
 
+### Deploy 2026-11-26 #4 (P2, `13b4e3c` → `19e9ac7`+, `-NoWipe -SkipAssets`)
+- Backup (verified: integrity ok, counts = live: 17,553 photos / 57,419 blobs / 12 refresh /
+  migr 43 / 105 at 1970 / 4,900 repairs): CT132 `/root/sp-deploy-backups/p2-20261126-084738/`
+  — keyed `sqlcipher_export`, APK, `web-dist.tgz`, `SHA256SUMS`. Old image tagged
+  `simple-photos-server:rollback-13b4e3c` (`20ba0ba5671a`).
+- Rollback (inside CT132): `git -C /opt/simple-photos reset --hard 13b4e3c`;
+  `docker tag simple-photos-server:rollback-13b4e3c simple-photos-server:latest`;
+  instance dir `docker compose up -d --force-recreate --no-build`; web
+  `rm -rf /opt/simple-photos/web/dist && tar -C /opt/simple-photos/web -xzf $BK/web-dist.tgz`;
+  APK `cp $BK/simple-photos.apk /opt/simple-photos/downloads/`. No schema change.
+- Automatic repairs it applies: `POST /api/photos/dates/repair/undo {batch_id, dry_run:false}`
+  (batch ids in `taken_at_repairs`, the server log, and the phone's client log
+  "Automatic date repair").
+
 ### P2 NOT doing (and why)
 - Not fixing test_25's missing gallery token here (F13, separate test-only commit).
 - No server-side guess for secure rows whose phone file is gone (same reason as P1).
