@@ -416,9 +416,6 @@ fun SettingsScreen(
                 )
             }
 
-            // ── Photo dates (TODO §4b P1c) ───────────────────────────────
-            FixDatesCard()
-
             // ── Free Up Space ────────────────────────────────────────────
             val context = LocalContext.current
             var showFreeUpDialog by remember { mutableStateOf(false) }

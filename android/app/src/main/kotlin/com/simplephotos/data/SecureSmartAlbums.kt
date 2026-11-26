@@ -59,8 +59,9 @@ object SecureSmartAlbums {
 
     /**
      * Compute the visible smart albums from the aggregate feed. Only non-empty
-     * types are returned. [items] is assumed to be in `added_at DESC` order (the
-     * server contract), so the first match per def is the newest item = cover.
+     * types are returned. [items] is assumed to be in the server's feed order —
+     * the photo's date, newest first (TODO §4c P2; it was `added_at DESC`) — so the
+     * first match per def is the newest photo = cover.
      * `count` is the raw membership count (bursts NOT collapsed).
      */
     fun compute(items: List<SecureGalleryItem>): List<SecureSmartAlbum> {

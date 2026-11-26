@@ -620,8 +620,9 @@ interface ApiService {
     @POST("api/photos/dates/repair")
     suspend fun repairDates(@Body request: DateRepairRequest): DateRepairResponse
 
-    @POST("api/photos/dates/repair/undo")
-    suspend fun undoDateRepair(@Body request: DateRepairUndoRequest): DateRepairUndoResponse
+    /** Client rows stuck at 1970 (secure included) — input to the automatic repair (P2). */
+    @GET("api/photos/dates/needs-repair")
+    suspend fun datesNeedingRepair(): NeedsRepairResponse
 
     // ── Export ───────────────────────────────────────────────────────────
     @POST("api/export")

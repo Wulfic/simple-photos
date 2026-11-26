@@ -64,9 +64,9 @@ export type SecureSmartAlbum = {
  * Compute the visible secure smart albums from the aggregate item feed.
  *
  * Only albums with at least one matching item are returned (empty types never
- * render a tile). `items` is assumed to already be in `added_at DESC` order (the
- * server contract), so the first match for each def is the newest item and is
- * used as the cover. `count` is the raw membership count (bursts NOT collapsed),
+ * render a tile). `items` is assumed to already be in the server's feed order —
+ * the photo's date, newest first (TODO §4c P2; it was `added_at DESC`) — so the
+ * first match for each def is the newest photo and is used as the cover. `count` is the raw membership count (bursts NOT collapsed),
  * matching how real secure-album cards show `item_count`.
  */
 export function computeSecureSmartAlbums(
@@ -79,7 +79,7 @@ export function computeSecureSmartAlbums(
     for (const it of items) {
       if (!def.filter(it)) continue;
       count++;
-      if (!coverItem) coverItem = it; // first match = newest (added_at DESC)
+      if (!coverItem) coverItem = it; // first match = newest (feed is date DESC)
     }
     if (count > 0 && coverItem) {
       result.push({ id: def.id, label: def.label, count, coverItem });

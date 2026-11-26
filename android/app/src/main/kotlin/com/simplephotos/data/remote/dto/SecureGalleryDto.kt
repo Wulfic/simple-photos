@@ -56,6 +56,8 @@ data class SecureGalleryItem(
     val id: String,
     @SerializedName("blob_id") val blobId: String,
     @SerializedName("added_at") val addedAt: String,
+    /** The photo's date — what both secure feeds are ordered by, newest first (TODO §4c P2). */
+    @SerializedName("taken_at") val takenAt: String? = null,
     // Owning album — present on both the per-gallery and aggregate responses.
     // Needed to route a "remove" from a smart view to the real album; null only
     // on responses from older servers.

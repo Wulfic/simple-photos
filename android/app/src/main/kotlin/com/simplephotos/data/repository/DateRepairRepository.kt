@@ -7,17 +7,15 @@ import android.util.Log
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
-import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import com.simplephotos.data.local.AppDatabase
+import com.simplephotos.data.media.AutoDateRepair
 import com.simplephotos.data.media.DateRepairPlanner
 import com.simplephotos.data.media.LibraryDate
-import com.simplephotos.data.media.ServerDate
 import com.simplephotos.data.remote.ApiService
 import com.simplephotos.data.remote.dto.DateRepairCounts
 import com.simplephotos.data.remote.dto.DateRepairItem
 import com.simplephotos.data.remote.dto.DateRepairRequest
-import com.simplephotos.data.remote.dto.DateRepairUndoRequest
-import com.simplephotos.data.remote.isHttpStatus
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -27,15 +25,23 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * "Fix photo dates" (TODO §4b P1c): finds backed-up photos whose server date
- * breaks the [LibraryDate] rule and repairs them through
- * `POST /api/photos/dates/repair` — dry run first, apply on the owner's OK, undo
- * of the last apply. The decisions live in [DateRepairPlanner]; this class only
- * gathers its inputs and talks to the server.
+ * Automatic photo-date repair (TODO §4b P1c → §4c P2). Backed-up photos the old
+ * scanner stored at 1970-01-01 are moved to the day they landed on this phone
+ * ([LibraryDate]), without a button: the owner ran the manual Check/Apply once
+ * (4,900 photos moved) and asked for it to be automatic from then on.
  *
- * Every server call here passes `dry_run` explicitly. The server re-checks each
- * row inside its own write transaction (compare-and-set on `expect_taken_at`),
- * so a preview that went stale between Check and Apply is skipped, not forced.
+ * Runs from the backup worker, at most every [AutoDateRepair.INTERVAL_MS]:
+ * 1. `GET /api/photos/dates/needs-repair` — this user's client rows at 1970,
+ *    **secure photos included** (the first repair walked `encrypted-sync`, which
+ *    hides them, and missed 104). Usually empty: one request and done.
+ * 2. Keep the rows Room links to a file on this phone; read their MediaStore dates.
+ * 3. [DateRepairPlanner] decides; [AutoDateRepair.epochOnly] keeps only changes
+ *    that replace a 1970 value.
+ * 4. Apply in chunks of [CHUNK]. The server re-checks every row inside its write
+ *    transaction (compare-and-set on `expect_taken_at`), refuses server-file rows
+ *    (`protected`) and logs each batch with its old values; reverse one with
+ *    `POST /api/photos/dates/repair/undo {batch_id, dry_run:false}` — the ids are
+ *    in the returned [Result] (logged to client logs) and the server log.
  */
 @Singleton
 class DateRepairRepository @Inject constructor(
@@ -48,160 +54,79 @@ class DateRepairRepository @Inject constructor(
         private const val TAG = "DateRepair"
         /** The server's per-call limit. */
         const val CHUNK = 500
-        private const val SAMPLE = 20
-        /** Comma-joined batch ids of the last apply — what "Undo last fix" reverses. */
-        private val KEY_LAST_BATCHES = stringPreferencesKey("date_repair_last_batches")
+        private val KEY_LAST_AUTO_RUN = longPreferencesKey("date_repair_last_auto_run")
     }
 
-    data class Sample(val filename: String, val fromMs: Long?, val toMs: Long)
-
-    data class Preview(
+    data class Result(
+        val listed: Int,
         val plan: DateRepairPlanner.Plan,
-        /** Server's verdict on the candidates, summed over chunks. */
-        val server: DateRepairCounts,
-        /** Candidates the server says WILL change — what Apply sends. */
-        val toApply: List<DateRepairPlanner.Candidate>,
-        val samples: List<Sample>,
-    )
-
-    data class ApplyResult(val counts: DateRepairCounts, val batches: Int)
-
-    data class UndoPreview(val counts: DateRepairCounts, val batches: Int)
-
-    /** Read-only: walks the server, Room and MediaStore; asks the server to dry-run. */
-    suspend fun preview(onProgress: (String) -> Unit): Preview = withContext(Dispatchers.IO) {
-        onProgress("Reading the library from the server…")
-        val serverRows = walkServer()
-        onProgress("Checking ${serverRows.size} photos against this phone…")
-        val links = db.photoDao().getServerFileLinks()
-        val linkedUri = HashMap<String, String>(links.size)
-        for (l in links) linkedUri.putIfAbsent(l.serverPhotoId, l.localPath)
-        val files = readPhoneFiles(linkedUri.values.toSet())
-        val plan = DateRepairPlanner.plan(serverRows, linkedUri, files, System.currentTimeMillis())
-        Log.i(TAG, "preview: server=${serverRows.size} linked=${linkedUri.size} files=${files.size} " +
-            "candidates=${plan.candidates.size} atEpoch=${plan.atEpoch} alreadyRight=${plan.alreadyRight} " +
-            "notOnPhone=${plan.notOnPhone} gone=${plan.fileGone} noDate=${plan.noUsableDate} " +
-            "serverUnreadable=${plan.serverDateUnreadable}")
-
-        var counts = DateRepairCounts()
-        val willChange = HashSet<String>()
-        plan.candidates.chunked(CHUNK).forEachIndexed { i, chunk ->
-            onProgress("Asking the server about ${plan.candidates.size} photos (${i * CHUNK + chunk.size})…")
-            val resp = api.repairDates(DateRepairRequest(dryRun = true, items = chunk.map(::toItem)))
-            check(resp.dryRun) { "server answered a dry run with dry_run=false" }
-            counts = counts + resp.counts
-            resp.items.filter { it.outcome == "change" }.mapTo(willChange) { it.photoId }
-        }
-        val toApply = plan.candidates.filter { it.photoId in willChange }
-        Log.i(TAG, "preview: server dry run $counts")
-        Preview(
-            plan = plan,
-            server = counts,
-            toApply = toApply,
-            samples = toApply.take(SAMPLE).map { Sample(it.filename, it.fromMs, it.toMs) },
+        val droppedNotEpoch: Int,
+        val counts: DateRepairCounts,
+        val batchIds: List<String>,
+        val truncated: Boolean,
+    ) {
+        fun toLogMap(): Map<String, String> = mapOf(
+            "listed" to listed.toString(),
+            "sent" to (plan.candidates.size - droppedNotEpoch).toString(),
+            "changed" to counts.change.toString(),
+            "unchanged" to counts.unchanged.toString(),
+            "stale" to counts.stale.toString(),
+            "protected" to counts.protected.toString(),
+            "notFound" to counts.notFound.toString(),
+            "notOnPhone" to plan.notOnPhone.toString(),
+            "fileGone" to plan.fileGone.toString(),
+            "noUsableDate" to plan.noUsableDate.toString(),
+            "droppedNotEpoch" to droppedNotEpoch.toString(),
+            "truncated" to truncated.toString(),
+            "batchIds" to batchIds.joinToString(","),
         )
     }
 
-    /** Writes. Sends exactly the candidates the preview showed as changing. */
-    suspend fun apply(preview: Preview, onProgress: (String) -> Unit): ApplyResult = withContext(Dispatchers.IO) {
-        require(preview.toApply.isNotEmpty()) { "nothing to apply" }
-        val byId = preview.toApply.associateBy { it.photoId }
+    /** Null when not due. Throws on a server/network failure (the caller logs it). */
+    suspend fun autoRepairIfDue(): Result? = withContext(Dispatchers.IO) {
+        val now = System.currentTimeMillis()
+        val last = dataStore.data.first()[KEY_LAST_AUTO_RUN]
+        if (!AutoDateRepair.isDue(last, now)) return@withContext null
+
+        val listed = api.datesNeedingRepair()
+        val rows = listed.photos.map { DateRepairPlanner.ServerRow(it.id, it.filename, it.takenAt, it.createdAt) }
+
+        val wanted = rows.mapTo(HashSet()) { it.id }
+        val linkedUri = HashMap<String, String>()
+        if (wanted.isNotEmpty()) {
+            for (l in db.photoDao().getServerFileLinks()) {
+                if (l.serverPhotoId in wanted) linkedUri.putIfAbsent(l.serverPhotoId, l.localPath)
+            }
+        }
+        val files = readPhoneFiles(linkedUri.values.toSet())
+        val plan = DateRepairPlanner.plan(rows, linkedUri, files, now)
+        val (toSend, dropped) = AutoDateRepair.epochOnly(plan.candidates)
+        if (dropped > 0) Log.w(TAG, "auto: dropped $dropped candidates whose server date is not 1970")
+        val byId = toSend.associateBy { it.photoId }
+
+        var counts = DateRepairCounts()
         val batches = ArrayList<String>()
-        var counts = DateRepairCounts()
-        Log.i(TAG, "apply: start ${preview.toApply.size} photos")
-        try {
-            preview.toApply.chunked(CHUNK).forEachIndexed { i, chunk ->
-                onProgress("Fixing ${i * CHUNK + chunk.size} of ${preview.toApply.size}…")
-                val resp = api.repairDates(DateRepairRequest(dryRun = false, items = chunk.map(::toItem)))
-                check(!resp.dryRun) { "server answered an apply as a dry run" }
-                resp.batchId?.let { batches += it }
-                counts = counts + resp.counts
-                // Room follows only what the server confirmed it changed.
-                for (r in resp.items) {
-                    if (r.outcome != "change") continue
-                    val ms = byId[r.photoId]?.toMs ?: continue
-                    db.photoDao().updateTakenAtByServerId(r.photoId, ms)
-                }
+        for (chunk in toSend.chunked(CHUNK)) {
+            val resp = api.repairDates(DateRepairRequest(dryRun = false, items = chunk.map(::toItem)))
+            check(!resp.dryRun) { "server answered an apply as a dry run" }
+            resp.batchId?.let { batches += it }
+            counts = counts + resp.counts
+            // Room follows only what the server confirmed it changed.
+            for (r in resp.items) {
+                if (r.outcome != "change") continue
+                val ms = byId[r.photoId]?.toMs ?: continue
+                db.photoDao().updateTakenAtByServerId(r.photoId, ms)
             }
-        } finally {
-            // Saved even after a mid-run failure, so the chunks that DID apply
-            // stay undoable. An apply with no batch keeps the previous undo.
-            if (batches.isNotEmpty()) {
-                dataStore.edit { it[KEY_LAST_BATCHES] = batches.joinToString(",") }
-                Log.i(TAG, "apply: saved ${batches.size} batch ids for undo: $batches")
-            }
+            Log.i(TAG, "auto: applied chunk of ${chunk.size}: ${resp.counts} batch=${resp.batchId}")
         }
-        Log.i(TAG, "apply: done $counts in ${batches.size} batches")
-        ApplyResult(counts, batches.size)
-    }
 
-    suspend fun hasUndo(): Boolean = lastBatches().isNotEmpty()
+        // A truncated listing means more rows are waiting: leave the stamp so
+        // the next backup run continues instead of waiting the full interval.
+        if (!listed.truncated) dataStore.edit { it[KEY_LAST_AUTO_RUN] = now }
 
-    /** Read-only: what undoing the last apply would restore. */
-    suspend fun previewUndo(): UndoPreview = withContext(Dispatchers.IO) {
-        val batches = lastBatches()
-        require(batches.isNotEmpty()) { "no fix to undo" }
-        var counts = DateRepairCounts()
-        var live = 0
-        for (b in batches) {
-            try {
-                val resp = api.undoDateRepair(DateRepairUndoRequest(dryRun = true, batchId = b))
-                counts = counts + resp.counts
-                live++
-            } catch (e: Exception) {
-                if (!isHttpStatus(e, 404)) throw e
-                Log.w(TAG, "previewUndo: batch $b already undone or unknown (404)")
-            }
+        Result(rows.size, plan, dropped, counts, batches, listed.truncated).also {
+            Log.i(TAG, "auto: done ${it.toLogMap()}")
         }
-        UndoPreview(counts, live)
-    }
-
-    suspend fun undoLast(onProgress: (String) -> Unit): DateRepairCounts = withContext(Dispatchers.IO) {
-        val batches = lastBatches()
-        require(batches.isNotEmpty()) { "no fix to undo" }
-        var counts = DateRepairCounts()
-        Log.i(TAG, "undo: start ${batches.size} batches")
-        batches.forEachIndexed { i, b ->
-            onProgress("Undoing part ${i + 1} of ${batches.size}…")
-            try {
-                val resp = api.undoDateRepair(DateRepairUndoRequest(dryRun = false, batchId = b))
-                counts = counts + resp.counts
-                for (r in resp.items) {
-                    if (r.outcome != "change") continue
-                    // A NULL original has no instant; the next sync adopts the
-                    // server's created_at for it (ServerDate.ofRecord).
-                    val ms = ServerDate.parseMs(r.restoreTakenAt) ?: continue
-                    db.photoDao().updateTakenAtByServerId(r.photoId, ms)
-                }
-            } catch (e: Exception) {
-                if (!isHttpStatus(e, 404)) throw e
-                Log.w(TAG, "undo: batch $b already undone or unknown (404)")
-            }
-        }
-        dataStore.edit { it.remove(KEY_LAST_BATCHES) }
-        Log.i(TAG, "undo: done $counts")
-        counts
-    }
-
-    // ── inputs ───────────────────────────────────────────────────────────
-
-    private suspend fun lastBatches(): List<String> =
-        dataStore.data.first()[KEY_LAST_BATCHES]
-            ?.split(',')
-            ?.map { it.trim() }
-            ?.filter { it.isNotEmpty() }
-            ?: emptyList()
-
-    /** Full metadata walk (no `since`): the server's current date for every photo. */
-    private suspend fun walkServer(): List<DateRepairPlanner.ServerRow> {
-        val rows = ArrayList<DateRepairPlanner.ServerRow>()
-        var after: String? = null
-        repeat(10_000) {
-            val page = api.encryptedSync(after = after, limit = CHUNK)
-            page.photos.mapTo(rows) { DateRepairPlanner.ServerRow(it.id, it.filename, it.takenAt, it.createdAt) }
-            after = page.nextCursor ?: return rows
-        }
-        error("encrypted-sync walk did not terminate")
     }
 
     /** MediaStore columns for each linked URI. A URI that resolves to nothing is absent. */

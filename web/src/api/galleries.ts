@@ -20,6 +20,8 @@ export type SecureGalleryItem = {
   id: string;
   blob_id: string;
   added_at: string;
+  /** The photo's date — what both secure feeds are ordered by, newest first (P2). */
+  taken_at?: string | null;
   gallery_id: string;
   gallery_name?: string | null;
   /**

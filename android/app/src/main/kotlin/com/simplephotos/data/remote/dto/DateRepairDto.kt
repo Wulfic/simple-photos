@@ -1,9 +1,11 @@
 /**
  * DTOs for the batch photo-date repair (TODO §4b P1b/P1c; server `photos/date_repair.rs`):
  *   POST /api/photos/dates/repair       → [DateRepairResponse]
- *   POST /api/photos/dates/repair/undo  → [DateRepairUndoResponse]
+ *   GET  /api/photos/dates/needs-repair → [NeedsRepairResponse]
  *
- * Both default to a DRY RUN on the server; only `dry_run = false` writes.
+ * The repair defaults to a DRY RUN on the server; only `dry_run = false` writes.
+ * The phone only ever applies (automatic, TODO §4c); undo is server-side
+ * (`POST /api/photos/dates/repair/undo`) and has no client.
  */
 package com.simplephotos.data.remote.dto
 
@@ -55,11 +57,6 @@ data class DateRepairRequest(
     val items: List<DateRepairItem>,
 )
 
-data class DateRepairUndoRequest(
-    @SerializedName("dry_run") val dryRun: Boolean,
-    @SerializedName("batch_id") val batchId: String,
-)
-
 data class DateRepairCounts(
     val change: Int = 0,
     val unchanged: Int = 0,
@@ -83,16 +80,17 @@ data class DateRepairResponse(
     val items: List<DateRepairItemResult>,
 )
 
-data class DateRepairUndoItemResult(
-    @SerializedName("photo_id") val photoId: String,
-    val outcome: String,
-    @SerializedName("current_taken_at") val currentTakenAt: String? = null,
-    @SerializedName("restore_taken_at") val restoreTakenAt: String? = null,
+
+/** `GET /api/photos/dates/needs-repair` — the caller's client rows at 1970, secure included. */
+data class NeedsRepairRow(
+    val id: String,
+    val filename: String,
+    /** Verbatim; sent back as `expect_taken_at`. */
+    @SerializedName("taken_at") val takenAt: String,
+    @SerializedName("created_at") val createdAt: String,
 )
 
-data class DateRepairUndoResponse(
-    @SerializedName("dry_run") val dryRun: Boolean,
-    @SerializedName("batch_id") val batchId: String,
-    val counts: DateRepairCounts,
-    val items: List<DateRepairUndoItemResult>,
+data class NeedsRepairResponse(
+    val photos: List<NeedsRepairRow>,
+    val truncated: Boolean = false,
 )

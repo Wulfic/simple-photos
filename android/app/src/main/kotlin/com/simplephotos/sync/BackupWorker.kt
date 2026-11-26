@@ -66,7 +66,8 @@ class BackupWorker @AssistedInject constructor(
     private val syncRepository: SyncRepository,
     private val db: AppDatabase,
     private val api: ApiService,
-    private val dataStore: DataStore<Preferences>
+    private val dataStore: DataStore<Preferences>,
+    private val dateRepair: com.simplephotos.data.repository.DateRepairRepository,
 ) : CoroutineWorker(context, params) {
 
     companion object {
@@ -634,6 +635,19 @@ class BackupWorker @AssistedInject constructor(
                 } catch (e: Exception) {
                     diag.warn(TAG, "Burst detection request failed: ${e.message}", emptyMap())
                 }
+            }
+
+            // Automatic photo-date repair (TODO §4c P2): photos the old scanner
+            // stored at 1970 — secure ones included — move to the day they
+            // landed. Self-throttled; best-effort, never fails the backup.
+            try {
+                dateRepair.autoRepairIfDue()?.let { r ->
+                    diag.info(TAG, "Automatic date repair", r.toLogMap())
+                }
+            } catch (e: Exception) {
+                diag.warn(TAG, "Automatic date repair failed: ${e.message}", mapOf(
+                    "exception" to (e::class.simpleName ?: "Unknown"),
+                ))
             }
 
             // Re-register the reactive content-URI observer so the next
