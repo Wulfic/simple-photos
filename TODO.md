@@ -959,6 +959,12 @@ connection cap; `/health` reads one atomic (no DB, no storage); storage is an SM
   APK: `cp $BK/simple-photos.apk /opt/simple-photos/downloads/`. Migr 043 is one new table
   ⇒ the old binary runs on the new DB. DB restore only if corrupted (stop, move
   `data/db/simple-photos.db*` aside, copy the backup in).
+- **Verified 2026-11-26 07:57Z:** box HEAD `13b4e3c` clean, image `20ba0ba5671a` healthy,
+  health 200, `/photos/dates/repair{,/undo}` = 401 unauthenticated (route + gate), migr 43,
+  counts unchanged (17,553 / 57,419), 5,003 at 1970, 0 repairs, new APK (34,555,928 B),
+  watchdog heartbeat probe=200. deploy-fresh's own backup: `/root/sp-deploy-backups/20261126-075440`.
+- **Next (owner):** install the APK → Settings → Photo dates → Check → send the counts.
+  Apply only on OK. Then web: hard-refresh and confirm the downloads moved off the bottom.
 - Applied date repairs (after the owner's OK): Settings → Photo dates → Undo last fix, or
   `POST /api/photos/dates/repair/undo {batch_id, dry_run:false}` per batch (ids in the
   server log line "date repair: applied").
