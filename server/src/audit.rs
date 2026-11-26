@@ -126,6 +126,8 @@ pub enum AuditEvent {
     PhotoFavorite,
     /// Photo crop metadata updated
     PhotoCropSet,
+    /// Batch photo-date repair applied or undone (TODO §4b P1b)
+    PhotoDateRepair,
 
     // ── Tags ─────────────────────────────────────────────────────────
     /// Tag added to a photo
@@ -252,6 +254,7 @@ impl AuditEvent {
             AuditEvent::PhotoRegister => "photo_register",
             AuditEvent::PhotoFavorite => "photo_favorite",
             AuditEvent::PhotoCropSet => "photo_crop_set",
+            AuditEvent::PhotoDateRepair => "photo_date_repair",
             // Tags
             AuditEvent::TagAdd => "tag_add",
             AuditEvent::TagRemove => "tag_remove",

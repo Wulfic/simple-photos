@@ -438,6 +438,15 @@ fn photo_routes() -> Router<AppState> {
             "/photos/{id}/metadata/write-exif",
             post(crate::photos::metadata_edit::write_exif_to_file),
         )
+        // Batch date repair — dry run by default, with undo (TODO §4b P1b)
+        .route(
+            "/photos/dates/repair",
+            post(crate::photos::date_repair::repair_dates),
+        )
+        .route(
+            "/photos/dates/repair/undo",
+            post(crate::photos::date_repair::undo_repair),
+        )
 }
 
 // ── Secure galleries ─────────────────────────────────────────────────

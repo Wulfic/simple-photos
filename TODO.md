@@ -866,9 +866,46 @@ connection cap; `/health` reads one atomic (no DB, no storage); storage is an SM
    `test_104`: dry-run changes nothing; empty list refused; other user's photo refused;
    stale `expect_taken_at` skipped; apply moves the row + year/month + change_log; undo
    restores exactly. Unit tests for the validation.
+   **P1b design detail (decided 2026-11-26, before code):**
+   - `server/src/photos/date_repair.rs`: pure `validate_items` + `repair(pool, user, items,
+     dry_run)` / `undo(pool, user, batch, dry_run)` taking a pool, so unit tests drive the
+     real SQL on a migrated temp DB; handlers are thin wrappers.
+   - Per-item outcome: `change` / `unchanged` (already that instant) / `stale` (current ≠
+     `expect_taken_at`) / `not_found` (missing OR another user's — same answer, no leak).
+     Instants are compared as parsed ms, not strings (`.000Z` vs `Z` must not read stale);
+     `expect_taken_at: null` matches a NULL column.
+   - Validation (400, nothing touched): empty list, > 500, duplicate `photo_id`, unparseable
+     date, new date ≤ 1970-01-01T00:00:00Z (the bug value itself), new date > now + 1 day.
+     New value normalised to `YYYY-MM-DDTHH:MM:SS.mmmZ`.
+   - Apply: ONE `begin_write` txn; each row re-read inside it (dry-run answer can be stale);
+     `UPDATE … WHERE id AND user_id` sets taken_at, photo_year/month, `taken_at_offset =
+     NULL` (a DATE_ADDED is a true UTC instant); old taken_at/year/month/offset → 
+     `taken_at_repairs`. change_log rides the existing UPDATE trigger (033). After commit:
+     `summary_cache.invalidate`, ONE `emit_sync("photo", batch_id)` (500 per-photo events
+     would overflow the 256-slot channel), audit `photo_date_repair` with counts, info log
+     naming the undo call.
+   - Undo `{batch_id, dry_run (default TRUE)}`: empty id refused; unknown/other user's
+     batch = 404; per row compare-and-set on `new_taken_at` (edited since ⇒ `stale`, kept);
+     restores all four old columns exactly; marks `undone_at` (a second undo = 404).
+   - **Found while exploring:** neither client adopts a changed `taken_at` on a row it
+     already caches — web `syncReconcile` existing-row path and Android
+     `syncFromServerEncrypted` update only crop/favorite/etc. So a server repair would be
+     invisible on web. ⇒ **P1b-web** (own commit): reconcile adopts `taken_at` (server
+     wins, like crop/favorite) + vitest. Android half goes into P1c.
+   - Encrypted blob payloads still carry `taken_at: 1970` inside — server can't rewrite
+     them. Only the legacy unregistered-blob path reads it; registered rows use the column.
+   - [x] **P1b done (2026-11-26).** Unit 17/17 in `date_repair` (validation, classify, and
+     dry-run/apply/undo/other-user/stale/reverse on a migrated temp DB); full unit suite
+     657/657; clippy `-D warnings` clean. RED by mutation: stale check removed ⇒ the 2 stale
+     tests fail; dry-run default flipped ⇒ `only_an_explicit_false_writes` fails; SELECT
+     user-scope removed ⇒ `another_users_photo_is_not_found_and_untouched` fails (the
+     UPDATE's own scope then refuses the batch). E2E `test_104` 5/5; neighbours
+     test_95–97, 100–103: 24/24. Migration 043 reverse run by
+     `the_documented_reverse_drops_the_table`. API_REFERENCE updated.
 3. **P1c Android "Fix photo dates" screen** (dry run → apply), JVM tests for the candidate
    builder (camera keeps date, download gets date added, gone file excluded, unchanged rows
-   excluded).
+   excluded). Also: existing-row server merge adopts `taken_at` (server wins), and an
+   "Undo last fix" action for the most recent batch.
 4. Deploy (backup first) → owner runs the dry run on the S21+, sends the count → apply on OK.
 
 ### P1 NOT doing (and why)

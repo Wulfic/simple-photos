@@ -15,9 +15,11 @@
 //! - [`encryption`]      — Encryption key storage endpoint.
 //! - [`storage_stats`]   — Per-user and filesystem storage usage stats.
 //! - [`metadata`]        — EXIF extraction (dimensions, GPS, camera model, date).
+//! - [`date_repair`]     — Batch `taken_at` repair: dry run by default, undo log.
 //! - [`utils`]           — Timestamp normalization and content hashing.
 
 pub mod burst;
+pub mod date_repair;
 pub mod encryption;
 pub mod handlers;
 pub mod metadata;

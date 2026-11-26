@@ -143,6 +143,20 @@ Membership and photos are untouched.
 |--------|------|------|-------------|----------|
 | `GET` | `/api/photos/encrypted-sync` | Bearer | Query: `after`, `limit` | `{ photos: [{ id, filename, mime_type, media_type, size_bytes, width, height, duration_secs, taken_at, created_at, encrypted_blob_id, encrypted_thumb_blob_id, is_favorite, crop_metadata, photo_hash }], next_cursor? }` |
 
+### Date Repair (batch, dry run by default)
+
+| Method | Path | Auth | Request Body | Response |
+|--------|------|------|-------------|----------|
+| `POST` | `/api/photos/dates/repair` | Bearer | `{ dry_run?: bool (default true), items: [{ photo_id, taken_at (RFC 3339), expect_taken_at: string \| null }] }` (1–500 items) | `{ dry_run, batch_id?, counts: { change, unchanged, stale, not_found }, items: [{ photo_id, outcome, current_taken_at?, new_taken_at }] }` |
+| `POST` | `/api/photos/dates/repair/undo` | Bearer | `{ dry_run?: bool (default true), batch_id }` | `{ dry_run, batch_id, counts, items: [{ photo_id, outcome, current_taken_at?, restore_taken_at? }] }` — **404** if no un-undone batch |
+
+Only `dry_run: false` writes. `expect_taken_at` is required (compare-and-set: a row
+holding a different instant is `stale` and left alone; `null` = the column is NULL).
+Another user's photo is `not_found`. Refused (400): empty list, > 500 items, duplicate
+`photo_id`, a date ≤ 1970-01-01 or > now + 1 day. An applied call that changes ≥ 1 row
+returns a `batch_id`; undo restores `taken_at`, `photo_year`, `photo_month` and
+`taken_at_offset` exactly, skipping rows edited since (`stale`), once per batch.
+
 ### Edit Copies & Duplicates
 
 | Method | Path | Auth | Request Body | Response |
