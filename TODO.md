@@ -521,6 +521,23 @@ Owner answers (2026-11-25): CT132 logs + a DB **copy** may be read **read-only**
       (owner 2026-11-26) Setting off ⇒ secure-folder unlock still prompts for biometrics.
       Check: which pref the secure-unlock path reads vs. which one the settings toggle writes
       (cf. `UnlockSessionTest`, memory "Biometric landscape").
+- [ ] **N6 No draggable scrollbar on the photo grids — owner must swipe repeatedly to reach
+      the bottom.** (owner 2026-11-26) Measured: Android `GalleryScreen.kt` has no scrollbar /
+      fast-scroller at all (grep: zero hits); web has native overflow only
+      (`scrollbar-gutter`, memory "Gallery scrollbars"). Wanted on EVERY grid (main, album,
+      secure, search, smart albums). Likely shape: one shared draggable thumb + date bubble
+      (year/month) driven by the grid's `LazyGridState`, reused by every grid screen.
+      **Owner 2026-11-26: Android only.**
+- [ ] **N7 Smart albums don't show up while the server is processing photos.** (owner
+      2026-11-26) Check: does the smart-album list endpoint block/skip while the
+      conversion/AI/geo queues run (lock contention, a "pipeline busy" gate, an empty result on
+      timeout), or does the client hide the section on a slow/failed fetch? Measure the
+      endpoint's latency + response during an active pass before guessing.
+      **Owner 2026-11-26: both Android and web** ⇒ suspect the server side first.
+- [ ] **N8 Face groupings still weak.** (owner 2026-11-26) Needs a measurement first: on the
+      live library, count clusters, singleton rate, and a sample of mis-merges vs. splits
+      (memory "8-issue triage": centroid linkage; "#48 face centering"). Decide split-vs-merge
+      bias from the numbers, not from the complaint.
 
 ### N1/N2 measured (2026-11-26 ~03:20Z, read-only: `docker logs`/`inspect` + a /tmp DB copy on CT132, box `5286392`)
 - **Server cannot invalidate a session on restart.** Access-token check is stateless (HS256
@@ -799,6 +816,8 @@ connection cap; `/health` reads one atomic (no DB, no storage); storage is an SM
   photos keep their capture date.
 - Existing wrong dates: **fix them too, dry-run first** (show which + how many, apply on OK).
 - Read-only DB copy approved (taken, copy deleted afterwards).
+- Deploy approved for this session once P1a–c are green (backup + rollback shown first);
+  the repair is applied only after the owner OKs the dry-run counts.
 
 ### Measured (read-only keyed copy of the live DB, 2026-11-26 06:39Z, box `31429f5`)
 - **5,003 of 5,146 Android-uploaded rows have `taken_at = 1970-01-01T00:00:00.000Z`**
@@ -833,6 +852,16 @@ connection cap; `/health` reads one atomic (no DB, no storage); storage is an SM
 1. **P1a Android rule for new backups.** `LibraryDate` + `scanImages`/`scanVideos` query
    `DATE_ADDED`, `DATE_MODIFIED`, `RELATIVE_PATH`. JVM tests (RED first: today's rule gives
    0 for a dateless download).
+   - [x] **P1a done (2026-11-26).** RED on a stub keeping today's rule: 12/14 failed (the 2
+     passing = cases where `DATE_TAKEN` was already right). GREEN: 14/14; full JVM suite
+     363/363; lint = pre-existing baseline only (1 `NavGraph` error, 127 warnings, unchanged).
+     Extra rules decided while building: mtime < 2008-01-01 ignored (zip FAT 1980 stamps
+     would win "earlier of"); `DATE_TAKEN` read via the per-type API-1 column (the
+     `MediaColumns` one is API 29); API < 29 reads `DATA` and looks for a `/DCIM/` segment.
+     **Risk until P1c is applied:** existing 1970 rows only change via the repair; a
+     fresh-mirror rescan gives the new date while the server still says 1970, so the
+     `filename + takenAt` merge fallback misses (hash path still matches). Gone once P1c
+     writes the same `LibraryDate` value to the server.
 2. **P1b server repair + undo endpoints + migr 043 (up/down, down actually run).** E2E
    `test_104`: dry-run changes nothing; empty list refused; other user's photo refused;
    stale `expect_taken_at` skipped; apply moves the row + year/month + change_log; undo

@@ -6,6 +6,8 @@ package com.simplephotos.data.repository
 
 import android.content.ContentUris
 import android.content.Context
+import android.database.Cursor
+import android.os.Build
 import android.provider.MediaStore
 import android.util.Log
 import androidx.datastore.core.DataStore
@@ -16,6 +18,7 @@ import com.simplephotos.data.local.AppDatabase
 import com.simplephotos.data.local.entities.BlobQueueEntity
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.local.entities.SyncStatus
+import com.simplephotos.data.media.LibraryDate
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.first
 import java.util.UUID
@@ -40,6 +43,52 @@ class SyncRepository @Inject constructor(
     companion object {
         private const val TAG = "SyncRepository"
         val KEY_LAST_SYNC_TIMESTAMP = longPreferencesKey("last_sync_timestamp")
+
+        /** `RELATIVE_PATH` exists from API 29; below that only the absolute `DATA` path. */
+        private val PATH_COLUMN: String =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) MediaStore.MediaColumns.RELATIVE_PATH
+            else MediaStore.MediaColumns.DATA
+    }
+
+    /**
+     * Column indices for [LibraryDate] — shared by the image and video scans so the
+     * two cannot drift. `getLong()` on a NULL column returns 0 (the P1 bug), so every
+     * read goes through [longOrNull].
+     */
+    private class LibraryDateColumns(
+        private val path: Int,
+        private val taken: Int,
+        private val added: Int,
+        private val modified: Int,
+    ) {
+        fun libraryDate(c: Cursor): Long = LibraryDate.forScan(
+            relativePath = relativePath(c),
+            dateTakenMs = c.longOrNull(taken),
+            dateAddedSecs = c.longOrNull(added),
+            dateModifiedSecs = c.longOrNull(modified),
+            nowMs = System.currentTimeMillis(),
+        )
+
+        fun describe(c: Cursor): String =
+            "path=${relativePath(c)} dateTaken=${c.longOrNull(taken)} " +
+                "added=${c.longOrNull(added)} modified=${c.longOrNull(modified)}"
+
+        private fun relativePath(c: Cursor): String? {
+            val raw = c.getString(path)
+            return if (PATH_COLUMN == MediaStore.MediaColumns.DATA) LibraryDate.relativeFromAbsolute(raw) else raw
+        }
+
+        private fun Cursor.longOrNull(idx: Int): Long? = if (isNull(idx)) null else getLong(idx)
+
+        companion object {
+            /** [dateTakenColumn]: `Images.Media.DATE_TAKEN` / `Video.Media.DATE_TAKEN` (API 1; the `MediaColumns` one is API 29). */
+            fun of(c: Cursor, dateTakenColumn: String) = LibraryDateColumns(
+                path = c.getColumnIndexOrThrow(PATH_COLUMN),
+                taken = c.getColumnIndexOrThrow(dateTakenColumn),
+                added = c.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_ADDED),
+                modified = c.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_MODIFIED),
+            )
+        }
     }
 
     // Mutex to prevent concurrent scans from inserting duplicate entries
@@ -116,6 +165,9 @@ class SyncRepository @Inject constructor(
             MediaStore.Images.Media.WIDTH,
             MediaStore.Images.Media.HEIGHT,
             MediaStore.Images.Media.DATE_TAKEN,
+            MediaStore.Images.Media.DATE_ADDED,
+            MediaStore.Images.Media.DATE_MODIFIED,
+            PATH_COLUMN,
             MediaStore.Images.Media.BUCKET_ID,
             MediaStore.Images.Media.ORIENTATION,
         )
@@ -144,7 +196,7 @@ class SyncRepository @Inject constructor(
             val mimeCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.MIME_TYPE)
             val widthCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.WIDTH)
             val heightCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.HEIGHT)
-            val dateCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN)
+            val dates = LibraryDateColumns.of(c, MediaStore.Images.Media.DATE_TAKEN)
             val orientCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.ORIENTATION)
 
             var newCount = 0
@@ -163,7 +215,7 @@ class SyncRepository @Inject constructor(
                 val mimeType = c.getString(mimeCol) ?: "image/jpeg"
                 var width = c.getInt(widthCol)
                 var height = c.getInt(heightCol)
-                val dateTaken = c.getLong(dateCol)
+                val libraryDate = dates.libraryDate(c)
                 val orientation = c.getInt(orientCol)
 
                 // MediaStore returns raw pixel dimensions; swap for 90°/270° EXIF rotation
@@ -177,7 +229,7 @@ class SyncRepository @Inject constructor(
                 val photo = PhotoEntity(
                     localId = localId,
                     filename = filename,
-                    takenAt = dateTaken,
+                    takenAt = libraryDate,
                     mimeType = mimeType,
                     mediaType = mediaType,
                     width = width,
@@ -186,7 +238,7 @@ class SyncRepository @Inject constructor(
                     syncStatus = SyncStatus.PENDING
                 )
                 db.photoDao().insert(photo)
-                Log.d(TAG, "scanImages: new photo '$filename' takenAt=$dateTaken localId=$localId")
+                Log.d(TAG, "scanImages: new photo '$filename' takenAt=$libraryDate (${dates.describe(c)}) localId=$localId")
                 newCount++
 
                 // Enqueue for upload: thumbnail first (priority 0), then media (priority 1)
@@ -216,6 +268,9 @@ class SyncRepository @Inject constructor(
             MediaStore.Video.Media.HEIGHT,
             MediaStore.Video.Media.DURATION,
             MediaStore.Video.Media.DATE_TAKEN,
+            MediaStore.Video.Media.DATE_ADDED,
+            MediaStore.Video.Media.DATE_MODIFIED,
+            PATH_COLUMN,
             MediaStore.Video.Media.BUCKET_ID,
         )
 
@@ -244,7 +299,7 @@ class SyncRepository @Inject constructor(
             val widthCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.WIDTH)
             val heightCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.HEIGHT)
             val durationCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.DURATION)
-            val dateCol = c.getColumnIndexOrThrow(MediaStore.Video.Media.DATE_TAKEN)
+            val dates = LibraryDateColumns.of(c, MediaStore.Video.Media.DATE_TAKEN)
 
             var newCount = 0
             var skipCount = 0
@@ -263,7 +318,7 @@ class SyncRepository @Inject constructor(
                 var width = c.getInt(widthCol)
                 var height = c.getInt(heightCol)
                 val durationMs = c.getLong(durationCol)
-                val dateTaken = c.getLong(dateCol)
+                val libraryDate = dates.libraryDate(c)
 
                 // MediaStore returns coded pixel dimensions for videos; swap for
                 // portrait-recorded videos that have a 90°/270° rotation tag.
@@ -278,14 +333,16 @@ class SyncRepository @Inject constructor(
                         if (rotation == 90 || rotation == 270) {
                             val tmp = width; width = height; height = tmp
                         }
-                    } catch (_: Exception) { /* ignore — keep coded dimensions */ }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "scanVideos: rotation probe failed for '$filename' — keeping coded dimensions", e)
+                    }
                 }
 
                 val localId = UUID.randomUUID().toString()
                 val photo = PhotoEntity(
                     localId = localId,
                     filename = filename,
-                    takenAt = dateTaken,
+                    takenAt = libraryDate,
                     mimeType = mimeType,
                     mediaType = "video",
                     width = width,
@@ -295,7 +352,7 @@ class SyncRepository @Inject constructor(
                     syncStatus = SyncStatus.PENDING
                 )
                 db.photoDao().insert(photo)
-                Log.d(TAG, "scanVideos: new video '$filename' takenAt=$dateTaken localId=$localId")
+                Log.d(TAG, "scanVideos: new video '$filename' takenAt=$libraryDate (${dates.describe(c)}) localId=$localId")
                 newCount++
 
                 db.blobQueueDao().insert(BlobQueueEntity(
