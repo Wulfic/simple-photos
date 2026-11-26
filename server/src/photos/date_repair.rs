@@ -569,7 +569,68 @@ pub async fn undo(
     }))
 }
 
+// ── Needs repair (P2, TODO §4c) ───────────────────────────────────────
+
+/// Most rows one `needs-repair` answer lists; the next automatic run takes the rest.
+pub const NEEDS_REPAIR_LIMIT: i64 = 2_000;
+
+#[derive(Debug, Serialize, sqlx::FromRow, PartialEq, Eq)]
+pub struct NeedsRepairRow {
+    pub id: String,
+    pub filename: String,
+    /// Verbatim — the client sends it back as `expect_taken_at`.
+    pub taken_at: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct NeedsRepairResponse {
+    pub photos: Vec<NeedsRepairRow>,
+    /// More rows matched than [`NEEDS_REPAIR_LIMIT`].
+    pub truncated: bool,
+}
+
+/// The caller's client-registered rows stuck at 1970-01-01 — the bug class the
+/// automatic repair exists for. **Secure photos included**: `encrypted-sync`
+/// hides them by design, which is exactly how 104 secured downloads were missed
+/// by the first repair. Only ids and dates are returned, for the caller's own
+/// uploads; the repair dry run already answers the same for any own id.
+///
+/// Server-file rows (`file_path <> ''`) are never listed — their dates come from
+/// the file (P1b-guard). A manual edit is never listed either: nobody sets 1970.
+pub async fn needs_repair(
+    pool: &SqlitePool,
+    user_id: &str,
+) -> Result<NeedsRepairResponse, sqlx::Error> {
+    let mut photos: Vec<NeedsRepairRow> = sqlx::query_as(
+        "SELECT id, filename, taken_at, created_at FROM photos \
+         WHERE user_id = ?1 AND COALESCE(file_path, '') = '' \
+           AND taken_at LIKE '1970-01-01%' \
+         ORDER BY id LIMIT ?2",
+    )
+    .bind(user_id)
+    .bind(NEEDS_REPAIR_LIMIT + 1)
+    .fetch_all(pool)
+    .await?;
+    let truncated = photos.len() as i64 > NEEDS_REPAIR_LIMIT;
+    photos.truncate(NEEDS_REPAIR_LIMIT as usize);
+    Ok(NeedsRepairResponse { photos, truncated })
+}
+
 // ── Handlers ──────────────────────────────────────────────────────────
+
+/// `GET /api/photos/dates/needs-repair`
+pub async fn needs_repair_handler(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<NeedsRepairResponse>, AppError> {
+    let resp = needs_repair(&state.read_pool, &auth.user_id).await?;
+    tracing::info!(
+        user_id = %auth.user_id, listed = resp.photos.len(), truncated = resp.truncated,
+        "date repair: needs-repair listed",
+    );
+    Ok(Json(resp))
+}
 
 /// `POST /api/photos/dates/repair`
 pub async fn repair_dates(
@@ -1116,6 +1177,29 @@ mod tests {
             .unwrap();
         assert!(undo(&pool, "u2", &batch, false).await.unwrap().is_none());
         assert_eq!(row(&pool, "p1").await.0.as_deref(), Some(DOWNLOADED));
+        close(pool, path).await;
+    }
+
+    #[tokio::test]
+    async fn needs_repair_lists_only_my_client_rows_at_1970() {
+        let (pool, path) = pool("needs").await;
+        insert(&pool, "mine", "u1", Some(EPOCH), None).await;
+        insert(&pool, "mine-z", "u1", Some("1970-01-01T00:00:00Z"), None).await;
+        insert(&pool, "dated", "u1", Some(DOWNLOADED), None).await;
+        insert(&pool, "null", "u1", None, None).await;
+        insert(&pool, "theirs", "u2", Some(EPOCH), None).await;
+        insert(&pool, "takeout", "u1", Some(EPOCH), None).await;
+        sqlx::query("UPDATE photos SET file_path = 'takeout/IMG.jpg' WHERE id = 'takeout'")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let resp = needs_repair(&pool, "u1").await.unwrap();
+        let ids: Vec<_> = resp.photos.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, vec!["mine", "mine-z"]);
+        assert!(!resp.truncated);
+        // Verbatim, so it works as the compare-and-set token.
+        assert_eq!(resp.photos[1].taken_at, "1970-01-01T00:00:00Z");
         close(pool, path).await;
     }
 

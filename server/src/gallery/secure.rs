@@ -68,6 +68,25 @@ pub const SECURE_MEMBERSHIP_MATCH: &str =
 pub const SECURE_ITEM_PUBLISHED_BLOB_ID: &str =
     "COALESCE(gi.encrypted_blob_id, p.encrypted_blob_id, gi.blob_id)";
 
+/// The date a secure item sorts and displays by (P2, TODO §4c): the photo's own
+/// date, newest first, exactly like the main gallery. `p` is a server-side
+/// clone's row (it copies `taken_at`), `op` the original; `gi.added_at` only when
+/// neither row survives. Both feeds used to `ORDER BY gi.added_at` and returned
+/// no date at all, so a batch secured while its dates were wrong (1970) kept
+/// that wrong order forever, whatever the dates became later.
+///
+/// Requires [`SECURE_ITEM_CLONE_JOIN`] (`p`) and `LEFT JOIN photos op ON op.id =
+/// gi.original_blob_id`.
+pub const SECURE_ITEM_DATE: &str =
+    "COALESCE(p.taken_at, op.taken_at, p.created_at, op.created_at, gi.added_at)";
+
+/// Feed order: [`SECURE_ITEM_DATE`] newest first. Memberships of one photo share
+/// its date, so the `added_at DESC` tie-break keeps them newest-membership-first
+/// — the order [`collapse_by_clone`] depends on. `gi.id` makes it total.
+pub const SECURE_ITEM_ORDER: &str =
+    "COALESCE(p.taken_at, op.taken_at, p.created_at, op.created_at, gi.added_at) DESC, \
+     gi.added_at DESC, gi.id ASC";
+
 /// The join that makes `p` — the **clone's own** `photos` row — available to
 /// [`SECURE_ITEM_PUBLISHED_BLOB_ID`]. Shared for the same reason the expression
 /// is: without it the COALESCE silently falls through to `gi.blob_id`, which is
@@ -271,6 +290,8 @@ pub struct AllGalleryItemRow {
     pub duration_secs: Option<f64>,
     pub motion_video_blob_id: Option<String>,
     pub crop_metadata: Option<String>,
+    /// [`SECURE_ITEM_DATE`] — what the feed is ordered by.
+    pub taken_at: Option<String>,
 }
 
 /// One tile of the aggregate feed after multi-album memberships are collapsed.
@@ -292,12 +313,14 @@ pub struct CollapsedItem<'a> {
 /// shape in this repo's history, which is why the collapse happens once, at the
 /// source of the feed, instead of in each consumer.
 ///
-/// `rows` is expected in `added_at DESC` order (as the query returns them). The
+/// `rows` are expected in [`SECURE_ITEM_ORDER`] (as the query returns them): by
+/// photo date, and within one photo — all its memberships share that date — in
+/// `added_at DESC` order. The
 /// representative is the **oldest** membership, so the tile's `added_at` is when
 /// the photo entered the secure domain rather than when it was later filed into
 /// an additional album — a photo does not become "new" again because it was
 /// added to a second album. Tile order follows first appearance, i.e. the
-/// newest membership, so filing a photo into another album does surface it.
+/// photo's date.
 pub fn collapse_by_clone(rows: &[AllGalleryItemRow]) -> Vec<CollapsedItem<'_>> {
     let mut out: Vec<CollapsedItem<'_>> = Vec::new();
     let mut index: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
@@ -1236,6 +1259,7 @@ pub async fn list_gallery_items(
         // on `gi` only — never falls through to the original photo, so an edit
         // in the secure album can't leak back onto the regular-gallery original.
         crop_metadata: Option<String>,
+        taken_at: Option<String>,
     }
 
     let items = sqlx::query_as::<_, GalleryItemRow>(&format!(
@@ -1251,12 +1275,13 @@ pub async fn list_gallery_items(
                 COALESCE(p.burst_id, op.burst_id) as burst_id, \
                 COALESCE(p.duration_secs, op.duration_secs) as duration_secs, \
                 COALESCE(p.motion_video_blob_id, op.motion_video_blob_id) as motion_video_blob_id, \
-                gi.crop_metadata as crop_metadata \
+                gi.crop_metadata as crop_metadata, \
+                {SECURE_ITEM_DATE} as taken_at \
          FROM encrypted_gallery_items gi \
          {SECURE_ITEM_CLONE_JOIN} \
          LEFT JOIN photos op ON op.id = gi.original_blob_id \
          WHERE gi.gallery_id = ? \
-         ORDER BY gi.added_at DESC"
+         ORDER BY {SECURE_ITEM_ORDER}"
     ))
     .bind(&gallery_id)
     .fetch_all(&state.pool)
@@ -1311,6 +1336,7 @@ pub async fn list_gallery_items(
                 "duration_secs": r.duration_secs,
                 "motion_video_blob_id": r.motion_video_blob_id,
                 "crop_metadata": r.crop_metadata,
+                "taken_at": r.taken_at,
             })
         })
         .collect();
@@ -1363,13 +1389,14 @@ pub async fn list_all_gallery_items(
                 COALESCE(p.burst_id, op.burst_id) as burst_id, \
                 COALESCE(p.duration_secs, op.duration_secs) as duration_secs, \
                 COALESCE(p.motion_video_blob_id, op.motion_video_blob_id) as motion_video_blob_id, \
-                gi.crop_metadata as crop_metadata \
+                gi.crop_metadata as crop_metadata, \
+                {SECURE_ITEM_DATE} as taken_at \
          FROM encrypted_gallery_items gi \
          JOIN encrypted_galleries g ON g.id = gi.gallery_id \
          {SECURE_ITEM_CLONE_JOIN} \
          LEFT JOIN photos op ON op.id = gi.original_blob_id \
          WHERE g.user_id = ? \
-         ORDER BY gi.added_at DESC"
+         ORDER BY {SECURE_ITEM_ORDER}"
     ))
     .bind(&auth.user_id)
     .fetch_all(&state.pool)
@@ -1414,6 +1441,7 @@ pub async fn list_all_gallery_items(
                 "duration_secs": r.duration_secs,
                 "motion_video_blob_id": r.motion_video_blob_id,
                 "crop_metadata": r.crop_metadata,
+                "taken_at": r.taken_at,
             })
         })
         .collect();
@@ -1736,7 +1764,124 @@ mod tests {
             duration_secs: None,
             motion_video_blob_id: None,
             crop_metadata: None,
+            taken_at: None,
         }
+    }
+
+    // ── P2: secure feeds sort by the photo's date ───────────────────────────
+
+    /// The ids the feeds would publish, in the REAL order constant.
+    async fn feed_order(pool: &SqlitePool, gallery_id: &str) -> Vec<String> {
+        sqlx::query_scalar::<_, String>(&format!(
+            "SELECT gi.id FROM encrypted_gallery_items gi {SECURE_ITEM_CLONE_JOIN} \
+             LEFT JOIN photos op ON op.id = gi.original_blob_id \
+             WHERE gi.gallery_id = ? ORDER BY {SECURE_ITEM_ORDER}"
+        ))
+        .bind(gallery_id)
+        .fetch_all(pool)
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn secure_items_sort_by_photo_date_not_by_when_they_were_secured() {
+        // The live shape (2026-11-26): a batch secured on 08-07 in the phone's
+        // 1970-sorted order. Add order must no longer decide the grid.
+        let pool = mem_pool().await;
+        insert_gallery(&pool, "g", "u").await;
+        for (id, taken, added) in [
+            (
+                "old",
+                "2019-05-01T00:00:00.000Z",
+                "2026-08-07T00:00:03.000Z",
+            ),
+            (
+                "new",
+                "2025-08-05T00:00:00.000Z",
+                "2026-08-07T00:00:01.000Z",
+            ),
+            (
+                "mid",
+                "2022-01-01T00:00:00.000Z",
+                "2026-08-07T00:00:02.000Z",
+            ),
+        ] {
+            insert_photo(
+                &pool,
+                &format!("orig-{id}"),
+                "u",
+                Some(&format!("enc-{id}")),
+            )
+            .await;
+            sqlx::query("UPDATE photos SET taken_at = ? WHERE id = ?")
+                .bind(taken)
+                .bind(format!("orig-{id}"))
+                .execute(&pool)
+                .await
+                .unwrap();
+            insert_shared_item(
+                &pool,
+                id,
+                "g",
+                &format!("clone-{id}"),
+                &format!("orig-{id}"),
+                added,
+            )
+            .await;
+        }
+        assert_eq!(feed_order(&pool, "g").await, vec!["new", "mid", "old"]);
+    }
+
+    #[tokio::test]
+    async fn a_secure_item_with_no_dated_row_falls_back_to_when_it_was_added() {
+        let pool = mem_pool().await;
+        insert_gallery(&pool, "g", "u").await;
+        insert_shared_item(
+            &pool,
+            "orphan",
+            "g",
+            "clone-x",
+            "gone",
+            "2030-01-01T00:00:00.000Z",
+        )
+        .await;
+        insert_photo(&pool, "orig-a", "u", Some("enc-a")).await; // created_at 2026-08-01
+        insert_shared_item(
+            &pool,
+            "dated",
+            "g",
+            "clone-a",
+            "orig-a",
+            "2020-01-01T00:00:00.000Z",
+        )
+        .await;
+        assert_eq!(feed_order(&pool, "g").await, vec!["orphan", "dated"]);
+    }
+
+    #[tokio::test]
+    async fn memberships_of_one_photo_stay_newest_membership_first_for_the_collapse() {
+        let pool = mem_pool().await;
+        insert_gallery(&pool, "g", "u").await;
+        insert_photo(&pool, "orig", "u", Some("enc")).await;
+        insert_shared_item(
+            &pool,
+            "first",
+            "g",
+            "clone",
+            "orig",
+            "2026-01-01T00:00:00.000Z",
+        )
+        .await;
+        insert_shared_item(
+            &pool,
+            "second",
+            "g",
+            "clone",
+            "orig",
+            "2026-02-01T00:00:00.000Z",
+        )
+        .await;
+        assert_eq!(feed_order(&pool, "g").await, vec!["second", "first"]);
     }
 
     // ── Z1: multi-album secure membership ───────────────────────────────────

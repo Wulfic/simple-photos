@@ -979,6 +979,77 @@ connection cap; `/health` reads one atomic (no DB, no storage); storage is an SM
 P1a/P1c: revert (client-only). P1b: revert; migr 043 is one new table (down drops it).
 Applied repairs: `…/repair/undo {batch_id}`, or restore the pre-deploy DB backup.
 
+## 4c. P2 — secure gallery still wrong + make the date repair automatic (owner, 2026-11-26; Tier 2)
+
+### Owner report (2026-11-26, after applying P1 on the S21+)
+- "Fixed the issue with regular photos but not in the secure gallery."
+- "We don't need a button to fix manually — this process worked, it should be automatic."
+
+### Measured (read-only keyed attach of the live DB, box `13b4e3c`)
+- Owner's Apply: 10 batches, **4,900 rows** re-dated 08:01Z, 0 undone.
+- Still at 1970: **104 client rows, ALL secure** (the `original_blob_id` rows of secure
+  items; 0 clone rows; filenames `tiktok_*.mp4`, `26638257.webp` …) + 1 regular.
+- Why missed: the phone's Check walks `encrypted-sync`, which excludes secure photos by
+  design (eligibility predicate) ⇒ they were never candidates.
+- Why the secure grid looks wrong even with right dates: **neither secure feed returns a
+  date and both `ORDER BY gi.added_at DESC`**; both clients keep server order. Items were
+  bulk-added 2026-08-07 in the phone's (1970-sorted) order, so add order = the old wrong
+  order. Repairing dates alone would not move them.
+- Android keeps the Room row of a secured photo (hidden by `excludeSecure`) with its
+  `serverPhotoId` and `localPath` ⇒ the phone CAN compute the landed date for them.
+
+### Decisions (mine, 2026-11-26)
+- **Secure feeds sort by the photo's date, newest first**, like the main gallery:
+  `COALESCE(p.taken_at, op.taken_at, p.created_at, op.created_at, gi.added_at) DESC, gi.id`
+  (`p` = server-side clone row, `op` = original). Both feeds also return that value as
+  `taken_at`. Only consumer of the old order = smart-album cover ("first = newest"), which
+  now means newest by date — same as the regular smart albums. Comments updated.
+- **`GET /api/photos/dates/needs-repair`**: the caller's CLIENT rows (`file_path = ''`)
+  with `taken_at LIKE '1970-01-01%'`, secure included (ids + dates only — the caller
+  uploaded them; the repair dry run already returned dates for any own id). ≤ 2,000 per
+  call; the next run takes the rest. Usually empty ⇒ one cheap request per run.
+- **Automatic on the phone, no UI:** after each successful backup run, at most once per
+  6 h: needs-repair → Room links → MediaStore → `DateRepairPlanner` → apply (chunks of 500,
+  `dry_run:false`). Guards kept: server compare-and-set with `expect_taken_at` = the epoch
+  string the server just listed (so an auto run can only ever replace a 1970 value — it can
+  never fight a manual edit), `protected` server-file rows, undo log (batch ids logged +
+  kept in prefs; undo via `POST …/repair/undo`). Phone drops any candidate whose expect is
+  not 1970 before sending (second guard, tested). A failure is logged and never fails the
+  backup.
+- Settings card + `FixDatesViewModel` removed (owner: no button).
+
+### Plan — one commit each
+1. **P2a server:** secure feeds ordered by date + `taken_at` field; `needs-repair`
+   endpoint. Unit tests + E2E `test_105` (secure order by date; needs-repair lists a secure
+   1970 row, not server-file / other user / dated rows).
+2. **P2b Android:** auto repair in the backup worker; remove the card; JVM tests (epoch-only
+   filter, throttle decision).
+3. Deploy (backup first). The first automatic run fixes the 104; verify count → 0 on box.
+
+### P2 progress
+- [x] **P2a server.** `SECURE_ITEM_DATE` / `SECURE_ITEM_ORDER` consts used by both feeds
+  (+ `taken_at` in each item); `needs_repair` + `GET /api/photos/dates/needs-repair`. Unit
+  663/663 (+4), clippy clean. RED: order const back to `gi.added_at DESC` ⇒
+  `secure_items_sort_by_photo_date_not_by_when_they_were_secured` fails. E2E `test_105`
+  3/3 + test_104 6/6 + test_94 13/13.
+- [x] **P2b Android.** `AutoDateRepair` (6 h throttle, epoch-only guard) +
+  `DateRepairRepository.autoRepairIfDue` called at the end of `BackupWorker` (try/catch,
+  `diag` log ⇒ reaches `/api/admin/client-logs`). Settings card, `FixDatesViewModel`
+  and the Android undo DTOs removed. JVM 383/383 (+3); lint = baseline. RED: guard
+  weakened to `ms >= 0` ⇒ `only candidates replacing a 1970 value are kept` fails.
+  Web: comment + `taken_at?` type only; 372/372, build green.
+- Secure-related E2E sweep (13 files): 364 passed, 1 skipped, **8 failed — all pre-existing,
+  none about order**: test_21 ×3 + test_41 ×1 already recorded failing on `8b7701f` (§2 F11);
+  test_25 ×4 fetch a secure clone's file/thumb WITHOUT `x-gallery-token` ⇒ 401 from the B6
+  secure-media gate (`8a1d736`) — same stale-test class as test_10 (fixed in `ae95a0f`). A HEAD
+  worktree run was attempted and could not build (gotchas 2026-11-26). → follow-up F13 below.
+
+### P2 NOT doing (and why)
+- Not fixing test_25's missing gallery token here (F13, separate test-only commit).
+- No server-side guess for secure rows whose phone file is gone (same reason as P1).
+- No client-side re-sort of secure items — server order stays the single contract.
+- Not touching the 1 regular 1970 row by hand; the automatic run will take it if linked.
+
 ## 5. Verification debt carried from the old todo.md (still open)
 Deploy-side (CT132): A1/#42 badge counts, A2/#38 migration 033 backfill, B2/#40 3-strike
 cap + ETA calibration readout, B3/#46 codec backfill drains to zero, B4/#49 rung backfill.

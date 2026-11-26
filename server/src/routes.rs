@@ -447,6 +447,10 @@ fn photo_routes() -> Router<AppState> {
             "/photos/dates/repair/undo",
             post(crate::photos::date_repair::undo_repair),
         )
+        .route(
+            "/photos/dates/needs-repair",
+            get(crate::photos::date_repair::needs_repair_handler),
+        )
 }
 
 // ── Secure galleries ─────────────────────────────────────────────────
