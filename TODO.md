@@ -907,6 +907,11 @@ connection cap; `/health` reads one atomic (no DB, no storage); storage is an SM
      differ; unparseable server value never overwrites. RED first: the 2 adoption tests left
      `takenAt` = 0; GREEN 24/24 reconcile, full web 372/372, `npm run build` green (web has
      no lint config). Delta (`syncPass.ts:175`) and full walk (`:317`) both reach it.
+   - [x] **P1b-guard (2026-11-26, found designing P1c).** `register-encrypted` returns the
+     EXISTING row on a hash match, so a phone can hold the id of a Takeout/scan row whose
+     date is right. Server now answers `protected` for any row with a non-empty `file_path`
+     (the "not touching server-file rows" decision, enforced where the knowledge is). RED:
+     check removed ⇒ both new unit tests fail; GREEN 659/659, clippy clean, test_104 6/6.
 3. **P1c Android "Fix photo dates" screen** (dry run → apply), JVM tests for the candidate
    builder (camera keeps date, download gets date added, gone file excluded, unchanged rows
    excluded). Also: existing-row server merge adopts `taken_at` (server wins), and an

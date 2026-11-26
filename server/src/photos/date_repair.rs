@@ -84,6 +84,11 @@ pub enum Outcome {
     Stale,
     /// No such photo for this user (missing, or someone else's).
     NotFound,
+    /// A server-file row (Takeout / library scan): its date was read from the
+    /// file on the server and is not the phone's to change. A phone can hold
+    /// such a row's id because `register-encrypted` returns the existing row
+    /// on a content-hash match.
+    Protected,
 }
 
 #[derive(Debug, Default, PartialEq, Eq, Serialize)]
@@ -92,6 +97,7 @@ pub struct Counts {
     pub unchanged: usize,
     pub stale: usize,
     pub not_found: usize,
+    pub protected: usize,
 }
 
 impl Counts {
@@ -101,6 +107,7 @@ impl Counts {
             Outcome::Unchanged => self.unchanged += 1,
             Outcome::Stale => self.stale += 1,
             Outcome::NotFound => self.not_found += 1,
+            Outcome::Protected => self.protected += 1,
         }
     }
 }
@@ -247,13 +254,27 @@ fn stored_ms(stored: Option<&str>) -> Option<Result<i64, ()>> {
     stored.map(|s| parse_rfc3339_ms(&super::utils::normalize_iso_timestamp(s)).ok_or(()))
 }
 
-/// Decide one item against the row as it stands. Order matters: a row that
-/// already holds the new instant is `unchanged` whatever was expected, and an
-/// unparseable stored value can never be proven to match, so it is `stale`
-/// (fail closed).
-pub fn classify(row_exists: bool, stored: Option<&str>, item: &ValidItem) -> Outcome {
+/// True when the row's media lives in the server's storage root — its date
+/// came from that file, not from a client. Client-registered rows store `''`.
+pub fn is_server_file(file_path: Option<&str>) -> bool {
+    file_path.is_some_and(|p| !p.trim().is_empty())
+}
+
+/// Decide one item against the row as it stands. Order matters: a server-file
+/// row is `protected` before anything else; a row that already holds the new
+/// instant is `unchanged` whatever was expected; and an unparseable stored
+/// value can never be proven to match, so it is `stale` (fail closed).
+pub fn classify(
+    row_exists: bool,
+    server_file: bool,
+    stored: Option<&str>,
+    item: &ValidItem,
+) -> Outcome {
     if !row_exists {
         return Outcome::NotFound;
+    }
+    if server_file {
+        return Outcome::Protected;
     }
     let current = stored_ms(stored);
     if current == Some(Ok(item.new_ms)) {
@@ -273,10 +294,17 @@ pub fn classify(row_exists: bool, stored: Option<&str>, item: &ValidItem) -> Out
 
 // ── Repair ────────────────────────────────────────────────────────────
 
-type CurrentRow = (Option<String>, Option<i64>, Option<i64>, Option<String>);
+/// taken_at, photo_year, photo_month, taken_at_offset, file_path
+type CurrentRow = (
+    Option<String>,
+    Option<i64>,
+    Option<i64>,
+    Option<String>,
+    Option<String>,
+);
 
 const SELECT_CURRENT: &str =
-    "SELECT taken_at, photo_year, photo_month, taken_at_offset FROM photos \
+    "SELECT taken_at, photo_year, photo_month, taken_at_offset, file_path FROM photos \
      WHERE id = ?1 AND user_id = ?2";
 
 /// Dry run: read-only, against any pool. Applies nothing.
@@ -294,7 +322,8 @@ pub async fn plan(
             .fetch_optional(pool)
             .await?;
         let stored = row.as_ref().and_then(|r| r.0.clone());
-        let outcome = classify(row.is_some(), stored.as_deref(), item);
+        let server_file = row.as_ref().is_some_and(|r| is_server_file(r.4.as_deref()));
+        let outcome = classify(row.is_some(), server_file, stored.as_deref(), item);
         counts.add(outcome);
         results.push(ItemResult {
             photo_id: item.photo_id.clone(),
@@ -332,9 +361,10 @@ pub async fn apply(
             .fetch_optional(&mut *tx)
             .await?;
         let stored = row.as_ref().and_then(|r| r.0.clone());
-        let outcome = classify(row.is_some(), stored.as_deref(), item);
+        let server_file = row.as_ref().is_some_and(|r| is_server_file(r.4.as_deref()));
+        let outcome = classify(row.is_some(), server_file, stored.as_deref(), item);
 
-        if let (Outcome::Change, Some((old_taken, old_year, old_month, old_offset))) =
+        if let (Outcome::Change, Some((old_taken, old_year, old_month, old_offset, _))) =
             (outcome, row.as_ref())
         {
             sqlx::query(
@@ -767,12 +797,12 @@ mod tests {
     fn classify_compares_instants_not_strings() {
         let it = valid("p1", DOWNLOADED, Some(EPOCH));
         assert_eq!(
-            classify(true, Some("1970-01-01T00:00:00Z"), &it),
+            classify(true, false, Some("1970-01-01T00:00:00Z"), &it),
             Outcome::Change
         );
-        assert_eq!(classify(true, Some(EPOCH), &it), Outcome::Change);
+        assert_eq!(classify(true, false, Some(EPOCH), &it), Outcome::Change);
         assert_eq!(
-            classify(true, Some("2024-03-05T10:20:30.400+00:00"), &it),
+            classify(true, false, Some("2024-03-05T10:20:30.400+00:00"), &it),
             Outcome::Unchanged
         );
     }
@@ -781,16 +811,27 @@ mod tests {
     fn classify_skips_a_row_changed_since_the_caller_looked() {
         let it = valid("p1", DOWNLOADED, Some(EPOCH));
         assert_eq!(
-            classify(true, Some("2025-01-01T00:00:00.000Z"), &it),
+            classify(true, false, Some("2025-01-01T00:00:00.000Z"), &it),
             Outcome::Stale
         );
-        assert_eq!(classify(true, None, &it), Outcome::Stale);
+        assert_eq!(classify(true, false, None, &it), Outcome::Stale);
         // Unparseable stored values can never be proven to match: fail closed.
-        assert_eq!(classify(true, Some("garbage"), &it), Outcome::Stale);
-        assert_eq!(classify(false, Some(EPOCH), &it), Outcome::NotFound);
+        assert_eq!(classify(true, false, Some("garbage"), &it), Outcome::Stale);
+        assert_eq!(classify(false, false, Some(EPOCH), &it), Outcome::NotFound);
         let null_it = valid("p1", DOWNLOADED, None);
-        assert_eq!(classify(true, None, &null_it), Outcome::Change);
-        assert_eq!(classify(true, Some(EPOCH), &null_it), Outcome::Stale);
+        assert_eq!(classify(true, false, None, &null_it), Outcome::Change);
+        assert_eq!(classify(true, false, Some(EPOCH), &null_it), Outcome::Stale);
+    }
+
+    #[test]
+    fn a_server_file_row_is_protected_whatever_was_expected() {
+        let it = valid("p1", DOWNLOADED, Some(EPOCH));
+        assert_eq!(classify(true, true, Some(EPOCH), &it), Outcome::Protected);
+        assert_eq!(classify(false, true, Some(EPOCH), &it), Outcome::NotFound);
+        assert!(is_server_file(Some("takeout/2019/IMG_1.jpg")));
+        assert!(!is_server_file(Some("")));
+        assert!(!is_server_file(Some("  ")));
+        assert!(!is_server_file(None));
     }
 
     // ── against a real migrated database ──────────────────────────
@@ -858,7 +899,9 @@ mod tests {
         .unwrap();
     }
 
-    async fn row(pool: &SqlitePool, id: &str) -> CurrentRow {
+    type Cols = (Option<String>, Option<i64>, Option<i64>, Option<String>);
+
+    async fn row(pool: &SqlitePool, id: &str) -> Cols {
         sqlx::query_as(
             "SELECT taken_at, photo_year, photo_month, taken_at_offset FROM photos WHERE id = ?1",
         )
@@ -965,6 +1008,32 @@ mod tests {
             0,
             "an all-skipped call leaves no batch"
         );
+        close(pool, path).await;
+    }
+
+    #[tokio::test]
+    async fn a_server_file_row_is_protected_and_untouched() {
+        let (pool, path) = pool("protected").await;
+        insert(&pool, "takeout", "u1", Some(EPOCH), None).await;
+        sqlx::query("UPDATE photos SET file_path = 'takeout/2019/IMG_1.jpg' WHERE id = 'takeout'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let before = row(&pool, "takeout").await;
+
+        let resp = apply(&pool, "u1", &[valid("takeout", DOWNLOADED, Some(EPOCH))])
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.counts,
+            Counts {
+                protected: 1,
+                ..Counts::default()
+            }
+        );
+        assert!(resp.batch_id.is_none());
+        assert_eq!(row(&pool, "takeout").await, before);
+        assert_eq!(repairs(&pool).await, 0);
         close(pool, path).await;
     }
 

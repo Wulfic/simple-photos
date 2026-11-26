@@ -13,6 +13,8 @@ owner can see, so every guard is pinned here over real HTTP:
   * an empty list, an epoch date and a missing `expect_taken_at` are refused;
   * another user's photo answers `not_found` and is untouched;
   * a row changed since the phone looked is skipped (`stale`), not overwritten;
+  * a server-file row (web upload / Takeout / scan) is `protected` — a phone can
+    hold its id after a content-hash dedup, but its date came from the file;
   * an applied batch moves the row in encrypted-sync AND in the delta feed;
   * undo (also dry-run by default) puts the original value back, once.
 """
@@ -91,7 +93,7 @@ def test_another_users_photo_is_not_found(user_client, second_user_client):
 
     r = _repair(user_client, [_item(theirs)], dry_run=False)
     assert r.status_code == 200, r.text
-    assert r.json()["counts"] == {"change": 0, "unchanged": 0, "stale": 0, "not_found": 1}
+    assert r.json()["counts"] == {"change": 0, "unchanged": 0, "stale": 0, "not_found": 1, "protected": 0}
     assert r.json()["batch_id"] is None
     assert _taken_at(second_user_client, theirs) == EPOCH
 
@@ -105,7 +107,7 @@ def test_apply_moves_the_row_skips_stale_and_undo_restores(user_client):
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["dry_run"] is False
-    assert body["counts"] == {"change": 1, "unchanged": 0, "stale": 1, "not_found": 0}
+    assert body["counts"] == {"change": 1, "unchanged": 0, "stale": 1, "not_found": 0, "protected": 0}
     batch = body["batch_id"]
     assert batch
 
@@ -148,3 +150,24 @@ def test_undo_refuses_an_empty_or_foreign_batch(user_client, second_user_client)
                                       json_data={"batch_id": batch, "dry_run": False})
     assert foreign.status_code == 404
     assert _taken_at(user_client, pid) == LANDED
+
+
+def test_a_server_file_row_is_protected(user_client):
+    """A web upload stores a real `file_path`; its date is the server's to keep."""
+    up = user_client.upload_photo(filename="server_side.jpg")
+    pid = up["photo_id"]
+    assert up["file_path"], up
+
+    def stored():
+        # Not via encrypted-sync: an unencrypted upload may not be in that feed yet.
+        r = user_client.get(f"/api/photos/{pid}/metadata/full")
+        assert r.status_code == 200, r.text
+        return r.json()["taken_at"]
+
+    before = stored()
+
+    r = _repair(user_client, [_item(pid, expect=before)], dry_run=False)
+    assert r.status_code == 200, r.text
+    assert r.json()["counts"]["protected"] == 1, r.json()
+    assert r.json()["batch_id"] is None
+    assert stored() == before
