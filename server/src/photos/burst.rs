@@ -162,7 +162,7 @@ async fn flush_group(
     if group.len() >= MIN_BURST_SIZE {
         let burst_id = format!("burst-{}", uuid::Uuid::new_v4());
 
-        let mut tx = pool.begin().await?;
+        let mut tx = crate::db::begin_write(pool).await?;
         for photo_id in group.iter() {
             sqlx::query(
                 "UPDATE photos SET burst_id = ?1, photo_subtype = 'burst' \

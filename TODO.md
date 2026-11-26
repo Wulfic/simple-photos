@@ -178,13 +178,48 @@ device's media files are never touched).
       Escape it acts on. RED in the browser on the old Modal; 3 unit tests. Also fixes the same
       shape on `LeavePrompt` / `DownloadChoiceModal` over the viewer (not browser-verified).
       Web 368/368 + clean `tsc`.
-- [ ] **F8 server (found 2026-11-25, PRE-EXISTING)** `DELETE /api/photos/:id` returns 500
+- [x] **F8 DONE** — see "F8 design". Full E2E (minus 09/10) diffed against the SAME command on
+      pre-F8 `02521bd`: **0 new failures**; F8 fixes test_77 ×4 + test_17 trash-restore 500.
+      Remaining 54 failed / 59 errors are identical on both binaries (pre-existing; 44 errors =
+      tests opening the SQLCipher DB with plain `sqlite3`).
+- [x] **F8 server (found 2026-11-25, PRE-EXISTING)** `DELETE /api/photos/:id` returns 500
       `database is locked` (SQLITE_BUSY 5 / BUSY_SNAPSHOT 517) when it races the `[SERVER_MIG]`
       background encrypt of the same photo. `soft_delete_photo` (`trash/operations.rs`) opens a
       DEFERRED txn, reads, then writes — a write committed in between makes the read→write
       upgrade fail instantly; `busy_timeout` does not retry 517. test_77 fails 1–4 of 4 params
       per run, **identically on `a5b9cbc` without F1**. Likely fix: `BEGIN IMMEDIATE` for
       read-then-write txns. Audit how many other handlers share the shape before fixing one.
+
+### F8 design (decided 2026-11-25)
+- **Audit:** 24 `pool.begin()` sites in 16 files. All are on the WRITE pool (no txn function
+  is ever handed `read_pool`), none nested (no savepoints), and every one does its file I/O
+  *before* `begin` (blob writes, encrypt) — orphan_thumbs' rename-in-txn is deliberate.
+- **Choice: blanket.** `db::begin_write(&pool)` = `pool.begin_with("BEGIN IMMEDIATE")`; all 24
+  sites call it. SQLite has one writer regardless, so DEFERRED buys nothing on the write pool
+  and makes every read→write txn a latent 517 (`busy_timeout` retries a busy BEGIN IMMEDIATE,
+  never a stale-snapshot upgrade). Rejected: fixing only `soft_delete_photo` — leaves 23
+  latent copies and the next new txn defaults to DEFERRED again.
+- **Guard:** a source-scan unit test fails on any bare `.begin()` under `src/` (same idea as
+  F1's schema-enumeration test), so a new txn can't silently reintroduce DEFERRED.
+- **Tests:** file-backed WAL DB, two connections, deterministic interleave: DEFERRED read →
+  other conn commits a write → upgrade fails with extended code 517 (documents the trap);
+  same interleave via `begin_write` → both commit. Reverting `begin_write` to `begin()` turns
+  it red. E2E: test_77 ×4 runs green (was 1–4/4 params red per run).
+- **Not doing:** touching autocommit single statements (no upgrade window); changing
+  `busy_timeout`; moving work out of txns.
+- Rollback: `git revert` — no schema or API change.
+- Then (owner, 2026-11-25): **push dev + deploy CT132**, verify the deployed commit, run F1
+  `orphan-thumbnails` with `apply:false` only.
+
+- [ ] **F9 server (found 2026-11-25 by F8's full E2E, PRE-EXISTING)** Backup sync never
+      reaches `success` once an **encrypted Save Copy** exists. Such a copy is stored with
+      `photos.file_path = ''` (bytes live only in its encrypted blob, `save_copy.rs`), but the
+      photo phase of `sync_engine` reads `file_path` from disk → `read error … os error 3`
+      every cycle → status `partial` forever. `wait_for_sync` (tests/helpers.py) only accepts
+      `success|error|completed`, so a `partial` run hangs 120 s per test instead of failing fast.
+      Repro: `pytest test_01..test_09 -x` → `test_sync_creates_user_on_backup` times out;
+      test_09 alone is 42/42. **Identical on `02521bd` (pre-F8)** — 174 passed / 1 failed both.
+      Full-suite cost today: 47 failed + 3 errors in test_09/test_10, 1h37m.
 
 ### Owner answers (2026-11-25, session start)
 - **No deploy this session** — code + tests only. CT132 and the phone stay as they are.

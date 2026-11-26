@@ -36,7 +36,7 @@ pub async fn backup_sync_secure_galleries(
         .cloned()
         .unwrap_or_default();
 
-    let mut tx = state.pool.begin().await?;
+    let mut tx = crate::db::begin_write(&state.pool).await?;
 
     // Upsert galleries
     let mut gallery_ids = std::collections::HashSet::new();

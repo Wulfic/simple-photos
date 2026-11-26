@@ -284,6 +284,27 @@ async fn migrate_plaintext_to_encrypted(path: &Path, db_key: &str) -> anyhow::Re
     Ok(())
 }
 
+/// Begin a write transaction with `BEGIN IMMEDIATE`. **Every transaction on
+/// the write pool must start here, never with `pool.begin()`.**
+///
+/// `pool.begin()` issues a DEFERRED `BEGIN`: the txn takes a read snapshot at
+/// its first SELECT and only asks for the write lock at its first write. If
+/// another connection commits in between, that upgrade fails *instantly* with
+/// `SQLITE_BUSY_SNAPSHOT` (517) — `busy_timeout` never retries it, because
+/// waiting cannot refresh a stale snapshot. That is how a photo delete lost to
+/// the background encrypt and answered 500 (F8).
+///
+/// `BEGIN IMMEDIATE` takes the write lock up front, so a contended begin waits
+/// on `busy_timeout` like any other writer and the snapshot can't go stale.
+/// SQLite admits one writer at a time anyway, so this costs no concurrency on
+/// the write pool. Do file I/O *before* calling this — the lock is held from
+/// here to commit. `begin_write_is_the_only_way_to_begin` enforces the rule.
+pub async fn begin_write(
+    pool: &SqlitePool,
+) -> Result<sqlx::Transaction<'static, sqlx::Sqlite>, sqlx::Error> {
+    pool.begin_with("BEGIN IMMEDIATE").await
+}
+
 /// Build a sibling path by appending `suffix` to the full filename.
 fn sibling(path: &Path, suffix: &str) -> PathBuf {
     let mut s = path.as_os_str().to_owned();
@@ -454,5 +475,183 @@ mod tests {
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(&bak);
+    }
+
+    // ── F8: write transactions must take the write lock at BEGIN ───────────
+
+    /// A file-backed WAL pool with two connections (WAL needs a real file;
+    /// `:memory:` has no second connection to race against) holding one row
+    /// `t(id=1, n=0)`.
+    async fn wal_pool(tag: &str) -> (SqlitePool, PathBuf) {
+        let path = temp_db(tag);
+        let opts = SqliteConnectOptions::from_str(path.to_str().unwrap())
+            .unwrap()
+            .create_if_missing(true)
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+            .busy_timeout(std::time::Duration::from_secs(5));
+        let pool = SqlitePoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE t(id INTEGER PRIMARY KEY, n INTEGER NOT NULL)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO t(id, n) VALUES (1, 0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        (pool, path)
+    }
+
+    async fn drop_wal_pool(pool: SqlitePool, path: PathBuf) {
+        pool.close().await;
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(sibling(&path, suffix));
+        }
+    }
+
+    /// Documents the trap `begin_write` exists for: a DEFERRED txn that read
+    /// before another connection committed cannot write — instantly, with
+    /// 517, despite a 5 s `busy_timeout`.
+    #[tokio::test]
+    async fn deferred_read_then_write_fails_with_busy_snapshot() {
+        let (pool, path) = wal_pool("deferred517").await;
+
+        // Exactly what `pool.begin()` sends.
+        let mut tx = pool.begin_with("BEGIN DEFERRED").await.unwrap();
+        let (n,): (i64,) = sqlx::query_as("SELECT n FROM t WHERE id = 1")
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+
+        // Another writer commits while `tx` holds only its read snapshot.
+        sqlx::query("UPDATE t SET n = n + 1 WHERE id = 1")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let started = std::time::Instant::now();
+        let err = sqlx::query("UPDATE t SET n = ?1 WHERE id = 1")
+            .bind(n + 100)
+            .execute(&mut *tx)
+            .await
+            .expect_err("a stale DEFERRED snapshot must not be able to write");
+        let code = err
+            .as_database_error()
+            .and_then(|e| e.code())
+            .map(|c| c.into_owned());
+        assert_eq!(
+            code.as_deref(),
+            Some("517"),
+            "expected SQLITE_BUSY_SNAPSHOT, got {err}"
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "517 is not retried by busy_timeout — it fails at once"
+        );
+
+        drop(tx);
+        drop_wal_pool(pool, path).await;
+    }
+
+    /// The same interleave through `begin_write`: the second writer waits for
+    /// the lock instead of slipping a commit under the snapshot, and both
+    /// writes land in order. Reverting `begin_write` to `pool.begin()` lets
+    /// the second writer commit first (the "must wait" assert) and the first
+    /// one's write then fails with 517.
+    #[tokio::test]
+    async fn begin_write_serialises_read_then_write() {
+        let (pool, path) = wal_pool("immediate").await;
+
+        let mut tx = begin_write(&pool).await.unwrap();
+        let (n,): (i64,) = sqlx::query_as("SELECT n FROM t WHERE id = 1")
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+
+        let other = {
+            let pool = pool.clone();
+            tokio::spawn(async move {
+                sqlx::query("UPDATE t SET n = n + 1 WHERE id = 1")
+                    .execute(&pool)
+                    .await
+                    .map(|_| ())
+            })
+        };
+        // Give the other writer ample time; it must still be waiting on the lock.
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        assert!(
+            !other.is_finished(),
+            "a concurrent writer must wait for the IMMEDIATE txn, not commit under it"
+        );
+
+        sqlx::query("UPDATE t SET n = ?1 WHERE id = 1")
+            .bind(n + 100)
+            .execute(&mut *tx)
+            .await
+            .expect("the IMMEDIATE txn's read→write must not fail");
+        tx.commit().await.unwrap();
+
+        other
+            .await
+            .unwrap()
+            .expect("the waiting writer proceeds after commit");
+        let (final_n,): (i64,) = sqlx::query_as("SELECT n FROM t WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            final_n, 101,
+            "first txn wrote 0+100, then the waiter added 1"
+        );
+
+        drop_wal_pool(pool, path).await;
+    }
+
+    /// Policy guard: no source file begins a transaction except through
+    /// `begin_write`. A bare `.begin()` is a DEFERRED txn — the F8 bug shape.
+    #[test]
+    fn begin_write_is_the_only_way_to_begin() {
+        fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let p = entry.unwrap().path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else if p.extension().is_some_and(|e| e == "rs") {
+                    out.push(p);
+                }
+            }
+        }
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        walk(&src, &mut files);
+        assert!(
+            files.len() > 50,
+            "walked {} files — wrong root?",
+            files.len()
+        );
+
+        // Split so this test's own source doesn't match itself.
+        let bare_begin = [".begin", "()"].concat();
+        let begin_with = [".begin", "_with("].concat();
+        let mut offenders = Vec::new();
+        for f in &files {
+            let text = std::fs::read_to_string(f).unwrap();
+            for (i, line) in text.lines().enumerate() {
+                let code = line.split("//").next().unwrap_or("");
+                // Multi-line `state\n    .pool\n    .begin()` still has `.begin()`.
+                let is_db_rs = f.ends_with("db.rs");
+                if code.contains(&bare_begin) || (!is_db_rs && code.contains(&begin_with)) {
+                    offenders.push(format!("{}:{}: {}", f.display(), i + 1, line.trim()));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "use crate::db::begin_write(&pool), not a DEFERRED begin:\n{}",
+            offenders.join("\n")
+        );
     }
 }

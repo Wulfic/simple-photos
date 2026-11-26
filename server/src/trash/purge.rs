@@ -13,7 +13,7 @@ pub async fn purge_expired_trash(pool: &sqlx::SqlitePool, storage_root: &std::pa
     let now = Utc::now().to_rfc3339();
 
     // Begin transaction — ref-count checks + batch DELETE must be atomic
-    let mut tx = match pool.begin().await {
+    let mut tx = match crate::db::begin_write(pool).await {
         Ok(tx) => tx,
         Err(e) => {
             tracing::error!("Failed to begin transaction for trash purge: {}", e);

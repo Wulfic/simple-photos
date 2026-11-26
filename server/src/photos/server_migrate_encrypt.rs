@@ -303,7 +303,9 @@ pub async fn encrypt_one_photo(
     let now = Utc::now().to_rfc3339();
 
     // Atomic transaction: INSERT blobs + UPDATE photos
-    let mut tx = pool.begin().await.map_err(|e| format!("Begin tx: {e}"))?;
+    let mut tx = crate::db::begin_write(pool)
+        .await
+        .map_err(|e| format!("Begin tx: {e}"))?;
 
     if let Some((ref tid, ref ttype, tsize, ref thash, ref ttime, ref tpath)) = thumb_insert_params
     {
@@ -526,7 +528,9 @@ async fn encrypt_one_photo_chunked(
     let blob_client_hash = hex::encode(result.blob_sha256);
     let now = Utc::now().to_rfc3339();
 
-    let mut tx = pool.begin().await.map_err(|e| format!("Begin tx: {e}"))?;
+    let mut tx = crate::db::begin_write(pool)
+        .await
+        .map_err(|e| format!("Begin tx: {e}"))?;
 
     if let Some((ref tid, ref ttype, tsize, ref thash, ref ttime, ref tpath)) = thumb_insert_params
     {

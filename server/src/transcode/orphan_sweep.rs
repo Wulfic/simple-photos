@@ -133,7 +133,7 @@ async fn reclaim_one(
         crate::blobs::storage::delete_blob(storage_root, &storage_path).await?;
     }
 
-    let mut tx = pool.begin().await?;
+    let mut tx = crate::db::begin_write(pool).await?;
     sqlx::query("DELETE FROM blobs WHERE id = ?")
         .bind(blob_id)
         .execute(&mut *tx)

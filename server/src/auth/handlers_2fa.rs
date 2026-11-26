@@ -84,7 +84,7 @@ pub async fn setup_2fa(
     // Wrap secret + backup-code writes in a transaction so a crash between
     // DELETE and INSERTs can't leave the user with a TOTP secret but no
     // backup codes.
-    let mut tx = state.pool.begin().await?;
+    let mut tx = crate::db::begin_write(&state.pool).await?;
 
     sqlx::query("UPDATE users SET totp_secret = ? WHERE id = ?")
         .bind(&secret_b32)
@@ -220,7 +220,7 @@ pub async fn disable_2fa(
 
     // Transaction: disable 2FA flag + delete backup codes atomically so a
     // crash can't leave orphaned codes in the table.
-    let mut tx = state.pool.begin().await?;
+    let mut tx = crate::db::begin_write(&state.pool).await?;
 
     sqlx::query("UPDATE users SET totp_enabled = 0, totp_secret = NULL WHERE id = ?")
         .bind(&auth.user_id)

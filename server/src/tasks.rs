@@ -112,7 +112,7 @@ fn spawn_housekeeping(pool: SqlitePool) {
             let audit_cutoff = (chrono::Utc::now() - chrono::Duration::days(30)).to_rfc3339();
             let log_cutoff = (chrono::Utc::now() - chrono::Duration::days(14)).to_rfc3339();
 
-            match pool.begin().await {
+            match crate::db::begin_write(&pool).await {
                 Ok(mut tx) => {
                     // 1. Expired / revoked refresh tokens
                     match sqlx::query(

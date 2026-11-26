@@ -70,7 +70,7 @@ pub async fn change_password(
     // Begin transaction — UPDATE password + revoke tokens must be atomic.
     // If the password is updated but token revocation fails, old sessions
     // continue using the old password's tokens with no forced re-auth.
-    let mut tx = state.pool.begin().await?;
+    let mut tx = crate::db::begin_write(&state.pool).await?;
 
     sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
         .bind(&new_hash)

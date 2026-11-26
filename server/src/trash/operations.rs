@@ -33,7 +33,7 @@ pub async fn soft_delete_photo(
         return Err(AppError::BadRequest("Invalid photo ID format".into()));
     }
 
-    let mut tx = state.pool.begin().await?;
+    let mut tx = crate::db::begin_write(&state.pool).await?;
 
     // Fetch the photo row in two queries to stay within SQLx tuple size limits
     let photo_core = sqlx::query_as::<
@@ -185,7 +185,7 @@ pub async fn soft_delete_blob(
     let size_bytes = req.size_bytes.unwrap_or(0);
 
     // Begin transaction — INSERT trash + DELETE blob(s) must be atomic
-    let mut tx = state.pool.begin().await?;
+    let mut tx = crate::db::begin_write(&state.pool).await?;
 
     // Fetch the blob record (storage_path + hashes for preservation)
     let blob_row = sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
@@ -365,7 +365,7 @@ pub async fn restore_from_trash(
     Path(trash_id): Path<String>,
 ) -> Result<StatusCode, AppError> {
     // Begin transaction — all restore operations must be atomic
-    let mut tx = state.pool.begin().await?;
+    let mut tx = crate::db::begin_write(&state.pool).await?;
 
     // Fetch the trash item. On backup servers, admins can manage all content.
     let row = sqlx::query_as::<_, TrashBlobRow>(
@@ -599,7 +599,7 @@ pub async fn permanent_delete(
     Path(trash_id): Path<String>,
 ) -> Result<StatusCode, AppError> {
     // Begin transaction — ref-count check + DELETE must be atomic to prevent TOCTOU races
-    let mut tx = state.pool.begin().await?;
+    let mut tx = crate::db::begin_write(&state.pool).await?;
 
     let item: Option<(String, Option<String>, Option<String>)> = sqlx::query_as(
         "SELECT file_path, thumb_path, original_file_path \
@@ -721,7 +721,7 @@ pub async fn empty_trash(
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, AppError> {
     // Begin transaction — ref-count checks + batch DELETE must be atomic
-    let mut tx = state.pool.begin().await?;
+    let mut tx = crate::db::begin_write(&state.pool).await?;
 
     // Fetch all trash items for file cleanup
     let items: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(

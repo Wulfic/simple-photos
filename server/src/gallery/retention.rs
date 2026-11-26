@@ -138,7 +138,7 @@ pub async fn prune_change_log(
     retention_days: i64,
 ) -> Result<PruneOutcome, AppError> {
     let modifier = format!("-{retention_days} days");
-    let mut tx = pool.begin().await?;
+    let mut tx = crate::db::begin_write(pool).await?;
 
     // How far this prune reaches, measured BEFORE the delete and with the
     // identical predicate. Zero when there is nothing to take.

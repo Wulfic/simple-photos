@@ -335,7 +335,7 @@ async fn backfill_geo_locations(
         // N/N because all writes were invisible to readers until the
         // single end-of-batch commit.
         const COMMIT_CHUNK: usize = 10;
-        let mut tx = pool.begin().await?;
+        let mut tx = crate::db::begin_write(pool).await?;
         let mut in_chunk = 0usize;
         for (i, (photo_id, _, _)) in rows.iter().enumerate() {
             match locations.get(i) {
@@ -368,7 +368,7 @@ async fn backfill_geo_locations(
             in_chunk += 1;
             if in_chunk >= COMMIT_CHUNK {
                 tx.commit().await?;
-                tx = pool.begin().await?;
+                tx = crate::db::begin_write(pool).await?;
                 in_chunk = 0;
             }
         }

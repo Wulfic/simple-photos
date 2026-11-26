@@ -488,7 +488,7 @@ async fn quarantine_one(
 
     // Row first, in one transaction that re-checks the whole predicate: a
     // reference (by id or by path) that appeared since the scan makes this a no-op.
-    let mut tx = pool.begin().await?;
+    let mut tx = crate::db::begin_write(pool).await?;
     let copied = sqlx::query(&format!(
         "INSERT INTO quarantined_blobs ({BLOB_COLUMNS}, run_id, quarantine_path, quarantined_at, reason) \
          SELECT {BLOB_COLUMNS}, ?2, ?3, ?4, 'orphan_thumbnail' FROM blobs \
@@ -549,7 +549,7 @@ async fn quarantine_one(
 /// Move a quarantined row back into `blobs`. Refuses to overwrite a live row,
 /// and then keeps the quarantine record: it is the only thing naming the file.
 async fn unquarantine_row(pool: &sqlx::SqlitePool, id: &str) -> Result<(), AppError> {
-    let mut tx = pool.begin().await?;
+    let mut tx = crate::db::begin_write(pool).await?;
     let inserted = sqlx::query(&format!(
         "INSERT INTO blobs ({BLOB_COLUMNS}) SELECT {BLOB_COLUMNS} FROM quarantined_blobs \
          WHERE id = ?1 AND NOT EXISTS (SELECT 1 FROM blobs WHERE id = ?1)"

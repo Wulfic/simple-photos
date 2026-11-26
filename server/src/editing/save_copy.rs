@@ -591,9 +591,7 @@ async fn encrypt_and_store_copy(
     let now = Utc::now().to_rfc3339();
 
     // Atomic transaction: INSERT blob rows + INSERT photos row
-    let mut tx = state
-        .pool
-        .begin()
+    let mut tx = crate::db::begin_write(&state.pool)
         .await
         .map_err(|e| AppError::Internal(format!("Begin tx: {e}")))?;
 

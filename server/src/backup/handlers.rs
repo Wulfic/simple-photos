@@ -142,7 +142,7 @@ pub async fn update_backup_server(
 
     // Transaction: apply all field updates atomically so a mid-request
     // failure can't leave the row in a half-updated state.
-    let mut tx = state.pool.begin().await?;
+    let mut tx = crate::db::begin_write(&state.pool).await?;
 
     if let Some(ref name) = safe_name {
         sqlx::query("UPDATE backup_servers SET name = ? WHERE id = ?")

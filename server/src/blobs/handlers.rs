@@ -441,7 +441,7 @@ pub async fn delete(
     storage::delete_blob(&storage_root, &storage_path).await?;
 
     // Wrap DB operations in a transaction for atomicity
-    let mut tx = state.pool.begin().await?;
+    let mut tx = crate::db::begin_write(&state.pool).await?;
 
     sqlx::query("DELETE FROM blobs WHERE id = ? AND user_id = ?")
         .bind(&blob_id)

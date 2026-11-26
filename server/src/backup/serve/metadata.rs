@@ -23,7 +23,7 @@ pub async fn backup_sync_metadata(
 ) -> Result<StatusCode, AppError> {
     validate_api_key(&state, &headers).await?;
 
-    let mut tx = state.pool.begin().await?;
+    let mut tx = crate::db::begin_write(&state.pool).await?;
 
     // ── edit_copies ──────────────────────────────────────────────────────
     let edit_copies = body
