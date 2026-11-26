@@ -947,6 +947,22 @@ connection cap; `/health` reads one atomic (no DB, no storage); storage is an SM
      S21+ after deploy is the first real run.
 4. Deploy (backup first) → owner runs the dry run on the S21+, sends the count → apply on OK.
 
+### Deploy 2026-11-26 #3 (P1a..P1c, `31429f5` → `2d006dc`, `-NoWipe -SkipAssets`)
+- Backup (verified: integrity ok, counts = live: 17,553 photos / 57,419 blobs / 10 refresh
+  tokens / migr 42 / **5,003 rows at 1970**): CT132 `/root/sp-deploy-backups/p1-20261126-075249/`
+  — keyed `sqlcipher_export` (read-only attach), old APK, `web-dist.tgz` (80 entries),
+  `SHA256SUMS`. Old image tagged `simple-photos-server:rollback-31429f5` (`20c02f16b6e5`).
+- Rollback (inside CT132): `git -C /opt/simple-photos reset --hard 31429f5`;
+  `docker tag simple-photos-server:rollback-31429f5 simple-photos-server:latest`;
+  in the instance dir `docker compose up -d --force-recreate --no-build`;
+  web: `rm -rf /opt/simple-photos/web/dist && tar -C /opt/simple-photos/web -xzf $BK/web-dist.tgz`;
+  APK: `cp $BK/simple-photos.apk /opt/simple-photos/downloads/`. Migr 043 is one new table
+  ⇒ the old binary runs on the new DB. DB restore only if corrupted (stop, move
+  `data/db/simple-photos.db*` aside, copy the backup in).
+- Applied date repairs (after the owner's OK): Settings → Photo dates → Undo last fix, or
+  `POST /api/photos/dates/repair/undo {batch_id, dry_run:false}` per batch (ids in the
+  server log line "date repair: applied").
+
 ### P1 NOT doing (and why)
 - No server-side guess (e.g. upload time) for rows the phone can't supply — a wrong date
   presented as right is worse than an obviously wrong one; owner can decide after the count.
