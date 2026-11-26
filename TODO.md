@@ -772,6 +772,21 @@ connection cap; `/health` reads one atomic (no DB, no storage); storage is an SM
 - Deploy: `-NoWipe -SkipAssets` after a verified DB backup (same procedure as 11-26).
 - Rollback: revert the N2a commit + the 11-26 image-tag procedure (no schema, no data).
 
+### N2a verified (2026-11-26, `af5ffca`)
+- 18 new unit tests (full suite 640/640); clippy `-D warnings` + fmt clean. Mutations bite:
+  dropping `size_hint` forwarding or the guard before the body ⇒ 2 inflight tests red.
+- E2E `test_103_watchdog_heartbeat` (main.rs wiring) green; regression set test_01/02/03/09/
+  12/23/91/93/102 = 202/202 with the tracker wrapping every body.
+
+### Deploy 2026-11-26 #2 (N2a, `a1e29c9` → `af5ffca`, `-NoWipe -SkipAssets -SkipAndroid -SkipWebBuild`)
+- Backup (verified: integrity ok, counts = live: 17,553 photos / 57,419 blobs / 8 refresh
+  tokens / migr 42): CT132 `/root/sp-deploy-backups/n2a-20261126-062900/` (keyed
+  `sqlcipher_export`, read-only attach; `SHA256SUMS`). Old image tagged
+  `simple-photos-server:rollback-a1e29c9` (`daf0b90dc824`). APK + web unchanged.
+- Rollback (inside CT132, instance dir): `git -C /opt/simple-photos reset --hard a1e29c9`;
+  `docker tag simple-photos-server:rollback-a1e29c9 simple-photos-server:latest`;
+  `docker compose up -d --force-recreate --no-build`. No schema change ⇒ no DB step.
+
 ### N2a NOT doing (and why)
 - Not fixing S1 yet (e.g. a send timeout) — suspicion ≠ finding; the watchdog measures it.
 - Not adding request/header timeouts or a connection cap — behaviour change before evidence.
