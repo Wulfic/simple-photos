@@ -697,6 +697,17 @@ about the device's library changed. So:
 - Not device-verified: needs the next real dead session on the S21+ (expected: Login with
   username filled, server kept, re-login does NOT re-encrypt).
 
+### Deploy 2026-11-26 (F2a..N1c, `5286392` → `a1e29c9`, `-NoWipe -SkipAssets`)
+- Backup (verified: integrity ok, counts = live: 17,553 photos / 57,418 blobs / 6 refresh
+  tokens / migr 39): CT132 `/root/sp-deploy-backups/n1-20261126-054303/` — keyed
+  `sqlcipher_export` of the live DB (read-only attach), old APK, `SHA256SUMS`.
+  Old image tagged `simple-photos-server:rollback-5286392` (`bdc0d563`).
+- Rollback (inside CT132, instance dir): `git -C /opt/simple-photos reset --hard 5286392`;
+  `docker tag simple-photos-server:rollback-5286392 simple-photos-server:latest`;
+  `docker compose up -d --force-recreate --no-build`. Migr 040–042 additive ⇒ old binary
+  runs on the new DB. DB restore only if corrupted: stop, move `data/db/simple-photos.db*`
+  aside, copy the backup in. APK: copy `$BK/simple-photos.apk` back to `downloads/`.
+
 ### N1 NOT doing (and why)
 - Not fixing N2 here — N1a makes the client survive N2; N2 is next.
 - Not changing the secure-gate 401 → 403 (S1 was refuted; separate, cosmetic).
