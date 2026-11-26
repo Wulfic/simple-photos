@@ -504,6 +504,18 @@ Owner answers (2026-11-25): CT132 logs + a DB **copy** may be read **read-only**
       item's blob is encrypted again on top of the per-photo encryption (blob header / size vs
       the source), per-tile request timing, and whether secure grids skip the virtualization
       / thumbnail cache the main grid has (#51). Measure before fixing.
+- [ ] **N4 Android re-login + re-enabling backup folders re-encrypts everything.** (owner
+      2026-11-26) After logging back in and turning the backup folders back on, the app runs
+      the whole encrypt+upload pass again. Likely mechanism (unverified): logout wipes Room
+      (`photoDao`/`blobQueueDao`/`backupFolderDao`) and the key, so the phone has no record
+      that a local file already has a server twin ⇒ encrypts it before asking the server.
+      Check: whether the server-hash lookup (`ServerHashLookup`, `BackupHashLookupWiringTest`)
+      runs BEFORE encryption on a fresh mirror; whether a dead session (N1c) can avoid the
+      wipe altogether. Measure on a re-login: files encrypted vs files already on server.
+- [ ] **N5 Android biometric prompt for the secure folder even with biometrics disabled.**
+      (owner 2026-11-26) Setting off ⇒ secure-folder unlock still prompts for biometrics.
+      Check: which pref the secure-unlock path reads vs. which one the settings toggle writes
+      (cf. `UnlockSessionTest`, memory "Biometric landscape").
 
 ### N1/N2 measured (2026-11-26 ~03:20Z, read-only: `docker logs`/`inspect` + a /tmp DB copy on CT132, box `5286392`)
 - **Server cannot invalidate a session on restart.** Access-token check is stateless (HS256
@@ -612,6 +624,31 @@ Root causes (all certain from code + the run above):
   the successor is USED" — "dead right after rotation" is exactly the N1 bug.
 - test_15 (7 red) is environmental: `os.chmod(dir, 0o000)` is a no-op on Windows.
 - Rollback: revert the N1a commit; migr 042 stays harmless (nullable, unread by old code).
+
+### N1b design (2026-11-26)
+Storm mechanism (from code): a failed refresh leaves `KEY_ACCESS_TOKEN` unchanged, so every
+queued 401 passes the "another request already refreshed" check and calls `/auth/refresh`
+itself. Fix: move the decision out of the `NetworkModule` lambda into a pure
+`data/remote/SessionRefresher` (token I/O, refresh call, clock injected ⇒ JVM-testable):
+1. Access token changed since this request was sent ⇒ retry with it (unchanged).
+2. Refresh token == the one that got a **401** from `/auth/refresh` ⇒ `null`, no network.
+   401 is the only definitive answer (server: NotFound/Theft both 401). Fires
+   `onSessionDead` once per dead token (N1c hooks it).
+3. Any other failure (429, 5xx, IO, parse) ⇒ tokens kept, cooldown (Retry-After if present,
+   clamped 5..60 s, else 10 s); 401s inside the cooldown ⇒ `null`, no network. Also stops a
+   refresh-timeout × N queued requests from blocking OkHttp threads serially.
+- Tests (`SessionRefresherTest`, RED first against a copy of today's logic): 50 401s after
+  a definitive 401 ⇒ exactly 1 refresh call; 429 ⇒ tokens unchanged + 1 call in cooldown,
+  a 2nd call after it; success ⇒ both tokens saved; concurrent 401s ⇒ 1 call.
+- Rollback: revert the commit (no data or schema).
+
+### N1b verified (2026-11-26)
+- [x] `data/remote/SessionRefresher` + `NetworkModule` wiring (refresh client built once).
+- RED with today's logic moved verbatim into the class: 3/9 failed — 50 refresh calls for 50
+  401s after a definitive 401 / a 429, 20 for 20 after an IOException (expected 1 each).
+- GREEN: `SessionRefresherTest` 9/9; full Android unit suite 338/338.
+- Dead-token memory is in-process only: an app restart costs one more refresh call (fine).
+- `onSessionDead` fires under the lock ⇒ N1c must only post a signal from it.
 
 ### N1 NOT doing (and why)
 - Not fixing N2 here — N1a makes the client survive N2; N2 is next.

@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import com.simplephotos.data.remote.ApiService
 import com.simplephotos.data.remote.GalleryTokenHolder
+import com.simplephotos.data.remote.SessionRefresher
 import com.simplephotos.data.remote.dto.RefreshRequest
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_ACCESS_TOKEN
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_REFRESH_TOKEN
@@ -77,71 +78,52 @@ object NetworkModule {
             chain.proceed(builder.build())
         }
 
-        // Serialize refresh so a burst of concurrent 401s (e.g. a thumbnail
-        // grid loading) doesn't each replay the refresh token. The server
-        // rotates + revokes refresh tokens on use, so a second concurrent
-        // replay would look like token theft and revoke EVERY session.
-        val refreshLock = Any()
+        // A separate client for /auth/refresh: it must not go through the
+        // authenticator below (a 401 there would recurse), and a short timeout
+        // keeps a dead server from holding the refresh lock for two minutes.
+        val refreshClient = OkHttpClient.Builder()
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(10, TimeUnit.SECONDS)
+            .build()
 
-        // Authenticator: 401 → refresh token → retry once
-        val tokenAuthenticator = Authenticator { _, response ->
-            // Only retry once — check if we already tried refreshing
-            if (response.request.header("X-Retry-After-Refresh") != null) return@Authenticator null
-
-            synchronized(refreshLock) {
+        // Policy (single-flight, dead-token memory, transient cooldown) lives in
+        // SessionRefresher so it is JVM-tested; this is only the I/O.
+        val refresher = SessionRefresher(
+            readTokens = {
                 val prefs = runBlocking { dataStore.data.first() }
-                val currentAccess = prefs[KEY_ACCESS_TOKEN]
-                val requestAccess = response.request.header("Authorization")
-                    ?.removePrefix("Bearer ")?.trim()
-
-                // Another request already refreshed while we waited on the lock.
-                // Just retry with the fresh access token — don't refresh again
-                // (that would replay the now-revoked refresh token).
-                if (currentAccess != null && currentAccess != requestAccess) {
-                    return@synchronized response.request.newBuilder()
-                        .header("Authorization", "Bearer $currentAccess")
-                        .header("X-Retry-After-Refresh", "true")
-                        .build()
-                }
-
-                val refreshToken = prefs[KEY_REFRESH_TOKEN] ?: return@synchronized null
+                SessionRefresher.Tokens(prefs[KEY_ACCESS_TOKEN], prefs[KEY_REFRESH_TOKEN])
+            },
+            callRefresh = { refreshToken ->
+                val prefs = runBlocking { dataStore.data.first() }
                 val serverUrl = (prefs[KEY_SERVER_URL] ?: "http://localhost:8080").trimEnd('/') + "/"
-
-                try {
-                    // Build a temporary Retrofit just for the refresh call
-                    val tempClient = OkHttpClient.Builder()
-                        .connectTimeout(10, TimeUnit.SECONDS)
-                        .readTimeout(10, TimeUnit.SECONDS)
-                        .build()
-                    val tempRetrofit = Retrofit.Builder()
-                        .baseUrl(serverUrl)
-                        .client(tempClient)
-                        .addConverterFactory(GsonConverterFactory.create())
-                        .build()
-                    val tempApi = tempRetrofit.create(ApiService::class.java)
-
-                    val refreshResponse = runBlocking {
-                        tempApi.refresh(RefreshRequest(refreshToken))
+                val api = Retrofit.Builder()
+                    .baseUrl(serverUrl)
+                    .client(refreshClient)
+                    .addConverterFactory(GsonConverterFactory.create())
+                    .build()
+                    .create(ApiService::class.java)
+                runBlocking { api.refresh(RefreshRequest(refreshToken)) }
+            },
+            saveTokens = { access, refresh ->
+                runBlocking {
+                    dataStore.edit {
+                        it[KEY_ACCESS_TOKEN] = access
+                        refresh?.let { rt -> it[KEY_REFRESH_TOKEN] = rt }
                     }
-
-                    // Persist BOTH rotated tokens. Keeping the old refresh token
-                    // would make the next refresh replay a revoked token and the
-                    // server would revoke every session for this user.
-                    runBlocking {
-                        dataStore.edit {
-                            it[KEY_ACCESS_TOKEN] = refreshResponse.accessToken
-                            refreshResponse.refreshToken?.let { rt -> it[KEY_REFRESH_TOKEN] = rt }
-                        }
-                    }
-
-                    // Retry original request with new token
-                    response.request.newBuilder()
-                        .header("Authorization", "Bearer ${refreshResponse.accessToken}")
-                        .header("X-Retry-After-Refresh", "true")
-                        .build()
-                } catch (_: Exception) {
-                    null // Refresh failed — let the 401 propagate
                 }
+            },
+        )
+
+        // Authenticator: 401 → (maybe) refresh → retry once
+        val tokenAuthenticator = Authenticator { _, response ->
+            if (response.request.header("X-Retry-After-Refresh") != null) return@Authenticator null
+            val requestAccess = response.request.header("Authorization")
+                ?.removePrefix("Bearer ")?.trim()
+            refresher.authenticate(requestAccess)?.let { access ->
+                response.request.newBuilder()
+                    .header("Authorization", "Bearer $access")
+                    .header("X-Retry-After-Refresh", "true")
+                    .build()
             }
         }
 
