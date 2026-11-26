@@ -225,14 +225,14 @@ device's media files are never touched).
       4/4. Server 605/605, clippy `-D warnings` + fmt clean. E2E test_01–10 + test_100 on one
       session: **241 passed / 1 failed / 6 errors in 9m55s** (was 47 failed + 3 errors in
       test_09/10 alone, 1h37m). test_09 fully green. The 7 remaining reds → F12.
-- [ ] **F12 tests (found by F9's run, PRE-EXISTING, masked by the cascade)** test_10
+- [x] **F12 tests (found by F9's run, PRE-EXISTING, masked by the cascade)** test_10
       `TestRecoverySecureGallery` (6 setup errors) + `TestRecoveryPresyncedGallery::
       test_presynced_gallery_decryptable_after_recovery`: `download_blob` of a secure-gallery
       blob → **401 on the primary, before any sync/recovery** (`test_10:559`, `:1065`). Same
       shape as test_06 before `e44ad10`: no `x-gallery-token` since the B6 gate (`8a1d736`). Fix
       the tests to present the token + assert the gate still refuses without it — then see what
       the recovery assertions behind them say (they may be F10).
-- [ ] **F10 server (found 2026-11-25 reading for F9, PRE-EXISTING since `b5d722d` 2026-04-05) —
+- [x] **F10 server (found 2026-11-25 reading for F9, PRE-EXISTING since `b5d722d` 2026-04-05) —
       UNVERIFIED until RED.** `recovery_engine.rs` ~L254: the recovery `INSERT … SELECT` string
       is spliced into itself (`…AND id != ?1sh, crop_metadata) SELECT …`) → SQLite parse error at
       runtime → every recovered photo is logged + skipped. Suspicions to prove/disprove:
@@ -241,6 +241,25 @@ device's media files are never touched).
       just wrote — if a local row already owns that path (the autoscan case the comment
       describes), that deletes a live row's file; (c) recovery `download`s every missing row,
       so `file_path=''` rows (Android) can't be recovered by pull at all.
+- **F10 re-diagnosed (2026-11-25, next session):** `run_recovery` + `recover_users` have **no
+  callers** (`#[allow(dead_code)]`). The live recovery is push-based: `recover_from_backup` →
+  the backup runs `run_sync(is_recovery=true)` against the new primary. So (a)/(b) can't
+  happen; the spliced SQL never ran. **Choice:** delete the dead pair (~310 lines), keep
+  `update_recovery_log`; module doc says what was there + `git show 4a8d15b:…` to recover it.
+  Rejected: fixing the SQL — repairs code nothing runs, and its write-before-check +
+  `remove_file` shape would come back with it. Suspicion (c) recast for the LIVE path: does a
+  `file_path=''` row come back through recovery (backup → receive-photo-rows on the new
+  primary)? Untested → `test_100::TestEncryptedOnlyRowsSurviveRecovery` (row + blob ids +
+  byte-identical media/thumb on a fresh recovered primary).
+- **F12 fix:** the 4 secure `download_blob` calls in test_10 pass the token; the 3 on the
+  RECOVERED server also assert a token-less download is 401 (a recovery that lost gallery
+  membership would silently un-gate the blob).
+- **F12/F10 verified (2026-11-25):** test_10 **30/30** (was 7 red) + test_100 **5/5** on one
+  binary, 35/35. RED: the recovery test fails alone ("did not come back") with recovery's row
+  push mutated out; the 4 primary→backup tests stay green. Server 605/605, clippy + fmt clean.
+  ⚠ First mutation ("drop rows when `backup_mode`='backup'") stayed GREEN — the E2E backup
+  server never sets backup mode (API key only). A mutation that doesn't bite is a broken probe
+  until shown otherwise.
 - [ ] **F11 (suspicion, unverified)** `soft_delete_photo` does not copy `encrypted_blob_id` /
       `encrypted_thumb_blob_id` into `trash_items`. Does restoring a trashed Android
       (`register-encrypted`) photo produce a row with no file AND no blob id?
@@ -388,7 +407,32 @@ quarantine dir + restore = move back; the endpoint is inert unless called with `
       once the initial scan drains: Room rows ≈ server count; no secured photo in the main
       grid; delete-album dialog; "Move here" pulls a whole burst.
 
-## 4. Verification debt carried from the old todo.md (still open)
+## 4. New issues reported 2026-11-25 (owner) — investigate after F12/F10/F11
+
+Owner answers (2026-11-25): CT132 logs + a DB **copy** may be read **read-only** for these
+(no restart, no writes, no deploy). Order: oldest item first, so these queue behind §2.
+
+- [ ] **N1 Android must log out + back in after every server restart.** Android only (web is
+      fine). JWT secret comes from `config.toml` (stable), so the access token itself should
+      survive a restart — suspects to check, in order: refresh-token storage/rotation on the
+      server (in-memory? rotated on restart?), Android's refresh path treating a connection
+      error during the restart window as "logged out" (cf. memory "Android refresh rot":
+      `RefreshResponse` lacks `refresh_token` ⇒ wipes sessions), and the beacon/discovery
+      re-resolving the server URL. Evidence first: `/api/admin/client-logs` around a known
+      restart time.
+- [ ] **N2 Server stops answering until restarted; the VM is fine.** Shape (owner): the page
+      **won't load at all** (connection refused/timeout — looks dead, not a hung API). So: does
+      the process exit (container restart policy? OOM kill?), or does it stay up with a
+      wedged listener (runtime threads all blocked on sync I/O / ffmpeg / a DB lock)? Evidence
+      first: container state + exit code + restart count, `docker logs` tail before the last
+      restart, kernel OOM messages, memory/FD counts of the live process.
+- [ ] **N3 Secure section loads slowly while scrolling — owner suspects double encryption.**
+      Check: what a secure tile actually fetches (full blob vs thumbnail?), whether a secure
+      item's blob is encrypted again on top of the per-photo encryption (blob header / size vs
+      the source), per-tile request timing, and whether secure grids skip the virtualization
+      / thumbnail cache the main grid has (#51). Measure before fixing.
+
+## 5. Verification debt carried from the old todo.md (still open)
 Deploy-side (CT132): A1/#42 badge counts, A2/#38 migration 033 backfill, B2/#40 3-strike
 cap + ETA calibration readout, B3/#46 codec backfill drains to zero, B4/#49 rung backfill.
 Device (S21+): B4 quality swap, E1/#43, F1/#41, D2/#50, E3, E3a, Z1e, B5.
