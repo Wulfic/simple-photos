@@ -260,9 +260,82 @@ device's media files are never touched).
   ⚠ First mutation ("drop rows when `backup_mode`='backup'") stayed GREEN — the E2E backup
   server never sets backup mode (API key only). A mutation that doesn't bite is a broken probe
   until shown otherwise.
-- [ ] **F11 (suspicion, unverified)** `soft_delete_photo` does not copy `encrypted_blob_id` /
-      `encrypted_thumb_blob_id` into `trash_items`. Does restoring a trashed Android
-      (`register-encrypted`) photo produce a row with no file AND no blob id?
+- [x] **F11 — restore returns bytes, not the photo.** Design + verification below.
+
+### F11 measured (2026-11-25, RED on `8b7701f`, `tests/test_101_trash_restore_registered.py`)
+- **Filed mechanism was the minor half.** Both clients trash via `POST /blobs/:id/trash`
+  (`soft_delete_blob`), which DELETEs the `photos` row; restore re-inserts only `blobs` rows.
+  RED: a restored registered photo is **absent from `/photos/encrypted-sync`** — every client
+  that syncs has lost it; web only looks right on the trashing device (Dexie trash copy).
+- Filed path `DELETE /photos/:id` (`soft_delete_photo`, **no client caller**): row comes back
+  with `encrypted_blob_id = NULL` (RED, exactly as filed).
+- `foreign_keys` is ON ⇒ deleting the row CASCADEs `edit_copies`, `photo_source_albums`,
+  face/object/pet detections, `video_renditions`. RED: edit copy gone after restore.
+  `photo_tags` has no FK ⇒ survives (GREEN, kept as a guard).
+- Rendition-row deletes queue their blobs to `orphaned_rendition_blobs` (sweeper deletes them)
+  ⇒ renditions can't be snapshotted. `ai_processed_photos` has no FK ⇒ survives trash, so a
+  restored row would read as "AI done" with its detections gone.
+- `photo_change_log` is trigger-fed on INSERT ⇒ a restored row reaches delta sync for free.
+- `(user_id, photo_hash)` and non-empty `file_path` are UNIQUE ⇒ a restore can collide.
+
+### F11 design (decided 2026-11-25)
+- **Choice: snapshot-and-restore.** New table `trash_photo_snapshots(trash_id → trash_items ON
+  DELETE CASCADE, photo_id, photo_row JSON, children JSON, PK(trash_id, photo_id))`, migration
+  `041`. Both trash paths capture every `photos` row they delete (blob path: all rows with that
+  `encrypted_blob_id` — not unique) plus its user-authored children, in the SAME transaction,
+  before the DELETE. Restore re-inserts them in the same transaction as the blobs.
+- **Rejected: flag-in-place (`photos.trashed_at`).** Children survive for free, but 215
+  `FROM/JOIN photos` sites in 54 files would each have to exclude trashed rows; one miss leaks
+  a trashed photo into gallery/search/backup/pipelines. Rejected: hand-listing columns into
+  `trash_items` — already drifted once (that IS the filed bug).
+- **Generic, drift-proof encoding.** Rows are read with `SELECT *` and encoded by storage
+  class (NULL/INTEGER/REAL/TEXT, BLOB as `{"$b64":…}`). Restore inserts only keys that are
+  columns of the table NOW (`pragma_table_info`) — a later-added column takes its default,
+  a dropped one is skipped. Identifiers come from the schema, are asserted `[a-z0-9_]`, quoted.
+- **Children are classified, and a test enforces it.** `SNAPSHOT = edit_copies,
+  photo_source_albums` (user-authored). `REGENERATED = face/object/pet_detections,
+  video_renditions` (derived; restore deletes the `ai_processed_photos` row so AI re-runs; the
+  rung backfill already re-queues videos with no renditions). Unit test: the set of tables with
+  an FK to `photos` == SNAPSHOT ∪ REGENERATED — a new child table fails CI until classified.
+- **Collision fails closed.** A UNIQUE violation on restore (same hash re-uploaded since) →
+  409 Conflict, logged; the transaction rolls back, trash row + snapshot untouched.
+- Restore now emits a `"photo"` sync event and invalidates the summary cache (it did neither).
+- Legacy trash rows (no snapshot) restore exactly as before.
+- **Widened mid-implementation (RED first):** the `blobs` rows had the same disease. Restore
+  hand-built them with `size_bytes` = the client's trash-request size (phone sends the ORIGINAL
+  file size), `0` for the thumbnail, and no `blob_format`; `size_bytes` IS the download's
+  Content-Length. RED: restored v2 blob served 4096 of 8192 bytes; thumbnail served empty.
+  → `trash_blob_snapshots` (same migration 041), captured owner-scoped (a client-named
+  thumbnail id of ANOTHER user's blob must not be captured — restore would 409 forever).
+  Registered with the orphan sweeper's `REFERENCE_COLUMNS`.
+- test_77 asserted the legacy `created_at := taken_at` workaround; now asserts restored dates
+  equal the pre-trash dates exactly (stricter; HEAD fails 3 of 4 — the 4th is correct on both).
+
+### F11 verified (2026-11-25)
+- Unit: 615/615 (10 in `trash::snapshot`), clippy + fmt clean. Mutations bite: drop a child
+  classification → drift test red; skip `ai_processed_photos` clear → round-trip red; ignore the
+  UNIQUE mapping → collision test red; drop the owner filter → foreign-blob test red.
+- E2E on a verified binary (`grep -c trash_blob_snapshots` = 8): test_101 4/4 (RED on HEAD: 3/4,
+  then 1/4 after the photos half), test_77 4/4, test_04/03/95–100/10 green (94/94).
+- test_21 ×3 + test_41 ×1 fail identically on HEAD `8b7701f` — pre-existing, not F11.
+
+### F11 NOT doing (and why)
+- `DELETE /photos/:id` (no client caller) leaves the thumbnail's `blobs` row live, referenced
+  only inside snapshot JSON the orphan sweeper can't read — same exposure as before F11, and
+  the sweeper is admin-run, dry-run by default, and its quarantine is reversible.
+- Reconstructing rows for legacy (pre-041) trash items: a blob with no snapshot may never have
+  had a row (pure-E2E web upload) — inventing one could duplicate it. ≤30 days of exposure.
+- Snapshots don't travel to the backup (F9 trash rows are row-only); restore ON a backup keeps
+  today's behavior.
+- `soft_delete_photo` on a registered row leaves its blobs in `blobs`, so permanent delete can't
+  find them (leak). No client calls it; separate item if it ever gets one.
+- Re-linking detections to clusters (cluster may be gone by restore) — re-detection instead.
+
+### F11 rollback
+- Code: `git revert <F11 commit>`. Binary rollback is safe after the migration ran
+  (`set_ignore_missing(true)` in `db.rs`). Schema undo: `DROP TABLE IF EXISTS
+  trash_photo_snapshots;` — loses only snapshots of currently-trashed items (= today's
+  behavior). Not deployed; nothing on CT132 to undo.
 
 ### F9 design (decided 2026-11-25, late — re-scoped from "Save Copy" after reading the code)
 - **Wider than filed.** `file_path = ''` is not a Save Copy quirk: `register-encrypted` (EVERY

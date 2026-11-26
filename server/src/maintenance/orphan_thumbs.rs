@@ -76,6 +76,8 @@ pub const REFERENCE_COLUMNS: &[(&str, &str)] = &[
     ("trash_items", "encrypted_blob_id"),
     ("trash_items", "thumbnail_blob_id"),
     ("trash_items", "encrypted_thumb_blob_id"),
+    // A trashed blob's row, kept verbatim for restore (migration 041).
+    ("trash_blob_snapshots", "blob_id"),
     ("photo_metadata", "blob_id"),
     ("shared_album_photos", "photo_ref"),
     ("orphaned_rendition_blobs", "blob_id"),

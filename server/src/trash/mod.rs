@@ -8,3 +8,4 @@ pub mod handlers;
 pub mod models;
 pub mod operations;
 pub mod purge;
+pub mod snapshot;

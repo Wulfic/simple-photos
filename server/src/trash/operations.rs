@@ -122,6 +122,10 @@ pub async fn soft_delete_photo(
     .execute(&mut *tx)
     .await?;
 
+    // The columns above are a subset (no blob ids, subtype, burst, …) and the
+    // DELETE below cascades the row's children — keep the whole thing.
+    super::snapshot::capture(&mut tx, &trash_id, std::slice::from_ref(&photo_id)).await?;
+
     // Remove from photos table (keep files on disk for restore)
     sqlx::query("DELETE FROM photos WHERE id = ? AND user_id = ?")
         .bind(&photo_id)
@@ -287,6 +291,15 @@ pub async fn soft_delete_blob(
     .execute(&mut *tx)
     .await?;
 
+    // Keep the exact `blobs` rows: restore used to rebuild them from the
+    // request (the phone's ORIGINAL file size, a 0-byte thumbnail, no
+    // blob_format), and `size_bytes` is the download's Content-Length.
+    let mut doomed_blobs = vec![blob_id.as_str()];
+    if let Some(ref thumb_id) = req.thumbnail_blob_id {
+        doomed_blobs.push(thumb_id.as_str());
+    }
+    super::snapshot::capture_blobs(&mut tx, &trash_id, &blob_owner_id, &doomed_blobs).await?;
+
     // Remove blob from blobs table (but keep files on disk!)
     sqlx::query("DELETE FROM blobs WHERE id = ? AND user_id = ?")
         .bind(&blob_id)
@@ -308,6 +321,18 @@ pub async fn soft_delete_blob(
     // this, loadEncryptedPhotos() would re-add the photo to the client's IDB
     // (without thumbnail data) on the very next sync, making it appear as
     // though the deletion never happened.
+    //
+    // Snapshot every row this DELETE removes (encrypted_blob_id is not unique)
+    // first: `trash_items` holds only blob-level facts, so without it a restore
+    // returns the bytes and no photo — and the DELETE cascades the children.
+    let linked_photo_ids: Vec<String> =
+        sqlx::query_scalar("SELECT id FROM photos WHERE encrypted_blob_id = ? AND user_id = ?")
+            .bind(&blob_id)
+            .bind(&blob_owner_id)
+            .fetch_all(&mut *tx)
+            .await?;
+    super::snapshot::capture(&mut tx, &trash_id, &linked_photo_ids).await?;
+
     sqlx::query("DELETE FROM photos WHERE encrypted_blob_id = ? AND user_id = ?")
         .bind(&blob_id)
         .bind(&blob_owner_id)
@@ -416,57 +441,72 @@ pub async fn restore_from_trash(
     .fetch_one(&mut *tx)
     .await?;
 
+    // The photos row(s) the trash call deleted (migration 041). Empty for a
+    // pure-E2E blob that never had one, and for trash rows written before 041.
+    // `photos` has no FK to `blobs`, so this can run before the blobs return.
+    let restored_photo_ids = super::snapshot::restore(&mut tx, &trash_id).await?;
+
     if let Some(ref blob_id) = encrypted_blob_id {
         // ── Encrypted blob restore path ──────────────────────────────
-        let blob_type = match row.media_type.as_str() {
-            "gif" => "gif",
-            "video" => "video",
-            "audio" => "audio",
-            _ => "photo",
-        };
+        // The verbatim rows (migration 041). Rebuilding them from the trash
+        // row is the legacy path only: it gets `size_bytes` wrong for both
+        // blobs and drops `blob_format`.
+        let restored_blobs = super::snapshot::restore_blobs(&mut tx, &trash_id).await?;
+        if restored_blobs.is_empty() {
+            let blob_type = match row.media_type.as_str() {
+                "gif" => "gif",
+                "video" => "video",
+                "audio" => "audio",
+                _ => "photo",
+            };
 
-        let now = chrono::Utc::now().to_rfc3339();
+            let now = chrono::Utc::now().to_rfc3339();
 
-        // Re-insert the main blob (restoring hash fields for dedup/integrity)
-        sqlx::query(
-            "INSERT INTO blobs (id, user_id, blob_type, size_bytes, upload_time, storage_path, \
-             client_hash, content_hash) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(blob_id)
-        .bind(&owner_id)
-        .bind(blob_type)
-        .bind(row.size_bytes)
-        .bind(&now)
-        .bind(&row.file_path)
-        .bind(&row.client_hash)
-        .bind(&row.content_hash)
-        .execute(&mut *tx)
-        .await?;
-
-        // Re-insert the thumbnail blob if present
-        if let (Some(ref thumb_blob_id), Some(ref thumb_path)) =
-            (&row.thumbnail_blob_id, &row.thumb_path)
-        {
+            // Re-insert the main blob (restoring hash fields for dedup/integrity)
             sqlx::query(
-                "INSERT INTO blobs (id, user_id, blob_type, size_bytes, upload_time, storage_path) \
-                 VALUES (?, ?, 'thumbnail', 0, ?, ?)",
+                "INSERT INTO blobs (id, user_id, blob_type, size_bytes, upload_time, storage_path, \
+                 client_hash, content_hash) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             )
-            .bind(thumb_blob_id)
+            .bind(blob_id)
             .bind(&owner_id)
+            .bind(blob_type)
+            .bind(row.size_bytes)
             .bind(&now)
-            .bind(thumb_path)
+            .bind(&row.file_path)
+            .bind(&row.client_hash)
+            .bind(&row.content_hash)
             .execute(&mut *tx)
             .await?;
+
+            // Re-insert the thumbnail blob if present
+            if let (Some(ref thumb_blob_id), Some(ref thumb_path)) =
+                (&row.thumbnail_blob_id, &row.thumb_path)
+            {
+                sqlx::query(
+                    "INSERT INTO blobs (id, user_id, blob_type, size_bytes, upload_time, storage_path) \
+                     VALUES (?, ?, 'thumbnail', 0, ?, ?)",
+                )
+                .bind(thumb_blob_id)
+                .bind(&owner_id)
+                .bind(&now)
+                .bind(thumb_path)
+                .execute(&mut *tx)
+                .await?;
+            }
         }
 
-        // Remove from trash
+        // Remove from trash (drops the snapshot with it)
         sqlx::query("DELETE FROM trash_items WHERE id = ?")
             .bind(&trash_id)
             .execute(&mut *tx)
             .await?;
 
-        tracing::info!("Encrypted blob {} restored from trash", blob_id);
+        tracing::info!(
+            "Encrypted blob {} restored from trash ({} photo row(s))",
+            blob_id,
+            restored_photo_ids.len()
+        );
 
         audit::log(
             &state,
@@ -476,11 +516,35 @@ pub async fn restore_from_trash(
             Some(serde_json::json!({
                 "trash_id": trash_id,
                 "blob_id": blob_id,
+                "photo_rows": restored_photo_ids.len(),
+            })),
+        )
+        .await;
+    } else if !restored_photo_ids.is_empty() {
+        // ── Photo restore path, from the snapshot ────────────────────
+        sqlx::query("DELETE FROM trash_items WHERE id = ?")
+            .bind(&trash_id)
+            .execute(&mut *tx)
+            .await?;
+
+        tracing::info!(
+            "Photo {} restored from trash",
+            restored_photo_ids.join(", ")
+        );
+
+        audit::log(
+            &state,
+            AuditEvent::TrashRestore,
+            Some(&auth.user_id),
+            &headers,
+            Some(serde_json::json!({
+                "trash_id": trash_id,
+                "photo_id": restored_photo_ids.first(),
             })),
         )
         .await;
     } else {
-        // ── Unencrypted photo restore path ───────────────────────────
+        // ── Legacy photo restore path (trashed before migration 041) ─
         // Fetch photo columns from trash in two queries to stay within tuple limits
         let photo_core = sqlx::query_as::<
             _,
@@ -584,6 +648,13 @@ pub async fn restore_from_trash(
     }
 
     tx.commit().await?;
+
+    if !restored_photo_ids.is_empty() {
+        for id in &restored_photo_ids {
+            state.emit_sync(&owner_id, "photo", id);
+        }
+        state.summary_cache.invalidate(&owner_id);
+    }
 
     Ok(StatusCode::NO_CONTENT)
 }

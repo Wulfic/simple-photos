@@ -6,9 +6,15 @@ overwritten with the current timestamp, so they jumped to "today" in the
 gallery's date-grouped view instead of staying with their original
 capture date.
 
-The unencrypted restore path now uses the trashed entry's `taken_at`
-(when present) as the restored `created_at`, falling back to the
-restore moment only when the original capture date is unknown.
+Since migration 041 (TODO.md F11) restore puts the trashed `photos` row
+back verbatim, so the contract is exact: the restored photo's `taken_at`
+and `created_at` are the strings it had before it was trashed. The gallery
+orders by COALESCE(taken_at, created_at), so it lands where it was.
+
+(The pre-041 restore rebuilt the row and set `created_at := taken_at` to
+avoid stamping it with the restore moment; this test asserted that
+workaround. An exact match is stricter: a regression to "now" or to the
+rewrite both fail it.)
 
 DDT covers the meaningful permutations of (taken_at provided vs not)
 and the boundary case of an empty/whitespace timestamp.
@@ -25,33 +31,28 @@ from helpers import APIClient, generate_test_jpeg, unique_filename
 
 
 # ── DDT table ──────────────────────────────────────────────────────────────
-# Each row encodes (taken_at_iso, expected_created_at_matches_taken_at)
-#
-# When a real `taken_at` is present, the restored photo's `created_at`
-# MUST equal it (preserving the date the user expects).  When no
-# `taken_at` is available, the restored `created_at` falls back to the
-# restore moment — that is documented and covered as a distinct row.
+# Each row is the `taken_at` set before trashing (None = never set).
 
 _now = datetime.now(timezone.utc)
 
 RESTORE_DATE_CASES = [
     pytest.param(
         (_now - timedelta(days=365 * 3)).isoformat(),
-        True,
         id="three_years_ago_preserved",
     ),
     pytest.param(
         (_now - timedelta(days=30)).isoformat(),
-        True,
         id="last_month_preserved",
     ),
     pytest.param(
         (_now - timedelta(hours=6)).isoformat(),
-        True,
         id="earlier_today_preserved",
     ),
-    # No taken_at → fallback to restore-time is acceptable.
-    pytest.param(None, False, id="missing_taken_at_falls_back_to_now"),
+    # Never edited. Upload always resolves a taken_at — falling back to the
+    # same instant it stamps as created_at (`resolve_upload_taken_at`) — so a
+    # row with NO taken_at cannot come from this API; this is the "nobody set
+    # a date" case. The pre-041 restore also passed it (taken_at == created_at).
+    pytest.param(None, id="taken_at_left_at_upload_time"),
 ]
 
 
@@ -65,9 +66,9 @@ def _wait_visible(client: APIClient, photo_id: str, timeout: float = 10.0):
     raise TimeoutError(f"Photo {photo_id} not visible after {timeout}s")
 
 
-@pytest.mark.parametrize("taken_at,expect_preserved", RESTORE_DATE_CASES)
+@pytest.mark.parametrize("taken_at", RESTORE_DATE_CASES)
 def test_restore_preserves_original_date(
-    user_client: APIClient, taken_at, expect_preserved: bool
+    user_client: APIClient, taken_at
 ):
     # 1. Upload a real photo through the unencrypted pipeline.
     upload = user_client.upload_photo(
@@ -88,6 +89,13 @@ def test_restore_preserves_original_date(
         )
         assert r.status_code in (200, 204), r.text
 
+    before = _wait_visible(user_client, photo_id)
+    if taken_at is not None:
+        assert before["taken_at"] is not None, before
+
+    # A restore stamped "now" must be distinguishable from the upload stamp.
+    time.sleep(1.1)
+
     # 3. Soft-delete via the unencrypted endpoint (DELETE /api/photos/:id).
     r = user_client.delete(f"/api/photos/{photo_id}")
     assert r.status_code in (200, 204), r.text
@@ -102,23 +110,8 @@ def test_restore_preserves_original_date(
 
     # 5. Verify the restored photo's date metadata.
     restored = _wait_visible(user_client, photo_id)
-    if expect_preserved:
-        # created_at must match the original taken_at to within a second.
-        original = datetime.fromisoformat(taken_at.replace("Z", "+00:00"))
-        restored_created = datetime.fromisoformat(
-            restored["created_at"].replace("Z", "+00:00")
-        )
-        delta = abs((restored_created - original).total_seconds())
-        assert delta < 2.0, (
-            f"Expected created_at≈{original.isoformat()} but got "
-            f"{restored['created_at']} (Δ={delta:.1f}s)"
-        )
-    else:
-        # No taken_at — fallback to ~now is acceptable.
-        restored_created = datetime.fromisoformat(
-            restored["created_at"].replace("Z", "+00:00")
-        )
-        delta = abs((restored_created - datetime.now(timezone.utc)).total_seconds())
-        assert delta < 60.0, (
-            f"Expected created_at≈now but got {restored['created_at']} (Δ={delta:.1f}s)"
-        )
+    assert restored["taken_at"] == before["taken_at"], (restored, before)
+    assert restored["created_at"] == before["created_at"], (
+        f"created_at was {before['created_at']} before trash, "
+        f"{restored['created_at']} after restore"
+    )

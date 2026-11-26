@@ -9,6 +9,8 @@ const NON_REFERENCE_COLUMNS: &[(&str, &str)] = &[
     ("blobs", "blob_type"),
     ("blobs", "blob_format"),
     ("shared_album_photos", "ref_type"),
+    // JSON of the `blobs` row; its id is `trash_blob_snapshots.blob_id`.
+    ("trash_blob_snapshots", "blob_row"),
 ];
 
 /// The format CT132's rows actually carry (9-digit fraction + offset).

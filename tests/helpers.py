@@ -299,7 +299,8 @@ class APIClient:
     # ── Blob helpers ─────────────────────────────────────────────────
 
     def upload_blob(self, blob_type: str = "photo", content: bytes = None,
-                    client_hash: str = None, content_hash: str = None) -> dict:
+                    client_hash: str = None, content_hash: str = None,
+                    blob_format: int = None) -> dict:
         if content is None:
             content = generate_random_bytes(1024)
         if client_hash is None:
@@ -312,6 +313,8 @@ class APIClient:
         }
         if content_hash:
             h["x-content-hash"] = content_hash
+        if blob_format is not None:
+            h["x-blob-format"] = str(blob_format)
         r = self.session.post(self._url("/api/blobs"), data=content, headers=h)
         r.raise_for_status()
         return r.json()
