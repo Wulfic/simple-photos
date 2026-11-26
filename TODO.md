@@ -792,6 +792,66 @@ connection cap; `/health` reads one atomic (no DB, no storage); storage is an SM
 - Not adding request/header timeouts or a connection cap — behaviour change before evidence.
 - No admin endpoint for the watchdog — a wedged server can't serve it; logs are the channel.
 
+## 4b. P1 — downloaded photos sort at the bottom (owner's top priority, 2026-11-26; Tier 2)
+
+### Owner answers (2026-11-26)
+- Rule: **everything outside the camera uses the date it landed on the phone**; camera
+  photos keep their capture date.
+- Existing wrong dates: **fix them too, dry-run first** (show which + how many, apply on OK).
+- Read-only DB copy approved (taken, copy deleted afterwards).
+
+### Measured (read-only keyed copy of the live DB, 2026-11-26 06:39Z, box `31429f5`)
+- **5,003 of 5,146 Android-uploaded rows have `taken_at = 1970-01-01T00:00:00.000Z`**
+  (4,934 with no camera make, e.g. `Tumblr_l_*.jpg`; 69 camera-named). Server-file rows
+  (Takeout/scan, 12,407): 1 bad (`0000`).
+- Mechanism (code): Android takes `MediaStore DATE_TAKEN` only (`SyncRepository.scanImages`
+  / `scanVideos`); NULL for a downloaded file ⇒ `getLong` = 0 ⇒ epoch. Phone encrypts
+  before upload, so the server never sees EXIF ⇒ the phone's value is final.
+- Server `created_at` for those rows = upload time (e.g. 2026-08-05), NOT the phone date ⇒
+  only the phone can supply the right date for existing rows.
+
+### Decisions (mine, 2026-11-26)
+- **Date rule (pure fn, `data/media/LibraryDate.kt`):** in the camera tree (`RELATIVE_PATH`
+  under `DCIM/`) with `DATE_TAKEN > 0` ⇒ `DATE_TAKEN`. Everything else ⇒ the **earlier of
+  `DATE_ADDED` and `DATE_MODIFIED`** (both seconds → ms): a fresh download has both ≈ the
+  download time; a phone migration resets `DATE_ADDED` but keeps mtime; an edit bumps mtime
+  but not `DATE_ADDED`. Non-positive values ignored; nothing usable ⇒ `DATE_TAKEN` if > 0,
+  else now — never 0.
+- **Repair is phone-driven** (only the phone knows folder + dates), server-guarded:
+  `POST /api/photos/dates/repair` `{dry_run (default TRUE), items:[{photo_id, taken_at,
+  expect_taken_at}]}`. Refuses an empty list; ≤500 items/call; own photos only;
+  compare-and-set on `expect_taken_at` (a row someone changed since is skipped, counted);
+  apply writes old→new into `taken_at_repairs` (migr 043, batch id) in ONE write txn, also
+  recomputes `photo_year`/`photo_month`, emits change_log/sync so web + other devices
+  re-sort, audit row with counts. `POST …/repair/undo {batch_id}` restores old values
+  (compare-and-set on the new value). Dry-run answers per-item would-change/skip + counts.
+- Android UI: Settings → "Fix photo dates" → dry run ⇒ "N photos will move (sample list)"
+  ⇒ Apply. Room `takenAt` updated only for rows the server confirmed.
+- Rows whose phone file is gone: counted and listed in the dry-run, NOT changed.
+
+### Plan — one commit each
+1. **P1a Android rule for new backups.** `LibraryDate` + `scanImages`/`scanVideos` query
+   `DATE_ADDED`, `DATE_MODIFIED`, `RELATIVE_PATH`. JVM tests (RED first: today's rule gives
+   0 for a dateless download).
+2. **P1b server repair + undo endpoints + migr 043 (up/down, down actually run).** E2E
+   `test_104`: dry-run changes nothing; empty list refused; other user's photo refused;
+   stale `expect_taken_at` skipped; apply moves the row + year/month + change_log; undo
+   restores exactly. Unit tests for the validation.
+3. **P1c Android "Fix photo dates" screen** (dry run → apply), JVM tests for the candidate
+   builder (camera keeps date, download gets date added, gone file excluded, unchanged rows
+   excluded).
+4. Deploy (backup first) → owner runs the dry run on the S21+, sends the count → apply on OK.
+
+### P1 NOT doing (and why)
+- No server-side guess (e.g. upload time) for rows the phone can't supply — a wrong date
+  presented as right is worse than an obviously wrong one; owner can decide after the count.
+- Not touching server-file rows (Takeout/scan resolver is correct; 1 bad row ≠ a pattern).
+- Not reusing `metadata_edit` PUT for the repair — no dry-run, no undo, no batch.
+
+### P1 rollback
+P1a/P1c: revert (client-only). P1b: revert; migr 043 is one new table (down drops it).
+Applied repairs: `…/repair/undo {batch_id}`, or restore the pre-deploy DB backup.
+
 ## 5. Verification debt carried from the old todo.md (still open)
 Deploy-side (CT132): A1/#42 badge counts, A2/#38 migration 033 backfill, B2/#40 3-strike
 cap + ETA calibration readout, B3/#46 codec backfill drains to zero, B4/#49 rung backfill.
