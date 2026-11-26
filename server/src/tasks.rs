@@ -114,20 +114,12 @@ fn spawn_housekeeping(pool: SqlitePool) {
 
             match crate::db::begin_write(&pool).await {
                 Ok(mut tx) => {
-                    // 1. Expired / revoked refresh tokens
-                    match sqlx::query(
-                        "DELETE FROM refresh_tokens WHERE expires_at < ? OR (revoked = 1 AND created_at < ?)",
-                    )
-                    .bind(&now)
-                    .bind(&now)
-                    .execute(&mut *tx)
-                    .await
-                    {
-                        Ok(r) if r.rows_affected() > 0 => {
-                            tracing::info!(
-                                "Cleaned up {} expired/revoked refresh tokens",
-                                r.rows_affected()
-                            );
+                    // 1. Expired refresh tokens. Revoked rows stay until they
+                    //    expire — they are the chain a lost-response replay
+                    //    is recognised by (N1a, `auth::refresh_chain`).
+                    match crate::auth::refresh_chain::purge_expired(&mut *tx, &now).await {
+                        Ok(n) if n > 0 => {
+                            tracing::info!("Cleaned up {} expired refresh tokens", n);
                         }
                         Err(e) => tracing::error!("Failed to clean up tokens: {}", e),
                         _ => {}

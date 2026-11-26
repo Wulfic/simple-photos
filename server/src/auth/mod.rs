@@ -10,6 +10,7 @@
 //! - [`lockout`]     — Brute-force protection via account lockout
 //! - [`middleware`]   — `AuthUser` extractor for protected routes
 //! - [`models`]      — Request/response DTOs and JWT claims
+//! - [`refresh_chain`] — Refresh rotation that recovers a lost response
 //! - [`tokens`]      — JWT creation and refresh-token lifecycle
 //! - [`totp`]        — TOTP and backup-code verification
 //! - [`validation`]  — Username and password input validation
@@ -21,6 +22,7 @@ pub mod handlers_password;
 pub mod lockout;
 pub mod middleware;
 pub mod models;
+pub mod refresh_chain;
 pub mod timing;
 pub mod tokens;
 pub mod totp;

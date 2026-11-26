@@ -505,6 +505,126 @@ Owner answers (2026-11-25): CT132 logs + a DB **copy** may be read **read-only**
       the source), per-tile request timing, and whether secure grids skip the virtualization
       / thumbnail cache the main grid has (#51). Measure before fixing.
 
+### N1/N2 measured (2026-11-26 ~03:20Z, read-only: `docker logs`/`inspect` + a /tmp DB copy on CT132, box `5286392`)
+- **Server cannot invalidate a session on restart.** Access-token check is stateless (HS256
+  sig + `exp`, `auth/middleware.rs`); refresh tokens are DB rows; `jwt_secret` is from the
+  mounted `config.toml`. Android never logs itself out: Login is only the start route when no
+  token is stored (`NavViewModel.init`). So "must log out + in" = the owner's workaround for
+  a broken-but-logged-in app, OR the tokens really died server-side.
+- **Tokens did NOT die server-side in the 30d audit window:** 0 `revoked_token_reuse`, 0
+  `login_failure`. Android refreshed ~hourly 11-17 → 11-25 on ONE login (chain survived a
+  4-day gap 11-19→11-24). Android logins: 11-17 10:22, **11-25 07:00:39** — 7 min after the
+  06:53 deploy (container recreate). First post-login run logged "one-time EXIF dimension
+  repair" + 45 photos to process ⇒ looks like a fresh APK install, not a dead session.
+- ⚠ Blind spot: an hourly task DELETES revoked refresh tokens, so a replay >1h later answers
+  "invalid" with **no audit row**; and client logs need auth to upload, so a phone stuck on
+  401/unreachable leaves **no trace**. Absence of evidence here is weak.
+- **16:52Z was a CT132 reboot** (box uptime 10:25 at 03:18Z; container exit=0, restarts=0,
+  policy unless-stopped). Server logged normally until 16:49 (autoscan every 5 min, ingest,
+  crypto, ladder) ⇒ if it was rebooted for N2, the shape is **HTTP dead, runtime alive**.
+  No connection cap / timeout layer on the listener. `dmesg` OOM = Plex in LXC 888 (unrelated).
+  Live process now: RSS 1.3 GB, 24 threads, 24 FDs.
+- **Since the reboot: zero Android contact for 10h** (no refresh, no login, no client log)
+  although the access token expired 14:31Z.
+- Dead code found: `AuthRepository.refreshToken()` (no callers) drops the rotated refresh
+  token — the "refresh rot" bug, latent. Delete it with the N1 fix.
+
+### N1 owner answers (2026-11-26)
+Symptom: after the server has run ~24h and died (N2), tapping a photo in the Android app
+gives **401 Unauthorized**; restarting the server does NOT clear it; only logout + re-adding
+the server does. Happens on plain restarts too (no APK). The 16:52Z reboot WAS an N2 death.
+Owner approved one `docker restart` for a repro (not used yet — a restart can't reproduce a
+~24h-onset fault; a live observation of the CURRENT phone state is the better probe).
+
+### N1 suspicions — questions until a RED run separates them
+- **S1 (lead): non-session 401s drive the session authenticator.** The secure gate answers an
+  expired/missing gallery token with **401** (`gallery/access.rs` `require_secure_access`;
+  token = stateless HMAC, 1h TTL ⇒ survives restarts). Android's OkHttp `Authenticator`
+  treats ANY 401 as an expired session: refresh → retry once with the same stale
+  `GalleryTokenHolder.token` → 401 → give up. Persistent across restarts, cleared only by
+  logout (which nulls `GalleryTokenHolder`). Open question: which "photos from the server"
+  are `is_secure_item` (secure originals leaking into the main grid? B5 filter?).
+  Fingerprint: one `token_refresh` audit row PER TAP while the photo still fails.
+- **S2: lost refresh response** (rotation committed, client timed out at 10s) ⇒ dead
+  refresh token. Fingerprint: NO `token_refresh` rows on taps (refresh returns 401
+  "invalid", unaudited).
+- Side bug (certain, from code): logout `dataStore.clear()` also wipes `KEY_SERVER_URL` /
+  `KEY_SERVER_CONFIGURED` — that's why "log out" also means "forget the server".
+- Logging gap (certain): server emits NOTHING for a 401 (`AppError::Unauthorized` silent,
+  `TraceLayer` at debug) — the failure is invisible in `docker logs`.
+
+### N1 MEASURED — live repro 2026-11-26 04:09Z (owner tapped photos, no logout)
+**S1 refuted, S2 confirmed.** Zero `token_refresh` rows; 55 `Rate limit exceeded
+ip=192.168.86.28 limit=100` in 04:09:35–57 ⇒ ≥155 refresh calls in 22 s, the first 100
+reached the handler and NONE succeeded ⇒ the phone's refresh token is not in the DB. The
+DB's newest Android token (`d720fdd3`, issued by the 13:31:35 rotation) is valid/unrevoked
+⇒ the phone never persisted the 13:31 rotation and still holds the 10:29 token, which the
+13:31 rotation revoked and the 13:53 cleanup DELETED. 13:31 is the phone's last request to
+reach the server (hourly client-log uploads stop at 11:29; nothing request-driven 13:31 →
+16:52 reboot) ⇒ the rotation response was lost while the server went HTTP-dead (N2).
+DTO mapping is correct (`@SerializedName("refresh_token")`).
+
+Root causes (all certain from code + the run above):
+1. **Rotation is not lost-response safe.** Server commits the rotation before the client
+   has the new token; a lost response strands the client on a revoked token forever.
+2. **Cleanup purges every revoked token within an hour** (`tasks.rs`: `revoked = 1 AND
+   created_at < now` — always true). Destroys the chain needed to recover AND silently
+   downgrades theft detection to "invalid" after 1 h.
+3. **Android refresh storm.** A failed refresh leaves the access token unchanged, so every
+   queued 401 runs its own refresh (`NetworkModule` authenticator) ⇒ 100+/min ⇒ 429.
+4. **Android never treats a dead session as dead.** It stays on the gallery 401-ing instead
+   of routing to Login; and logout's `dataStore.clear()` wipes the server URL ⇒ "forget
+   server".
+5. **Refresh "invalid" path is silent** (no log, no audit) — why this took a live repro.
+
+### N1 plan (Tier 2 — server migration + Android; one commit per step, in order)
+- **N1a server — lost-response-safe rotation (migr 042, additive).** `refresh_tokens.
+  replaced_by TEXT NULL` (successor id). Rotation sets it. Presenting a revoked token whose
+  successor is still unrevoked (= never presented) ⇒ lost response: revoke the successor,
+  issue a fresh pair, chain it, audit `token_refresh {"recovered":"lost_rotation"}` + WARN.
+  Successor already used/revoked ⇒ today's theft path. All inside one write txn (F8
+  IMMEDIATE) so two concurrent replays can't both recover. Cleanup deletes only expired
+  rows (revoked rows live to `expires_at`; ≤ ~720 rows/device/30 d). Log + audit the
+  "invalid" path (`login_failure {"reason":"refresh_not_found"}`).
+  Tests (E2E, `tests/test_01_auth.py` style, RED first): replay-after-lost-response
+  succeeds; replay after the successor was used still revokes everything; two concurrent
+  replays ⇒ exactly one succeeds-or-both-serialise with one live family; cleanup keeps
+  revoked-unexpired rows. Rust unit test for the cleanup predicate.
+- **N1b Android — no storm.** Authenticator remembers the refresh token that got a
+  definitive 401 from `/auth/refresh`; later 401s with that same token return null without
+  calling the server. 429/IO ⇒ no retry storm (fail this request, keep tokens). JVM test.
+- **N1c Android — dead session routes to Login, server kept.** Definitive refresh 401 ⇒
+  session-expired signal ⇒ NavGraph → Login (popUpTo 0). Logout keeps `KEY_SERVER_URL` +
+  `KEY_SERVER_CONFIGURED`. Delete dead `AuthRepository.refreshToken()`. JVM tests.
+- Device verification (owner, S21+): after deploy, a forced lost response can't be staged
+  on the phone; verification = E2E for N1a + JVM for N1b/c + "no 401 after the next N2".
+
+### N1a verified (2026-11-26)
+- [x] Migr 042 `refresh_tokens.replaced_by`; `auth::refresh_chain::{redeem, purge_expired}` —
+  decision + writes in one `begin_write` txn; handler logs/audits all three outcomes.
+- RED on HEAD (`187f599` code): 4/5 of `tests/test_102_refresh_lost_rotation.py` failed —
+  replay ⇒ `"Refresh token has been revoked"` (theft path), no `refresh_not_found` audit row.
+  The 2 theft guards were green before and after.
+- GREEN: test_102 5/5 + test_01 23/23; 8 `refresh_chain` unit tests; full unit suite 622/622
+  (+1 since); clippy/fmt clean. Mutations bite: DEFERRED txn ⇒ concurrent replay fails BUSY;
+  old purge predicate ⇒ purge test fails.
+- Contract change: `test_01::test_refresh_token_rotation` now asserts "old token dead once
+  the successor is USED" — "dead right after rotation" is exactly the N1 bug.
+- test_15 (7 red) is environmental: `os.chmod(dir, 0o000)` is a no-op on Windows.
+- Rollback: revert the N1a commit; migr 042 stays harmless (nullable, unread by old code).
+
+### N1 NOT doing (and why)
+- Not fixing N2 here — N1a makes the client survive N2; N2 is next.
+- Not changing the secure-gate 401 → 403 (S1 was refuted; separate, cosmetic).
+- Not logging every 401 server-wide (noisy; secure gate + expiry are normal) — only the
+  refresh path, which is the one that strands clients.
+- Not lengthening the Android refresh read timeout — N1a makes a timed-out refresh harmless.
+
+### N1 rollback
+Migr 042 is one nullable column (old binary ignores it; `set_ignore_missing`). Revert the
+N1a commit ⇒ old behaviour; revoked rows then purge at the next hourly cleanup. Android:
+revert N1b/N1c commits. Owner's phone right now: just log in again (evidence captured).
+
 ## 5. Verification debt carried from the old todo.md (still open)
 Deploy-side (CT132): A1/#42 badge counts, A2/#38 migration 033 backfill, B2/#40 3-strike
 cap + ETA calibration readout, B3/#46 codec backfill drains to zero, B4/#49 rung backfill.

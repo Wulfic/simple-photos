@@ -110,10 +110,15 @@ class TestLogin:
         assert "refresh_token" in data
 
     def test_refresh_token_rotation(self, user_client):
-        """Old refresh token should be invalidated after rotation."""
+        """Old refresh token is dead once its successor has been used.
+
+        Before the successor is presented, a replay is treated as a lost
+        response and recovers (N1a, test_102) — so "dead right after rotation"
+        is no longer the contract; "dead after the successor is used" is.
+        """
         old_refresh = user_client.refresh_token
         user_client.refresh()
-        # Old refresh token should now fail
+        user_client.refresh()
         r = user_client.post("/api/auth/refresh", json_data={"refresh_token": old_refresh})
         assert r.status_code == 401
 

@@ -1,0 +1,23 @@
+-- Migration 042: refresh rotation survives a lost response (TODO.md §4 N1a)
+--
+-- Rotation revoked the presented token and issued a successor in one step. If
+-- the response never reached the client (the server went HTTP-dead mid-reply),
+-- the client kept a revoked token, every later refresh was theft-or-invalid,
+-- and the app 401'd until the user logged in again.
+--
+-- `replaced_by` is the id of the token a rotation issued for this one. A replay
+-- of a revoked token whose successor is still unrevoked (= never presented) is
+-- a lost response: `auth::refresh_chain::redeem` revokes that successor and
+-- reissues. A successor already presented — or killed by a recovery — makes
+-- the replay theft, as before. NULL = not rotated (live, logged out, legacy).
+--
+-- No FK: the successor can only be deleted by the expiry purge, and it always
+-- expires after its predecessor.
+--
+-- Reverse (forward-only sqlx migrations have no down file):
+--   ALTER TABLE refresh_tokens DROP COLUMN replaced_by;
+-- Loses only the chain links: replays fall back to the pre-042 theft path. The
+-- binary may be rolled back without it (`set_ignore_missing`; old code never
+-- reads the column).
+
+ALTER TABLE refresh_tokens ADD COLUMN replaced_by TEXT;

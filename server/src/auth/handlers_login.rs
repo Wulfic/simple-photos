@@ -15,8 +15,9 @@ use crate::state::AppState;
 
 use super::lockout::{check_account_lockout, clear_failed_logins, record_failed_login};
 use super::models::*;
+use super::refresh_chain::{self, Redeemed};
 use super::timing::equalize_login_timing;
-use super::tokens::{create_jwt, hash_token, issue_tokens};
+use super::tokens::{access_token_for, create_jwt, hash_token, issue_tokens};
 use super::totp::{verify_backup_code, verify_totp_code};
 use super::validation::{validate_password, validate_username};
 
@@ -321,9 +322,10 @@ pub async fn login_totp(
 
 /// POST /api/auth/refresh — exchange a refresh token for a new access/refresh pair.
 ///
-/// Implements refresh-token rotation: the old token is revoked on use.
-/// Reuse of a revoked token is treated as potential theft — *all* tokens
-/// for the user are revoked, forcing re-authentication everywhere.
+/// Implements refresh-token rotation: the old token is revoked on use. A
+/// replay of a revoked token is a lost response if its successor was never
+/// used (reissue), and theft otherwise (*all* the user's tokens are revoked).
+/// See [`super::refresh_chain`].
 ///
 /// Rate-limited with the `general` limiter (100 req/60s per IP) to prevent
 /// abuse from issuing unlimited refresh-token rotations.
@@ -337,58 +339,72 @@ pub async fn refresh(
     state.rate_limiters.general.check(ip)?;
     let token_hash = hash_token(&req.refresh_token);
 
-    let row = sqlx::query_as::<_, (String, String, bool)>(
-        "SELECT id, user_id, revoked != 0 as revoked FROM refresh_tokens WHERE token_hash = ? AND expires_at > ?",
+    let outcome = refresh_chain::redeem(
+        &state.pool,
+        &token_hash,
+        state.config.auth.refresh_token_ttl_days as i64,
     )
-    .bind(&token_hash)
-    .bind(Utc::now().to_rfc3339())
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or_else(|| AppError::Unauthorized("Invalid or expired refresh token".into()))?;
+    .await?;
 
-    let (token_id, user_id, revoked) = row;
+    let (user_id, new_refresh_token, recovered) = match outcome {
+        Redeemed::NotFound => {
+            // Was silent before N1 — the stranded phone left no trace at all.
+            tracing::warn!(%ip, "Refresh rejected: token unknown or expired");
+            audit::log(
+                &state,
+                AuditEvent::LoginFailure,
+                None,
+                &headers,
+                Some(serde_json::json!({ "reason": "refresh_not_found" })),
+            )
+            .await;
+            return Err(AppError::Unauthorized(
+                "Invalid or expired refresh token".into(),
+            ));
+        }
+        Redeemed::Theft { user_id } => {
+            tracing::warn!(
+                user_id = user_id,
+                %ip,
+                "Revoked refresh token reused after its successor — possible theft, revoked all tokens"
+            );
+            audit::log(
+                &state,
+                AuditEvent::LoginFailure,
+                Some(&user_id),
+                &headers,
+                Some(serde_json::json!({ "reason": "revoked_token_reuse" })),
+            )
+            .await;
+            return Err(AppError::Unauthorized(
+                "Refresh token has been revoked. Please log in again.".into(),
+            ));
+        }
+        Redeemed::Rotated {
+            user_id,
+            raw_refresh,
+            recovered,
+        } => (user_id, raw_refresh, recovered),
+    };
 
-    // Refresh-token rotation theft detection: if a revoked token is replayed,
-    // either an attacker or the legitimate user has a stolen token — revoke
-    // everything to contain the breach.
-    if revoked {
+    if recovered {
         tracing::warn!(
             user_id = user_id,
-            "Revoked refresh token reused — possible token theft, revoking all tokens"
+            %ip,
+            "Refresh token replayed with its successor unused — rotation response was lost; reissued"
         );
-        sqlx::query("UPDATE refresh_tokens SET revoked = 1 WHERE user_id = ?")
-            .bind(&user_id)
-            .execute(&state.pool)
-            .await?;
-
-        audit::log(
-            &state,
-            AuditEvent::LoginFailure,
-            Some(&user_id),
-            &headers,
-            Some(serde_json::json!({ "reason": "revoked_token_reuse" })),
-        )
-        .await;
-
-        return Err(AppError::Unauthorized(
-            "Refresh token has been revoked. Please log in again.".into(),
-        ));
     }
 
-    // Rotate: revoke old, issue new pair
-    sqlx::query("UPDATE refresh_tokens SET revoked = 1 WHERE id = ?")
-        .bind(&token_id)
-        .execute(&state.pool)
-        .await?;
-
-    let (access_token, new_refresh_token) = issue_tokens(&state, &user_id).await?;
+    // After the commit: if this fails, the presented token's successor is
+    // unused, so the client's retry recovers through the lost-response path.
+    let access_token = access_token_for(&state, &user_id).await?;
 
     audit::log(
         &state,
         AuditEvent::TokenRefresh,
         Some(&user_id),
         &headers,
-        None,
+        recovered.then(|| serde_json::json!({ "recovered": "lost_rotation" })),
     )
     .await;
 

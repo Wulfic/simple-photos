@@ -46,38 +46,62 @@ pub fn create_jwt(
 /// The refresh token is stored as a SHA-256 hash in the `refresh_tokens` table.
 /// The raw (unhashed) refresh token is returned to the caller for the client.
 pub async fn issue_tokens(state: &AppState, user_id: &str) -> Result<(String, String), AppError> {
-    // Fetch the user's role so it can be embedded in the JWT
+    let access_token = access_token_for(state, user_id).await?;
+    let (_id, raw_refresh) = insert_refresh_token(
+        &state.pool,
+        user_id,
+        state.config.auth.refresh_token_ttl_days as i64,
+    )
+    .await?;
+    Ok((access_token, raw_refresh))
+}
+
+/// Sign an access token for `user_id`, embedding the user's current role.
+pub async fn access_token_for(state: &AppState, user_id: &str) -> Result<String, AppError> {
     let role: String = sqlx::query_scalar("SELECT role FROM users WHERE id = ?")
         .bind(user_id)
         .fetch_optional(&state.pool)
         .await?
         .unwrap_or_else(|| "user".to_string());
 
-    let access_token = create_jwt(
+    create_jwt(
         user_id,
         false,
         state.config.auth.access_token_ttl_secs,
         &state.config.auth.jwt_secret,
         &role,
-    )?;
+    )
+}
 
+/// Insert a new refresh-token row; returns `(row id, raw token)`.
+///
+/// Generic over the executor so `refresh_chain::redeem` can issue the
+/// successor inside the same write transaction that revokes its predecessor.
+pub async fn insert_refresh_token<'e, E>(
+    executor: E,
+    user_id: &str,
+    ttl_days: i64,
+) -> Result<(String, String), sqlx::Error>
+where
+    E: sqlx::SqliteExecutor<'e>,
+{
+    let id = Uuid::new_v4().to_string();
     let raw_refresh = Uuid::new_v4().to_string();
-    let refresh_hash = hash_token(&raw_refresh);
-    let expires_at =
-        Utc::now() + chrono::Duration::days(state.config.auth.refresh_token_ttl_days as i64);
+    let now = Utc::now();
+    let expires_at = now + chrono::Duration::days(ttl_days);
 
     sqlx::query(
         "INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)",
     )
-    .bind(Uuid::new_v4().to_string())
+    .bind(&id)
     .bind(user_id)
-    .bind(&refresh_hash)
+    .bind(hash_token(&raw_refresh))
     .bind(expires_at.to_rfc3339())
-    .bind(Utc::now().to_rfc3339())
-    .execute(&state.pool)
+    .bind(now.to_rfc3339())
+    .execute(executor)
     .await?;
 
-    Ok((access_token, raw_refresh))
+    Ok((id, raw_refresh))
 }
 
 /// SHA-256 hash a raw token string for secure storage.
