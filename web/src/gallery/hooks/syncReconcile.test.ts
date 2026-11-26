@@ -277,6 +277,62 @@ describe("reconcileSyncedPhotos — mirror contents are unchanged by batching", 
     expect(row?.albumIds).toEqual(["album-1", "album-2"]);
   });
 
+  // ── A repaired date (TODO §4b P1b-web) ─────────────────────────────────
+  //
+  // `POST /api/photos/dates/repair` moves thousands of Android rows off
+  // 1970-01-01 on the server. The change log nominates them, but if the
+  // existing-row path ignores `taken_at` the web mirror keeps 1970 forever and
+  // the photos stay at the bottom of the timeline.
+  describe("a changed taken_at re-dates the cached row", () => {
+    const EPOCH = "1970-01-01T00:00:00.000Z";
+    const LANDED = "2024-03-05T10:20:30.400Z";
+
+    it("adopts the server's repaired date", async () => {
+      await db.photos.put(cachedFor("dated", { takenAt: Date.parse(EPOCH) }));
+      const cached = await db.photos.toArray();
+
+      await reconcileSyncedPhotos([record("dated", { taken_at: LANDED })], cached);
+
+      expect((await db.photos.get("dated"))?.takenAt).toBe(Date.parse(LANDED));
+    });
+
+    it("falls back to created_at like an insert does when taken_at is null", async () => {
+      await db.photos.put(cachedFor("undated", { takenAt: Date.parse(EPOCH) }));
+      const cached = await db.photos.toArray();
+
+      await reconcileSyncedPhotos(
+        [record("undated", { taken_at: null, created_at: LANDED })],
+        cached,
+      );
+
+      expect((await db.photos.get("undated"))?.takenAt).toBe(Date.parse(LANDED));
+    });
+
+    it("does not write a row whose date only differs in format", async () => {
+      // `2026-01-01T00:00:00Z` (the record default) vs the cached ms of the same
+      // instant spelled with millis — same instant, so no write.
+      await seedSteadyState(1);
+      const cached = await db.photos.toArray();
+      const put = vi.spyOn(db.photos, "bulkPut");
+
+      await reconcileSyncedPhotos(
+        [record("p0000", { taken_at: "2026-01-01T00:00:00.000Z" })],
+        cached,
+      );
+
+      expect(put).not.toHaveBeenCalled();
+    });
+
+    it("keeps the cached date when the server's is unparseable", async () => {
+      await db.photos.put(cachedFor("junk", { takenAt: Date.parse(LANDED) }));
+      const cached = await db.photos.toArray();
+
+      await reconcileSyncedPhotos([record("junk", { taken_at: "not a date" })], cached);
+
+      expect((await db.photos.get("junk"))?.takenAt).toBe(Date.parse(LANDED));
+    });
+  });
+
   // ── The resolution ladder (#49) ────────────────────────────────────────
   //
   // The sync feed is the ONLY delivery path for renditions: the server's

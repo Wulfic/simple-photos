@@ -91,6 +91,16 @@ interface Plan {
   thumbChanged: boolean;
 }
 
+/**
+ * The timeline date of a server record, in ms: `taken_at`, or `created_at`
+ * when `taken_at` is NULL — the server's own `COALESCE(taken_at, created_at)`.
+ * One rule for inserts and updates, so neither path "corrects" the other's
+ * rows on every pass. NaN when the chosen value is unparseable.
+ */
+export function recordTakenAt(record: Pick<SyncRecord, "taken_at" | "created_at">): number {
+  return Date.parse(record.taken_at || record.created_at);
+}
+
 function defaultThumbMime(mediaType?: string | null): string {
   return mediaType === "gif" ? "image/gif" : "image/jpeg";
 }
@@ -251,6 +261,13 @@ export async function reconcileSyncedPhotos(
           const added = new Date(record.created_at).getTime();
           if (!Number.isNaN(added)) updates.addedAt = added;
         }
+        // Server wins on the date, like crop and favorite: a server-side date
+        // repair (TODO §4b) reaches this mirror only through here. Compared as
+        // ms, so `…00Z` vs `…00.000Z` is not a change; an unparseable server
+        // value never overwrites a good cached one.
+        const serverTakenAt = recordTakenAt(record);
+        if (!Number.isNaN(serverTakenAt) && existing.takenAt !== serverTakenAt)
+          updates.takenAt = serverTakenAt;
         const serverBurstId = record.burst_id ?? undefined;
         if (existing.burstId !== serverBurstId) updates.burstId = serverBurstId;
         const serverMotionBlob = record.motion_video_blob_id ?? undefined;
@@ -317,14 +334,12 @@ export async function reconcileSyncedPhotos(
       }
 
       // ── New entry ──────────────────────────────────────────────────────
-      let takenAt: number;
-      try {
-        takenAt = record.taken_at
-          ? new Date(record.taken_at).getTime()
-          : new Date(record.created_at).getTime();
-      } catch {
-        takenAt = new Date(record.created_at).getTime();
-      }
+      // A new row needs SOME date; an unparseable one falls back to the upload
+      // time rather than storing NaN.
+      const parsedTakenAt = recordTakenAt(record);
+      const takenAt = Number.isNaN(parsedTakenAt)
+        ? Date.parse(record.created_at)
+        : parsedTakenAt;
 
       let displayWidth = record.width;
       let displayHeight = record.height;

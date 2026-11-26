@@ -902,6 +902,11 @@ connection cap; `/health` reads one atomic (no DB, no storage); storage is an SM
      UPDATE's own scope then refuses the batch). E2E `test_104` 5/5; neighbours
      test_95–97, 100–103: 24/24. Migration 043 reverse run by
      `the_documented_reverse_drops_the_table`. API_REFERENCE updated.
+   - [x] **P1b-web done (2026-11-26).** `recordTakenAt` (= server `COALESCE(taken_at,
+     created_at)`) shared by insert + existing-row paths; existing rows adopt it when the ms
+     differ; unparseable server value never overwrites. RED first: the 2 adoption tests left
+     `takenAt` = 0; GREEN 24/24 reconcile, full web 372/372, `npm run build` green (web has
+     no lint config). Delta (`syncPass.ts:175`) and full walk (`:317`) both reach it.
 3. **P1c Android "Fix photo dates" screen** (dry run → apply), JVM tests for the candidate
    builder (camera keeps date, download gets date added, gone file excluded, unchanged rows
    excluded). Also: existing-row server merge adopts `taken_at` (server wins), and an
